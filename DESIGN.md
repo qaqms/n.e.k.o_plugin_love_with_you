@@ -82,6 +82,15 @@
 - lifecycle/background work: `startup` 只读本地状态并注册工具；5 秒维护定时器负责工具对账、每分钟同步角色列表、每 2 分钟核对宿主工具表（宿主重启后自愈）
 - external integrations: 本机 `main_server` 只读接口 `/api/characters`、`/api/tools`；会话总线（只读）；可选的插件模型网关 usage `judge`
 
+## Page Layout
+- 左侧固定导航：关系概览、心动记录、纪念日、专属称呼、设置；右侧正文独立滚动。
+- 导航默认宽度 144px（原 192px），小窗口进一步缩窄；顶部箭头可收起到 36px 窄边并随时展开。状态使用 Hosted UI 本地状态保存，刷新不复位，收起不影响当前页、角色和表单草稿。
+- 关系概览保留好感圆环、阶段轨道、今日变化，并显示相识日与下一次纪念；走势和完整变化记录移到心动记录页，称呼编辑独立成页。
+- 每页共享右上方立绘栏，从标题旁开始，桌面端最大宽 280px、高 480px，窗口变小时同步缩小；正文、图表和操作按钮让出立绘区域。透明背景图片保持完整比例，继续使用已有默认图和分阶段图片加载接口；不随本次改动分发其他来源的图片。
+- 宽屏为包含标题的正文与立绘两栏，立绘在滚动时停靠右上；窄窗口立绘缩小并与标题并排，正文在下方通栏显示；没有图片时不占位。导航保持在左侧。
+- 当前页、角色和走势范围继续使用 Hosted UI 本地状态保存，刷新数据不回到首页。切页保留未保存的称呼草稿。
+- 新增导航及概览文案同步八种语言；新增语言文件仅包含这些文案，既有文案继续使用宿主 i18n 回退。
+
 ## Read Context Plan
 `.agent/skills/neko-plugin/`、`docs/zh-CN/plugins/`、`main_routers/tool_router.py`、`plugin/server/routes/llm_tools.py`、`plugin/server/messaging/proactive_bridge.py`、`frontend/plugin-manager/.../hosted/ui-kit/`
 

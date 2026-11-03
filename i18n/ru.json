@@ -1,0 +1,13 @@
+{
+  "nav.heart": "Обзор",
+  "nav.history": "История",
+  "nav.nicknames": "Обращения",
+  "nav.label": "Страницы плагина",
+  "nav.collapse": "Свернуть боковую панель",
+  "nav.expand": "Развернуть боковую панель",
+  "nav.dates": "Памятные даты",
+  "nav.settings": "Настройки",
+  "overview.firstMet": "День знакомства",
+  "overview.nextDate": "Следующая дата",
+  "scope.select": "Выбрать персонажа"
+}

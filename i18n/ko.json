@@ -1,0 +1,13 @@
+{
+  "nav.heart": "관계 개요",
+  "nav.history": "설렘 기록",
+  "nav.nicknames": "호칭",
+  "nav.label": "플러그인 페이지",
+  "nav.collapse": "사이드바 접기",
+  "nav.expand": "사이드바 펼치기",
+  "nav.dates": "기념일",
+  "nav.settings": "설정",
+  "overview.firstMet": "처음 만난 날",
+  "overview.nextDate": "다음 기념일",
+  "scope.select": "캐릭터 선택"
+}

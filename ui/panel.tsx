@@ -3,6 +3,7 @@ import {
   Button,
   Input,
   Modal,
+  Select,
   Slider,
   Switch,
   useConfirm,
@@ -88,9 +89,9 @@ type Dashboard = {
   decoration?: { default?: ArtMeta; stages?: Record<string, ArtMeta>; too_large?: string[]; max?: number }
 }
 
-type Section = "heart" | "dates" | "settings"
+type Section = "heart" | "history" | "dates" | "nicknames" | "settings"
 
-const SECTIONS: Section[] = ["heart", "dates", "settings"]
+const SECTIONS: Section[] = ["heart", "history", "dates", "nicknames", "settings"]
 const TREND_RANGES = [30, 90, 365]
 
 // Backend error codes the panel can explain; anything else is shown verbatim.
@@ -114,7 +115,7 @@ const ERROR_CODES = [
 const STYLE = `
 :root { --rose: #e8768f; --rose-strong: #d65f7a; --rose-soft: rgba(232, 118, 143, 0.14);
   --rose-line: rgba(232, 118, 143, 0.42); --primary: var(--rose); }
-.neko-button { border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; background: transparent;
+.neko-button { border: 1px solid var(--border); border-radius: 6px; padding: 7px 12px; background: transparent;
   color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.4; }
 .neko-button:not(:disabled):hover { transform: none; box-shadow: none; border-color: var(--rose-line); color: var(--rose); }
 .neko-button[data-tone="primary"] { background: var(--rose); border-color: var(--rose); color: #fff; }
@@ -124,7 +125,7 @@ const STYLE = `
   border-color: rgba(245, 108, 108, 0.5); }
 .neko-button:disabled { opacity: 0.45; cursor: not-allowed; }
 .neko-button:focus-visible { outline: 2px solid var(--rose-line); outline-offset: 2px; }
-.neko-input { border-radius: 10px; padding: 7px 12px; font-size: 14px; }
+.neko-input { border-radius: 6px; padding: 8px 12px; font-size: 14px; min-width: 0; max-width: 100%; box-sizing: border-box; }
 .neko-input:focus { border-color: var(--rose-line); box-shadow: 0 0 0 3px var(--rose-soft); }
 .neko-switch { gap: 10px; color: var(--text); font-size: 14px; cursor: pointer; }
 .neko-switch .neko-checkbox { appearance: none; -webkit-appearance: none; flex: none; position: relative; margin: 0;
@@ -136,40 +137,62 @@ const STYLE = `
 .neko-switch .neko-checkbox:checked::after { transform: translateX(14px); }
 .neko-switch .neko-checkbox:focus-visible { outline: 2px solid var(--rose-line); outline-offset: 2px; }
 .neko-switch .neko-checkbox:disabled { opacity: 0.5; cursor: not-allowed; }
-.lwy { --ink: var(--text); --hint: var(--muted);
-  --line: var(--border); --card: var(--surface); padding: 20px; display: grid; gap: 18px;
-  grid-template-columns: minmax(0, 1fr); max-width: 980px; margin: 0 auto; }
-.lwy.has-art { grid-template-columns: minmax(180px, 300px) minmax(0, 1fr); align-items: start; }
-.lwy-art { position: sticky; top: 16px; display: flex; justify-content: center; align-items: flex-end;
-  min-height: 240px; max-height: 560px; }
-.lwy-art img { max-width: 100%; max-height: 560px; object-fit: contain; display: block;
-  filter: drop-shadow(0 10px 24px rgba(232, 118, 143, 0.18)); animation: lwy-float 6s ease-in-out infinite,
-  lwy-fade 420ms ease-out; }
-/* after the base .lwy-art rules so the narrow layout wins at equal specificity */
-@media (max-width: 720px) { .lwy.has-art { grid-template-columns: minmax(0, 1fr); }
-  .lwy-art { position: static; min-height: 0; max-height: 220px; }
-  .lwy-art img { max-height: 220px; } }
-.lwy-main { display: grid; gap: 16px; min-width: 0; }
-.lwy-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.lwy-head-text { display: grid; gap: 2px; }
-.lwy-title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: 0.04em; color: var(--ink); }
-.lwy-sub { color: var(--hint); font-size: 12px; }
-.lwy-nav { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--rose-soft); }
-.lwy-nav button { border: 0; background: transparent; color: var(--hint); padding: 5px 14px; border-radius: 999px;
-  font-size: 13px; cursor: pointer; transition: all 160ms ease; }
-.lwy-nav button:hover { color: var(--ink); }
-.lwy-nav button.on { background: var(--card); color: var(--rose); font-weight: 600; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08); }
-.lwy-card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px 20px; }
-.lwy-card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+html, body { margin: 0; }
+.lwy, .lwy * { box-sizing: border-box; letter-spacing: 0; }
+.lwy { --ink: var(--text); --hint: var(--muted); --line: var(--border); --card: var(--surface); --sidebar-width: 144px;
+  display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); height: 100vh; height: 100dvh;
+  min-height: 0; color: var(--ink); background: var(--bg); overflow: hidden; }
+.lwy.sidebar-collapsed { grid-template-columns: 36px minmax(0, 1fr); }
+.lwy-sidebar { display: flex; flex-direction: column; gap: 24px; min-width: 0; min-height: 0;
+  padding: 24px 12px 16px; border-right: 1px solid var(--line); background: var(--card); overflow: auto; }
+.lwy-sidebar-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lwy-brand { flex: 1; min-width: 0; margin: 0; font-size: 16px; line-height: 1.5; font-weight: 700; overflow-wrap: anywhere; }
+.lwy-sidebar-toggle { display: grid; place-items: center; flex: none; width: 28px; height: 32px;
+  padding: 0; border: 1px solid var(--line); border-radius: 5px; color: var(--hint); background: transparent; cursor: pointer; }
+.lwy-sidebar-toggle:hover { color: var(--rose-strong); border-color: var(--rose-line); background: var(--rose-soft); }
+.lwy-sidebar-chevron { display: block; width: 7px; height: 7px; border-top: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor; transform: translateX(2px) rotate(-135deg); }
+.sidebar-collapsed .lwy-sidebar-chevron { transform: translateX(-2px) rotate(45deg); }
+.lwy-sidebar-body { display: flex; flex: 1; flex-direction: column; gap: 24px; min-height: 0; }
+.lwy-sidebar-body[hidden] { display: none; }
+.sidebar-collapsed .lwy-sidebar { padding: 24px 3px 16px; overflow: hidden; }
+.lwy-nav { display: grid; gap: 6px; }
+.lwy-nav button { position: relative; min-height: 44px; width: 100%; border: 0; border-radius: 6px;
+  padding: 10px; background: transparent; text-align: left; color: var(--hint); font: inherit; font-size: 13px;
+  line-height: 1.5; cursor: pointer; overflow-wrap: anywhere; transition: color 160ms ease, background 160ms ease; }
+.lwy-nav button:hover { color: var(--ink); background: var(--rose-soft); }
+.lwy-nav button.on { background: var(--rose-soft); color: var(--rose-strong); font-weight: 600; }
+.lwy-nav button.on::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px;
+  width: 3px; background: var(--rose-strong); border-radius: 2px; }
+.lwy button:focus-visible, .lwy select:focus-visible { outline: 2px solid var(--rose-strong); outline-offset: 3px; }
+.lwy-sidebar-foot { display: grid; gap: 6px; margin-top: auto; padding: 16px 6px 0;
+  border-top: 1px solid var(--line); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.lwy-sidebar-foot strong { font-weight: 600; }
+.lwy-workspace { min-width: 0; min-height: 0; overflow: auto; padding: 32px 36px 40px;
+  scrollbar-gutter: stable; }
+.lwy-head { display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  flex-wrap: wrap; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+.lwy-head-text { display: grid; gap: 5px; min-width: 0; }
+.lwy-title { margin: 0; font-size: 24px; line-height: 1.4; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.lwy-sub { color: var(--hint); font-size: 12px; line-height: 1.6; }
+.lwy-scope { display: grid; gap: 6px; max-width: 100%; min-width: 0; }
+.lwy-scope select { max-width: 100%; width: 180px; min-height: 38px; padding: 6px 10px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; }
+.lwy-notices { display: grid; gap: 12px; margin-bottom: 20px; }
+.lwy-page-layout { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 28px; align-items: start; min-height: 100%; }
+.lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(200px, 35%, 280px); }
+.lwy-page-content { min-width: 0; }
+.lwy-page { min-width: 0; }
+.lwy-art { position: sticky; top: 0; display: flex; justify-content: center; align-items: flex-start;
+  min-width: 0; height: 480px; max-height: calc(100dvh - 64px); pointer-events: none; }
+.lwy-art img { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center top;
+  filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.08)); animation: lwy-fade 300ms ease-out; }
+.lwy-sections { display: grid; min-width: 0; gap: 24px; }
+.lwy-card { min-width: 0; padding: 0 0 24px; border-bottom: 1px solid var(--line); }
+.lwy-card:last-child { border-bottom: 0; }
+.lwy-card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .lwy-card-head .lwy-h { margin: 0; }
-.lwy-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
-.lwy-tab { border: 1px solid var(--line); background: transparent; color: var(--hint); border-radius: 999px;
-  padding: 4px 12px; font-size: 13px; cursor: pointer; transition: all 160ms ease; }
-.lwy-tab:hover { color: var(--ink); }
-.lwy-tab.on { background: var(--rose-soft); border-color: transparent; color: var(--rose); font-weight: 600; }
-.lwy-tab .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--rose);
-  margin-left: 6px; vertical-align: middle; }
-.lwy-hero { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+.lwy-hero { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; padding: 12px 0 8px; }
 .lwy-ring { --p: 0; width: 148px; height: 148px; flex: none; position: relative; }
 .lwy-ring-fill { position: absolute; inset: 0; border-radius: 50%;
   background: conic-gradient(var(--rose) calc(var(--p) * 1%), var(--rose-soft) 0);
@@ -178,30 +201,31 @@ const STYLE = `
 .lwy-ring-in { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 2px; }
 .lwy-num { font-size: 38px; font-weight: 700; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; }
 .lwy-heart { color: var(--rose); font-size: 14px; animation: lwy-beat 1.6s ease-in-out infinite; }
-.lwy-stage { display: grid; gap: 6px; }
-.lwy-stage-name { font-size: 26px; font-weight: 700; color: var(--rose); letter-spacing: 0.08em; }
+.lwy-stage { display: grid; gap: 8px; min-width: 0; flex: 1 1 150px; overflow-wrap: anywhere; }
+.lwy-stage-name { font-size: 26px; font-weight: 700; color: var(--rose-strong); }
 .lwy-hint { color: var(--hint); font-size: 13px; line-height: 1.6; }
 .lwy-nick { color: var(--ink); font-size: 13px; }
 .lwy-nick b { color: var(--rose); font-weight: 600; }
-.lwy-banner { display: flex; gap: 8px; align-items: center; margin-top: 16px; padding: 10px 14px; border-radius: 12px;
+.lwy-banner { display: flex; gap: 8px; align-items: center; margin-top: 20px; padding: 10px 14px; border-radius: 6px;
   background: var(--rose-soft); color: var(--rose); font-size: 13px; font-weight: 600; }
-.lwy-track { display: grid; grid-template-columns: repeat(5, 1fr); position: relative; margin-top: 20px; }
+.lwy-track { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: relative; margin-top: 20px; }
 .lwy-track::before { content: ""; position: absolute; left: 10%; right: 10%; top: 6px; height: 2px; background: var(--line); }
-.lwy-step { display: grid; justify-items: center; gap: 6px; position: relative; font-size: 12px; color: var(--hint); }
+.lwy-step { display: grid; justify-items: center; gap: 6px; position: relative; min-width: 0; font-size: 12px; color: var(--hint); }
+.lwy-step span { max-width: 100%; overflow-wrap: anywhere; text-align: center; }
 .lwy-step i { width: 14px; height: 14px; border-radius: 50%; background: var(--bg); border: 2px solid var(--line); }
 .lwy-step.done i { background: var(--rose); border-color: var(--rose); }
 .lwy-step.now i { box-shadow: 0 0 0 4px var(--rose-soft); }
 .lwy-step.now { color: var(--rose); font-weight: 600; }
-.lwy-today { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--hint); margin-top: 16px; }
+.lwy-today { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--hint); margin-top: 24px; }
 .lwy-today b { color: var(--ink); font-weight: 600; }
-.lwy-h { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--ink); }
-.lwy-list { display: grid; gap: 2px; max-height: 300px; overflow: auto; }
-.lwy-row { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: baseline; padding: 7px 2px;
+.lwy-h { margin: 0 0 16px; font-size: 15px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.lwy-list { display: grid; gap: 2px; }
+.lwy-row { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 12px 0;
   border-bottom: 1px dashed var(--line); font-size: 13px; }
 .lwy-row:last-child, .lwy-ev:last-child { border-bottom: none; }
 .lwy-d { font-weight: 700; font-variant-numeric: tabular-nums; }
 .lwy-d.up { color: var(--rose); } .lwy-d.down { color: #7c93b3; } .lwy-d.zero { color: var(--hint); }
-.lwy-why { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lwy-why { color: var(--ink); overflow-wrap: anywhere; line-height: 1.6; }
 .lwy-when { color: var(--hint); font-size: 12px; }
 .lwy-empty { color: var(--hint); font-size: 13px; padding: 10px 0; margin: 0; }
 .lwy-days { display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-end; }
@@ -209,7 +233,7 @@ const STYLE = `
 .lwy-days-num { font-size: 34px; font-weight: 700; line-height: 1; color: var(--rose); font-variant-numeric: tabular-nums; }
 .lwy-days-num small { font-size: 13px; font-weight: 500; color: var(--hint); margin-left: 4px; }
 .lwy-marks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.lwy-mark { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+.lwy-mark { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; flex-wrap: wrap;
   background: var(--rose-soft); font-size: 12px; color: var(--hint); }
 .lwy-mark b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .lwy-ev { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 8px 2px;
@@ -220,18 +244,19 @@ const STYLE = `
 .lwy-x { border: 0; background: transparent; color: var(--hint); cursor: pointer; font-size: 16px; line-height: 1;
   padding: 2px 6px; border-radius: 6px; }
 .lwy-x:hover { color: var(--rose); background: var(--rose-soft); }
-.lwy-set { display: grid; gap: 12px; }
+.lwy-set { display: grid; gap: 18px; }
 .lwy-set-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.lwy-nick-grid { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 10px 12px; align-items: center; }
-.lwy-nick-grid span { font-size: 13px; color: var(--hint); }
+.lwy-nick-grid { display: grid; grid-template-columns: minmax(56px, auto) minmax(0, 1fr); gap: 18px 16px; align-items: center; }
+.lwy-nick-grid label { display: contents; }
+.lwy-nick-grid label span { font-size: 13px; color: var(--hint); overflow-wrap: anywhere; }
 .lwy-field { display: grid; gap: 6px; margin-bottom: 12px; font-size: 13px; color: var(--hint); }
 .lwy-note { color: var(--hint); font-size: 12px; line-height: 1.6; margin: 0; }
-.lwy-btns { display: flex; gap: 8px; }
+.lwy-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .lwy-modal-num { font-size: 32px; font-weight: 700; color: var(--rose); text-align: center; }
 .lwy-wait { color: var(--rose); font-size: 13px; font-weight: 600; }
-.lwy-range { display: inline-flex; gap: 4px; }
-.lwy-range button { border: 1px solid var(--line); background: transparent; color: var(--hint); border-radius: 999px;
-  padding: 2px 10px; font-size: 12px; cursor: pointer; }
+.lwy-range { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.lwy-range button { border: 1px solid var(--line); background: transparent; color: var(--hint); border-radius: 4px;
+  padding: 5px 9px; min-height: 30px; font-size: 12px; cursor: pointer; }
 .lwy-range button.on { background: var(--rose-soft); border-color: transparent; color: var(--rose); font-weight: 600; }
 .lwy-plot { --axis: 44px; display: grid; grid-template-columns: var(--axis) minmax(0, 1fr); gap: 8px; }
 .lwy-axis { position: relative; font-size: 10px; color: var(--hint); }
@@ -240,29 +265,73 @@ const STYLE = `
   border-bottom: 1px solid var(--line); }
 .lwy-chart.dense { gap: 0; }
 .lwy-bar { flex: 1 1 0; min-width: 0; border-radius: 3px 3px 0 0; opacity: 0.85; transition: opacity 120ms ease;
-  background: linear-gradient(to top, rgba(232, 118, 143, 0.35), var(--rose)); }
+  background: var(--rose); }
 .lwy-chart.dense .lwy-bar { border-radius: 0; }
 .lwy-bar:hover { opacity: 1; }
 .lwy-bar.empty { background: transparent; }
 .lwy-line { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--line); pointer-events: none; z-index: 1; }
-.lwy-chart-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px;
+.lwy-chart-foot { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 8px;
   padding-left: calc(var(--axis, 44px) + 8px); font-size: 11px; color: var(--hint); }
-.lwy-quote { margin: 14px 0 0; padding: 10px 12px; border-left: 2px solid var(--rose); border-radius: 0 10px 10px 0;
+.lwy-quote { margin: 14px 0 0; padding: 10px 12px; border-left: 2px solid var(--rose); border-radius: 0 4px 4px 0;
   background: var(--rose-soft); color: var(--ink); font-size: 13px; line-height: 1.6; }
 .lwy-rule { display: grid; gap: 6px; }
 .lwy-rule .lwy-note { padding-left: 44px; }
 .lwy-rule .lwy-status { color: var(--rose); }
+.lwy-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px;
+  padding: 8px 0 24px; border-bottom: 1px solid var(--line); }
+.lwy-summary-item { display: grid; gap: 8px; min-width: 0; }
+.lwy-summary-value { color: var(--ink); font-size: 20px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+@media (max-width: 960px) {
+  .lwy { --sidebar-width: 128px; }
+  .lwy-sidebar { padding: 24px 12px 16px; }
+  .lwy-workspace { padding: 24px; }
+  .lwy-page-layout { column-gap: 20px; }
+  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(160px, 32%, 240px); }
+  .lwy-art { height: 440px; }
+}
+@media (max-width: 700px) {
+  .lwy { --sidebar-width: 112px; }
+  .lwy-sidebar { gap: 24px; padding: 20px 10px 16px; }
+  .lwy-brand { font-size: 14px; }
+  .lwy-nav button { font-size: 13px; padding: 10px; }
+  .lwy-workspace { padding: 20px; }
+  .lwy-head { margin-bottom: 20px; padding-bottom: 20px; gap: 12px; }
+  .lwy-title { font-size: 21px; }
+  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) 120px; align-content: start; column-gap: 16px; }
+  .lwy-page-layout.has-art .lwy-page-content { display: contents; }
+  .has-art .lwy-head { grid-column: 1; grid-row: 1; align-self: start; margin-bottom: 20px;
+    flex-direction: column; align-items: flex-start; }
+  .lwy-art { position: static; grid-column: 2; grid-row: 1; justify-self: end;
+    width: 120px; height: 160px; max-height: none; margin: 0 0 20px; }
+  .lwy-page-layout.has-art .lwy-notices { grid-column: 1 / -1; grid-row: 2; }
+  .lwy-page-layout.has-art .lwy-page { grid-column: 1 / -1; grid-row: 3; }
+  .lwy-sidebar-foot { padding: 12px 6px 0; }
+}
 @media (max-width: 480px) {
-  .lwy { padding: 14px; gap: 14px; }
-  .lwy-card { padding: 16px; }
+  .lwy { --sidebar-width: 100px; }
+  .lwy-workspace { padding: 20px 14px; }
+  .lwy-sidebar { padding-left: 7px; padding-right: 7px; }
+  .lwy-brand { font-size: 13px; }
+  .lwy-sidebar-head { gap: 4px; }
+  .lwy-nav button { padding: 10px 8px; font-size: 12px; }
+  .lwy-summary { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .lwy-hero { gap: 16px; }
   .lwy-ring { width: 120px; height: 120px; }
   .lwy-num { font-size: 32px; }
   .lwy-stage-name { font-size: 22px; }
   .lwy-rule .lwy-note { padding-left: 0; }
+  .lwy-row { grid-template-columns: 30px minmax(0, 1fr); gap: 4px 8px; }
+  .lwy-when { grid-column: 2; }
+  .lwy-ev { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+  .lwy-ev-name { grid-column: 1 / -1; white-space: normal; overflow-wrap: anywhere; }
+  .lwy-nick-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .lwy-nick-grid .neko-input { margin-bottom: 8px; }
+  .lwy-scope { width: 100%; }
+  .lwy-scope select { width: 100%; }
+  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) 80px; column-gap: 12px; }
+  .lwy-art { width: 80px; height: 140px; }
 }
 @keyframes lwy-beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.25); } 30% { transform: scale(1); } }
-@keyframes lwy-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 @keyframes lwy-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .lwy-heart, .lwy-art img { animation: none; } }
 `
@@ -303,6 +372,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const confirm = useConfirm()
 
   const [section, setSection] = props.useLocalState<Section>("lwy:section", "heart")
+  const [sidebarCollapsed, setSidebarCollapsed] = props.useLocalState<boolean>("lwy:sidebar-collapsed", false)
   const [selectedKey, setSelectedKey] = props.useLocalState<string>("lwy:scope", "")
   const [art, setArt] = useState<string>("")
   const [busy, setBusy] = useState(false)
@@ -316,6 +386,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const [annDate, setAnnDate] = useState("")
   const [trendRange, setTrendRange] = props.useLocalState<number>("lwy:trend", 30)
   const artCache = useRef<Record<string, string>>({})
+  const workspaceRef = useRef<HTMLElement | null>(null)
 
   const fallback = scopes.find((s) => s.is_current) || scopes[0]
   const scope = scopes.find((s) => s.key === selectedKey) || fallback
@@ -554,10 +625,19 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const tooLarge = Array.isArray(decoration.too_large) ? decoration.too_large : []
   const sectionLabel = (key: Section) =>
     key === "heart"
-      ? t("nav.heart", { defaultValue: "心动" })
+      ? t("nav.heart", { defaultValue: "关系概览" })
+      : key === "history"
+        ? t("nav.history", { defaultValue: "心动记录" })
       : key === "dates"
         ? t("nav.dates", { defaultValue: "纪念日" })
-        : t("nav.settings", { defaultValue: "设置" })
+        : key === "nicknames"
+          ? t("nav.nicknames", { defaultValue: "专属称呼" })
+          : t("nav.settings", { defaultValue: "设置" })
+
+  function changeSection(next: Section) {
+    setSection(next)
+    workspaceRef.current?.scrollTo({ top: 0 })
+  }
 
   function loverDays(): number {
     const start = parseIsoDay(loverSince)
@@ -636,7 +716,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   function renderHeart(current: Scope) {
     return (
-      <div className="lwy-main">
+      <div className="lwy-sections">
         <section className="lwy-card">
           <div className="lwy-hero">
             <div className="lwy-ring" style={{ "--p": String(percent) }}>
@@ -698,6 +778,24 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           </div>
         </section>
 
+        <div className="lwy-summary">
+          <div className="lwy-summary-item">
+            <span className="lwy-sub">{t("overview.firstMet", { defaultValue: "相识的日子" })}</span>
+            <span className="lwy-summary-value">{current.first_met ? isoLabel(current.first_met) : "-"}</span>
+          </div>
+          <div className="lwy-summary-item">
+            <span className="lwy-sub">{t("overview.nextDate", { defaultValue: "下一次纪念" })}</span>
+            <span className="lwy-summary-value">{upcoming.length ? eventLabel(upcoming[0]) : "-"}</span>
+            {upcoming.length ? <span className="lwy-sub">{countdown(upcoming[0].days_until)}</span> : null}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  function renderHistory(current: Scope) {
+    return (
+      <div className="lwy-sections">
         {renderTrend(current)}
 
         <section className="lwy-card">
@@ -725,7 +823,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function renderDates(current: Scope) {
     const reached = stages.slice(1).filter((item) => milestones[item.key])
     return (
-      <div className="lwy-main">
+      <div className="lwy-sections">
         <section className="lwy-card">
           <div className="lwy-card-head">
             <h2 className="lwy-h">{t("dates.ours", { defaultValue: "我们的日子" })}</h2>
@@ -822,36 +920,40 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     )
   }
 
+  function renderNicknames() {
+    return (
+      <div className="lwy-sections">
+        <section className="lwy-card">
+          <div className="lwy-card-head">
+            <h2 className="lwy-h">{t("nick.title", { defaultValue: "称呼" })}</h2>
+            <Button tone="primary" disabled={busy || !nickDirty} onClick={saveNicknames}>
+              {t("common.save", { defaultValue: "保存" })}
+            </Button>
+          </div>
+          <div className="lwy-nick-grid">
+            {stages.map((item, index) => (
+              <label key={item.key}>
+                <span>{stageName(item.key)}</span>
+                <Input
+                  value={nickDraft[item.key] || ""}
+                  disabled={busy}
+                  placeholder={inheritedNickname(index) || t("nick.placeholder", { defaultValue: "沿用人设里的称呼" })}
+                  onChange={(value: string) => setNickDraft({ ...nickDraft, [item.key]: value.slice(0, limits.nickname_chars || 12) })}
+                />
+              </label>
+            ))}
+          </div>
+          <p className="lwy-note" style={{ marginTop: "10px" }}>
+            {t("nick.note", { defaultValue: "角色在这个阶段会这样叫你。留空的阶段沿用上一阶段的称呼。" })}
+          </p>
+        </section>
+      </div>
+    )
+  }
+
   function renderSettings(current: Scope | undefined) {
     return (
-      <div className="lwy-main">
-        {current ? (
-          <section className="lwy-card">
-            <div className="lwy-card-head">
-              <h2 className="lwy-h">{t("nick.title", { defaultValue: "称呼" })}</h2>
-              <Button tone="primary" disabled={busy || !nickDirty} onClick={saveNicknames}>
-                {t("common.save", { defaultValue: "保存" })}
-              </Button>
-            </div>
-            <div className="lwy-nick-grid">
-              {stages.map((item, index) => (
-                <div key={item.key} style={{ display: "contents" }}>
-                  <span>{stageName(item.key)}</span>
-                  <Input
-                    value={nickDraft[item.key] || ""}
-                    disabled={busy}
-                    placeholder={inheritedNickname(index) || t("nick.placeholder", { defaultValue: "沿用人设里的称呼" })}
-                    onChange={(value: string) => setNickDraft({ ...nickDraft, [item.key]: value.slice(0, limits.nickname_chars || 12) })}
-                  />
-                </div>
-              ))}
-            </div>
-            <p className="lwy-note" style={{ marginTop: "10px" }}>
-              {t("nick.note", { defaultValue: "角色在这个阶段会这样叫你。留空的阶段沿用上一阶段的称呼。" })}
-            </p>
-          </section>
-        ) : null}
-
+      <div className="lwy-sections">
         <section className="lwy-card lwy-set">
           <h2 className="lwy-h">{t("rules.title", { defaultValue: "关系规则" })}</h2>
           <div className="lwy-rule">
@@ -938,75 +1040,117 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   }
 
   return (
-    <div className={hasArt ? "lwy has-art" : "lwy"}>
+    <div className={sidebarCollapsed ? "lwy sidebar-collapsed" : "lwy"}>
       <style>{STYLE}</style>
 
-      {hasArt ? (
-        <aside className="lwy-art">
-          <img key={art.length} src={art} alt="" />
-        </aside>
-      ) : null}
-
-      <main className="lwy-main">
-        <header className="lwy-head">
-          <div className="lwy-head-text">
-            <h1 className="lwy-title">{t("panel.title", { defaultValue: "与你相恋" })}</h1>
+      <aside className="lwy-sidebar">
+        <div className="lwy-sidebar-head">
+          <h2 className="lwy-brand" hidden={sidebarCollapsed}>{t("panel.title", { defaultValue: "与你相恋" })}</h2>
+          <button
+            type="button"
+            className="lwy-sidebar-toggle"
+            aria-controls="lwy-sidebar-navigation"
+            aria-expanded={sidebarCollapsed ? "false" : "true"}
+            aria-label={sidebarCollapsed
+              ? t("nav.expand", { defaultValue: "展开侧栏" })
+              : t("nav.collapse", { defaultValue: "收起侧栏" })}
+            title={sidebarCollapsed
+              ? t("nav.expand", { defaultValue: "展开侧栏" })
+              : t("nav.collapse", { defaultValue: "收起侧栏" })}
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          >
+            <span className="lwy-sidebar-chevron" aria-hidden="true" />
+          </button>
+        </div>
+        <div id="lwy-sidebar-navigation" className="lwy-sidebar-body" hidden={sidebarCollapsed}>
+          <nav className="lwy-nav" aria-label={t("nav.label", { defaultValue: "插件页面" })}>
+            {SECTIONS.map((key) => (
+              <button
+                key={key}
+                type="button"
+                aria-current={key === activeSection ? "page" : undefined}
+                aria-controls="lwy-page"
+                className={key === activeSection ? "on" : ""}
+                onClick={() => changeSection(key)}
+              >
+                {sectionLabel(key)}
+              </button>
+            ))}
+          </nav>
+          <div className="lwy-sidebar-foot">
+            <strong>{scope?.label || t("scope.shared", { defaultValue: "共用" })}</strong>
             <span className="lwy-sub">
               {state.per_character
                 ? t("mode.perCharacter", { defaultValue: "每个角色独立" })
                 : t("mode.shared", { defaultValue: "所有角色共用" })}
             </span>
           </div>
-          <nav className="lwy-nav" role="tablist">
-            {SECTIONS.map((key) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={key === activeSection ? "true" : "false"}
-                className={key === activeSection ? "on" : ""}
-                onClick={() => setSection(key)}
-              >
-                {sectionLabel(key)}
-              </button>
-            ))}
-          </nav>
-        </header>
+        </div>
+      </aside>
 
-        {state.host_online === false ? (
-          <Alert tone="warning" message={t("alert.offline", { defaultValue: "暂时连不上 N.E.K.O 主程序，角色列表可能不是最新的。" })} />
-        ) : null}
-        {tooLarge.length ? (
-          <Alert tone="info" message={t("alert.artTooLarge", { files: tooLarge.join("、"), defaultValue: "这些装饰图超过 1 MB，已跳过显示：{files}" })} />
-        ) : null}
+      <main className="lwy-workspace" ref={workspaceRef}>
+        <div className={hasArt ? "lwy-page-layout has-art" : "lwy-page-layout"}>
+          <div className="lwy-page-content">
+            <header className="lwy-head">
+              <div className="lwy-head-text">
+                <h1 id="lwy-page-title" className="lwy-title">{sectionLabel(activeSection)}</h1>
+                <span className="lwy-sub">
+                  {scope?.label
+                    ? t("settings.editingName", { name: scope.label, defaultValue: "正在管理：{name}" })
+                    : t("settings.editingShared", { defaultValue: "正在管理：共用好感" })}
+                </span>
+              </div>
+              {scopes.length > 1 ? (
+                <label className="lwy-scope">
+                  <span className="lwy-sub">{t("scope.select", { defaultValue: "选择角色" })}</span>
+                  <Select
+                    value={scope?.key || ""}
+                    disabled={busy}
+                    options={scopes.map((item) => ({
+                      value: item.key,
+                      label: `${item.label || t("scope.shared", { defaultValue: "共用" })}${item.is_current ? ` · ${t("scope.current", { defaultValue: "当前角色" })}` : ""}`,
+                    }))}
+                    onChange={(value: string) => setSelectedKey(value)}
+                  />
+                </label>
+              ) : null}
+            </header>
 
-        {scopes.length > 1 ? (
-          <nav className="lwy-tabs">
-            {scopes.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className={item.key === (scope && scope.key) ? "lwy-tab on" : "lwy-tab"}
-                onClick={() => setSelectedKey(item.key)}
-              >
-                {item.label || t("scope.shared", { defaultValue: "共用" })}
-                {item.is_current ? <span className="dot" title={t("scope.current", { defaultValue: "当前角色" })} /> : null}
-              </button>
-            ))}
-          </nav>
-        ) : null}
+            {state.host_online === false || tooLarge.length ? (
+              <div className="lwy-notices">
+                {state.host_online === false ? (
+                  <Alert tone="warning" message={t("alert.offline", { defaultValue: "暂时连不上 N.E.K.O 主程序，角色列表可能不是最新的。" })} />
+                ) : null}
+                {tooLarge.length ? (
+                  <Alert tone="info" message={t("alert.artTooLarge", { files: tooLarge.join("、"), defaultValue: "这些装饰图超过 1 MB，已跳过显示：{files}" })} />
+                ) : null}
+              </div>
+            ) : null}
 
-        {activeSection === "settings" ? (
-          renderSettings(scope)
-        ) : !scope ? (
-          <section className="lwy-card">
-            <p className="lwy-empty">{t("empty.noCharacters", { defaultValue: "还没有读到角色，稍等片刻或点击设置里的刷新。" })}</p>
-          </section>
-        ) : activeSection === "dates" ? (
-          renderDates(scope)
-        ) : (
-          renderHeart(scope)
-        )}
+            <article id="lwy-page" className="lwy-page" aria-labelledby="lwy-page-title">
+              {activeSection === "settings" ? (
+                renderSettings(scope)
+              ) : !scope ? (
+                <section className="lwy-card">
+                  <p className="lwy-empty">{t("empty.noCharacters", { defaultValue: "还没有读到角色，稍等片刻或点击设置里的刷新。" })}</p>
+                </section>
+              ) : activeSection === "dates" ? (
+                renderDates(scope)
+              ) : activeSection === "history" ? (
+                renderHistory(scope)
+              ) : activeSection === "nicknames" ? (
+                renderNicknames()
+              ) : (
+                renderHeart(scope)
+              )}
+            </article>
+          </div>
+          {hasArt ? (
+            <aside className="lwy-art" aria-hidden="true">
+              <img key={artVersion} src={art} alt="" onError={() => setArt("")} />
+            </aside>
+          ) : null}
+        </div>
       </main>
 
       <Modal

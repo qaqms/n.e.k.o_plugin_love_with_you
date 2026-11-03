@@ -1,0 +1,13 @@
+{
+  "nav.heart": "関係の概要",
+  "nav.history": "心の記録",
+  "nav.nicknames": "呼び方",
+  "nav.label": "プラグインのページ",
+  "nav.collapse": "サイドバーを閉じる",
+  "nav.expand": "サイドバーを開く",
+  "nav.dates": "記念日",
+  "nav.settings": "設定",
+  "overview.firstMet": "出会った日",
+  "overview.nextDate": "次の記念日",
+  "scope.select": "キャラクターを選択"
+}

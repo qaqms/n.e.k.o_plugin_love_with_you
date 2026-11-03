@@ -1,0 +1,47 @@
+[plugin]
+id = "love_with_you"
+name = "与你相恋"
+version = "0.4.0"
+type = "plugin"
+description = "恋爱关系插件：好感度 0–100、陌生到恋人五个阶段，每轮对话后自动判断好感变化，角色在聊天中随关系调整语气和分寸；支持多角色共用或各自独立的好感。"
+short_description = "Romance layer: affection 0-100 and five relationship stages that shape how the character talks to you."
+keywords = ["好感", "好感度", "恋爱", "恋人", "affection", "romance"]
+# Runtime entries only serve the panel; the model reaches this plugin through
+# LLM tools (separate registry), so keep it out of Agent dispatch.
+passive = true
+entry = "plugin.plugins.love_with_you:LoveWithYouPlugin"
+
+[plugin.author]
+name = "qaqms"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin.i18n]
+default_locale = "zh-CN"
+locales_dir = "i18n"
+
+# Optional: bind a model in N.E.K.O's Plugin API page for better judgement of
+# each exchange. Unbound, the plugin uses its offline keyword judge.
+[plugin.models.judge]
+label = "好感判断"
+description = "每轮对话后判断好感如何变化。可不绑定，不绑定时使用离线关键词判断。"
+required = false
+capabilities = ["text"]
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.panel]]
+id = "main"
+title = "与你相恋"
+entry = "ui/panel.tsx"
+context = "dashboard"
+permissions = ["state:read", "action:call"]
+
+[[plugin.ui.guide]]
+id = "guide"
+title = "使用指南"
+entry = "docs/guide.md"
+permissions = ["state:read"]

@@ -1,0 +1,14 @@
+[project]
+name = "love_with_you"
+version = "0.4.0"
+dependencies = []
+
+# Editor-only: resolve the N.E.K.O SDK (`plugin.sdk.plugin`) from the sibling
+# host checkout during local development. Has no effect on packaging or runtime.
+[tool.pyright]
+extraPaths = ["../N.E.K.O"]
+
+# Keep local pytest temp output (created on Windows when TEMP is unusable)
+# out of the installable package.
+[tool.neko.build]
+exclude_dirs = ["pytest-of-*"]

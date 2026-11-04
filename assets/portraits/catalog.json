@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "title": "千恋万花",
+  "items": [
+    {
+      "id": "sb-f600666675a9",
+      "name": "丛雨 cos01",
+      "collection": "丛雨",
+      "file": "sb-f600666675a9/display.webp",
+      "thumbnail": "sb-f600666675a9/thumb.webp",
+      "source_file": "00_高清母版_4x/丛雨_cos01.png"
+    },
+    {
+      "id": "sb-57ca9ddc8fa0",
+      "name": "丛雨 cos02",
+      "collection": "丛雨",
+      "file": "sb-57ca9ddc8fa0/display.webp",
+      "thumbnail": "sb-57ca9ddc8fa0/thumb.webp",
+      "source_file": "00_高清母版_4x/丛雨_cos02.png"
+    },
+    {
+      "id": "sb-d3339db01cc1",
+      "name": "常陸茉子 cos01",
+      "collection": "常陸茉子",
+      "file": "sb-d3339db01cc1/display.webp",
+      "thumbnail": "sb-d3339db01cc1/thumb.webp",
+      "source_file": "00_高清母版_4x/常陸茉子_cos01.png"
+    },
+    {
+      "id": "sb-8e208b8be9de",
+      "name": "常陸茉子 cos02",
+      "collection": "常陸茉子",
+      "file": "sb-8e208b8be9de/display.webp",
+      "thumbnail": "sb-8e208b8be9de/thumb.webp",
+      "source_file": "00_高清母版_4x/常陸茉子_cos02.png"
+    },
+    {
+      "id": "sb-24619fb42d92",
+      "name": "常陸茉子 cos03",
+      "collection": "常陸茉子",
+      "file": "sb-24619fb42d92/display.webp",
+      "thumbnail": "sb-24619fb42d92/thumb.webp",
+      "source_file": "00_高清母版_4x/常陸茉子_cos03.png"
+    },
+    {
+      "id": "sb-7cc2e20bd195",
+      "name": "朝武芳乃 cos01",
+      "collection": "朝武芳乃",
+      "file": "sb-7cc2e20bd195/display.webp",
+      "thumbnail": "sb-7cc2e20bd195/thumb.webp",
+      "source_file": "00_高清母版_4x/朝武芳乃_cos01.png"
+    },
+    {
+      "id": "sb-29b767d445ae",
+      "name": "朝武芳乃 cos02",
+      "collection": "朝武芳乃",
+      "file": "sb-29b767d445ae/display.webp",
+      "thumbnail": "sb-29b767d445ae/thumb.webp",
+      "source_file": "00_高清母版_4x/朝武芳乃_cos02.png"
+    },
+    {
+      "id": "sb-425d814301d7",
+      "name": "朝武芳乃 cos03",
+      "collection": "朝武芳乃",
+      "file": "sb-425d814301d7/display.webp",
+      "thumbnail": "sb-425d814301d7/thumb.webp",
+      "source_file": "00_高清母版_4x/朝武芳乃_cos03.png"
+    },
+    {
+      "id": "sb-09ee678da21c",
+      "name": "蕾娜 cos01",
+      "collection": "蕾娜",
+      "file": "sb-09ee678da21c/display.webp",
+      "thumbnail": "sb-09ee678da21c/thumb.webp",
+      "source_file": "00_高清母版_4x/蕾娜_cos01.png"
+    },
+    {
+      "id": "sb-3bb5a3eebb22",
+      "name": "蕾娜 cos02",
+      "collection": "蕾娜",
+      "file": "sb-3bb5a3eebb22/display.webp",
+      "thumbnail": "sb-3bb5a3eebb22/thumb.webp",
+      "source_file": "00_高清母版_4x/蕾娜_cos02.png"
+    },
+    {
+      "id": "sb-d3b0ebe0e880",
+      "name": "蕾娜 cos03",
+      "collection": "蕾娜",
+      "file": "sb-d3b0ebe0e880/display.webp",
+      "thumbnail": "sb-d3b0ebe0e880/thumb.webp",
+      "source_file": "00_高清母版_4x/蕾娜_cos03.png"
+    },
+    {
+      "id": "sb-133d11c12d51",
+      "name": "朝武芳乃 巫女服",
+      "collection": "朝武芳乃",
+      "file": "sb-133d11c12d51/display.webp",
+      "thumbnail": "sb-133d11c12d51/thumb.webp",
+      "source_file": "01_朝武芳乃_巫女服.png"
+    },
+    {
+      "id": "sb-d19a1e7f3dac",
+      "name": "常陸茉子 忍者服",
+      "collection": "常陸茉子",
+      "file": "sb-d19a1e7f3dac/display.webp",
+      "thumbnail": "sb-d19a1e7f3dac/thumb.webp",
+      "source_file": "02_常陸茉子_忍者服.png"
+    },
+    {
+      "id": "sb-39295983af40",
+      "name": "丛雨 刀服",
+      "collection": "丛雨",
+      "file": "sb-39295983af40/display.webp",
+      "thumbnail": "sb-39295983af40/thumb.webp",
+      "source_file": "03_丛雨_刀服.png"
+    },
+    {
+      "id": "sb-a56941eadd73",
+      "name": "蕾娜 女神服",
+      "collection": "蕾娜",
+      "file": "sb-a56941eadd73/display.webp",
+      "thumbnail": "sb-a56941eadd73/thumb.webp",
+      "source_file": "04_蕾娜_女神服.png"
+    },
+    {
+      "id": "sb-c5bb7eebdd51",
+      "name": "鞍馬小春 店服",
+      "collection": "鞍馬小春",
+      "file": "sb-c5bb7eebdd51/display.webp",
+      "thumbnail": "sb-c5bb7eebdd51/thumb.webp",
+      "source_file": "05_鞍馬小春_店服.png"
+    },
+    {
+      "id": "sb-7cead64eba2f",
+      "name": "馬庭芦花 店服",
+      "collection": "馬庭芦花",
+      "file": "sb-7cead64eba2f/display.webp",
+      "thumbnail": "sb-7cead64eba2f/thumb.webp",
+      "source_file": "06_馬庭芦花_店服.png"
+    },
+    {
+      "id": "sb-6d9439972cf6",
+      "name": "鞍馬小春 制服 备用",
+      "collection": "鞍馬小春",
+      "file": "sb-6d9439972cf6/display.webp",
+      "thumbnail": "sb-6d9439972cf6/thumb.webp",
+      "source_file": "07_鞍馬小春_制服_备用.png"
+    }
+  ]
+}

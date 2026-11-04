@@ -6,6 +6,7 @@ import {
   Select,
   Slider,
   Switch,
+  useCallback,
   useConfirm,
   useEffect,
   useRef,
@@ -28,6 +29,12 @@ type CalEvent = {
 type Anniversary = { id: string; title: string; month: number; day: number }
 
 type ArtMeta = { available: boolean; version?: string; error?: string; file?: string }
+type Portrait = { id: string; name: string; collection: string; available: boolean; version: string }
+type PortraitPrefs = { mode: "fixed" | "random" | "off" | "legacy"; selected_id: string; pool_ids: string[] | null }
+type PortraitLibrary = {
+  settings: PortraitPrefs; count: number; ids: string[]; pool_count: number; collections: string[]; revision: string; catalog_error: boolean
+}
+type PortraitPage = { items: Portrait[]; page: number; pages: number; total: number }
 
 type Scope = {
   key: string
@@ -87,6 +94,7 @@ type Dashboard = {
     model_status?: string
   }
   decoration?: { default?: ArtMeta; stages?: Record<string, ArtMeta>; too_large?: string[]; max?: number }
+  portraits?: PortraitLibrary | null
 }
 
 type Section = "heart" | "history" | "dates" | "nicknames" | "settings"
@@ -108,6 +116,11 @@ const ERROR_CODES = [
   "unknown_scope",
   "current_character_unknown",
   "invalid_settings",
+  "portrait_invalid_settings",
+  "portrait_not_found",
+  "portrait_too_large",
+  "portrait_not_ready",
+  "portrait_save_failed",
 ]
 
 // Theme + host-control overrides are document-wide on purpose: useConfirm()
@@ -180,13 +193,15 @@ html, body { margin: 0; }
   border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; }
 .lwy-notices { display: grid; gap: 12px; margin-bottom: 20px; }
 .lwy-page-layout { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 28px; align-items: start; min-height: 100%; }
-.lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(200px, 35%, 280px); }
+.lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(170px, 27%, 220px); }
+.lwy-page-layout.is-overview { align-content: start; }
 .lwy-page-content { min-width: 0; }
 .lwy-page { min-width: 0; }
-.lwy-art { position: sticky; top: 0; display: flex; justify-content: center; align-items: flex-start;
-  min-width: 0; height: 480px; max-height: calc(100dvh - 64px); pointer-events: none; }
-.lwy-art img { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center top;
-  filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.08)); animation: lwy-fade 300ms ease-out; }
+.lwy-art { position: sticky; top: 0; display: flex; justify-content: flex-end; align-items: flex-start;
+  min-width: 0; height: 360px; max-height: calc(100dvh - 80px); margin-top: -8px; margin-right: -8px;
+  transform: translate(12px, -12px); pointer-events: none; }
+.lwy-art img { display: block; width: 92%; height: 100%; object-fit: contain; object-position: right top;
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.06)); animation: lwy-fade 300ms ease-out; }
 .lwy-sections { display: grid; min-width: 0; gap: 24px; }
 .lwy-card { min-width: 0; padding: 0 0 24px; border-bottom: 1px solid var(--line); }
 .lwy-card:last-child { border-bottom: 0; }
@@ -196,8 +211,8 @@ html, body { margin: 0; }
 .lwy-ring { --p: 0; width: 148px; height: 148px; flex: none; position: relative; }
 .lwy-ring-fill { position: absolute; inset: 0; border-radius: 50%;
   background: conic-gradient(var(--rose) calc(var(--p) * 1%), var(--rose-soft) 0);
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 10px), #000 calc(100% - 9px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 10px), #000 calc(100% - 9px)); }
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 8px), #000 calc(100% - 7px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 8px), #000 calc(100% - 7px)); }
 .lwy-ring-in { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 2px; }
 .lwy-num { font-size: 38px; font-weight: 700; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; }
 .lwy-heart { color: var(--rose); font-size: 14px; animation: lwy-beat 1.6s ease-in-out infinite; }
@@ -277,17 +292,64 @@ html, body { margin: 0; }
 .lwy-rule { display: grid; gap: 6px; }
 .lwy-rule .lwy-note { padding-left: 44px; }
 .lwy-rule .lwy-status { color: var(--rose); }
-.lwy-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px;
-  padding: 8px 0 24px; border-bottom: 1px solid var(--line); }
+.is-overview .lwy-card { padding-bottom: 0; }
+.lwy-overview-footer { grid-column: 1 / -1; display: grid; grid-template-columns: inherit; column-gap: inherit;
+  min-width: 0; margin-top: 24px; padding: 28px 0 26px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.lwy-summary { grid-column: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; min-width: 0;
+  align-items: start; }
 .lwy-summary-item { display: grid; gap: 8px; min-width: 0; }
 .lwy-summary-value { color: var(--ink); font-size: 20px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+@media (min-width: 701px) {
+  .lwy-hero, .lwy-summary { display: grid; grid-template-columns: minmax(148px, 1fr) minmax(140px, min(42%, 240px));
+    column-gap: 24px; }
+}
+.lwy-portrait-settings { display: grid; gap: 14px; }
+.lwy-portrait-modes { display: flex; gap: 4px; flex-wrap: wrap; }
+.lwy-portrait-modes button { border: 1px solid var(--line); border-radius: 5px; background: transparent;
+  color: var(--hint); padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.lwy-portrait-modes button[aria-pressed="true"] { background: var(--rose-soft); border-color: var(--rose-line); color: var(--rose-strong); }
+.lwy-portrait-modes button:disabled { opacity: 0.5; cursor: not-allowed; }
+.lwy-gallery { display: grid; gap: 16px; min-width: 0; letter-spacing: 0; color: var(--text); }
+.lwy-gallery-modal .neko-modal { background: var(--bg); border-radius: 8px; max-height: calc(100dvh - 40px);
+  display: flex; flex-direction: column; }
+.lwy-gallery-modal .neko-modal-body { min-height: 0; }
+.lwy-gallery-modal .neko-modal-header, .lwy-gallery-modal .neko-modal-footer { flex: none; }
+.lwy-gallery * { box-sizing: border-box; }
+.lwy-gallery-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.lwy-gallery-filters label { display: grid; gap: 5px; min-width: 0; color: var(--muted); font-size: 12px; }
+.lwy-gallery-filters input, .lwy-gallery-filters select { width: 100%; min-width: 0; }
+.lwy-gallery-tools, .lwy-gallery-pager { display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px; min-height: 32px; }
+.lwy-gallery-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.lwy-portrait-choice { --thumb-height: 164px; display: grid; grid-template-rows: var(--thumb-height) auto; position: relative; min-width: 0;
+  margin: 0; border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+  background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.lwy-portrait-choice.chosen { border-color: var(--rose-strong); background: var(--rose-soft); }
+.lwy-portrait-choice:focus-visible, .lwy-portrait-choice:focus-within { outline: 2px solid var(--rose-strong); outline-offset: 2px; }
+.lwy-portrait-choice input { position: absolute; top: 8px; right: 8px; z-index: 1; accent-color: var(--rose-strong); }
+.lwy-portrait-thumb { position: relative; width: 100%; height: var(--thumb-height); display: grid; place-items: center;
+  overflow: hidden; color: var(--muted); font-size: 12px; }
+.lwy-portrait-thumb img { position: absolute; inset: 0; display: block; width: 100%; height: var(--thumb-height);
+  min-height: 0; max-height: var(--thumb-height); object-fit: contain; object-position: center; }
+.lwy-portrait-name { padding-top: 8px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.lwy-gallery-state { display: grid; place-items: center; min-height: 164px; color: var(--muted); font-size: 13px; }
+.lwy-icon-button { width: 32px; height: 32px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text);
+  font-size: 18px; cursor: pointer; }
+.lwy-icon-button:disabled { opacity: 0.4; cursor: not-allowed; }
+@media (max-width: 700px) { .lwy-gallery-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 480px) {
+  .lwy-gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .lwy-portrait-choice { --thumb-height: 140px; }
+  .lwy-gallery-filters { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 960px) {
   .lwy { --sidebar-width: 128px; }
   .lwy-sidebar { padding: 24px 12px 16px; }
   .lwy-workspace { padding: 24px; }
   .lwy-page-layout { column-gap: 20px; }
-  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(160px, 32%, 240px); }
-  .lwy-art { height: 440px; }
+  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(150px, 28%, 200px); }
+  .lwy-art { height: 336px; }
 }
 @media (max-width: 700px) {
   .lwy { --sidebar-width: 112px; }
@@ -297,14 +359,16 @@ html, body { margin: 0; }
   .lwy-workspace { padding: 20px; }
   .lwy-head { margin-bottom: 20px; padding-bottom: 20px; gap: 12px; }
   .lwy-title { font-size: 21px; }
-  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) 120px; align-content: start; column-gap: 16px; }
+  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) 104px; align-content: start; column-gap: 14px; }
   .lwy-page-layout.has-art .lwy-page-content { display: contents; }
   .has-art .lwy-head { grid-column: 1; grid-row: 1; align-self: start; margin-bottom: 20px;
     flex-direction: column; align-items: flex-start; }
   .lwy-art { position: static; grid-column: 2; grid-row: 1; justify-self: end;
-    width: 120px; height: 160px; max-height: none; margin: 0 0 20px; }
+    width: 104px; height: 144px; max-height: none; margin: -4px -4px 20px 0; transform: none; }
   .lwy-page-layout.has-art .lwy-notices { grid-column: 1 / -1; grid-row: 2; }
   .lwy-page-layout.has-art .lwy-page { grid-column: 1 / -1; grid-row: 3; }
+  .lwy-overview-footer { display: block; padding: 22px 0; }
+  .has-art .lwy-overview-footer { grid-row: 4; }
   .lwy-sidebar-foot { padding: 12px 6px 0; }
 }
 @media (max-width: 480px) {
@@ -328,8 +392,8 @@ html, body { margin: 0; }
   .lwy-nick-grid .neko-input { margin-bottom: 8px; }
   .lwy-scope { width: 100%; }
   .lwy-scope select { width: 100%; }
-  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) 80px; column-gap: 12px; }
-  .lwy-art { width: 80px; height: 140px; }
+  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) 72px; column-gap: 10px; }
+  .lwy-art { width: 72px; height: 124px; }
 }
 @keyframes lwy-beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.25); } 30% { transform: scale(1); } }
 @keyframes lwy-fade { from { opacity: 0; } to { opacity: 1; } }
@@ -360,6 +424,52 @@ function shiftIso(iso: string, days: number): string {
   return `${shifted.getUTCFullYear()}-${mm}-${dd}`
 }
 
+function rememberImage(cache: Record<string, string>, key: string, url: string, limit: number) {
+  delete cache[key]
+  cache[key] = url
+  while (Object.keys(cache).length > limit) delete cache[Object.keys(cache)[0]]
+}
+
+function PortraitThumb(props: {
+  item: Portrait; api: PluginSurfaceProps["api"]; cache: Record<string, string>; loading: string; failed: string
+}) {
+  const [url, setUrl] = useState("")
+  const [failed, setFailed] = useState(false)
+  const container = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    let alive = true
+    let observer: IntersectionObserver | null = null
+    setUrl("")
+    setFailed(false)
+    const key = props.item.version
+    async function load() {
+      observer?.disconnect()
+      try {
+        let image = props.cache[key]
+        if (!image) {
+          const res = unwrap(await props.api.call("get_portrait", { item_id: props.item.id, thumbnail: true }), "available")
+          if (!res.available || typeof res.data_url !== "string") throw new Error("missing image")
+          image = res.data_url
+          rememberImage(props.cache, key, image, 32)
+        }
+        if (alive) setUrl(image)
+      } catch { if (alive) setFailed(true) }
+    }
+    if (typeof IntersectionObserver === "function" && container.current) {
+      observer = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) void load()
+      }, { rootMargin: "100px" })
+      observer.observe(container.current)
+    } else { void load() }
+    return () => { alive = false; observer?.disconnect() }
+  }, [props.item.id, props.item.version])
+  return (
+    <span className="lwy-portrait-thumb" ref={container}>
+      {url && !failed ? <img src={url} alt="" onError={() => setFailed(true)} /> : failed ? props.failed : props.loading}
+    </span>
+  )
+}
+
 export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const { t, api } = props
   const state = props.state || {}
@@ -386,6 +496,24 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const [annDate, setAnnDate] = useState("")
   const [trendRange, setTrendRange] = props.useLocalState<number>("lwy:trend", 30)
   const artCache = useRef<Record<string, string>>({})
+  const thumbCache = useRef<Record<string, string>>({})
+  const portraitRequest = useRef(0)
+  const [portrait, setPortrait] = useState<Portrait | null>(null)
+  const [artError, setArtError] = useState("")
+  const [artLoading, setArtLoading] = useState(false)
+  const [artChoosing, setArtChoosing] = useState(false)
+  const [artRetry, setArtRetry] = useState(0)
+  const [gallery, setGallery] = useState<"fixed" | "pool" | "">("")
+  const [galleryPage, setGalleryPage] = useState(0)
+  const [galleryCollection, setGalleryCollection] = useState("")
+  const [gallerySearch, setGallerySearch] = useState("")
+  const [galleryData, setGalleryData] = useState<PortraitPage | null>(null)
+  const [galleryError, setGalleryError] = useState("")
+  const [galleryLoading, setGalleryLoading] = useState(false)
+  const [galleryRetry, setGalleryRetry] = useState(0)
+  const [chosenId, setChosenId] = useState("")
+  const [poolDraft, setPoolDraft] = useState<string[] | null>(null)
+  const closeGallery = useCallback(() => { if (!busy) setGallery("") }, [busy])
   const workspaceRef = useRef<HTMLElement | null>(null)
 
   const fallback = scopes.find((s) => s.is_current) || scopes[0]
@@ -416,14 +544,18 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   function errorText(error: any): string {
     const raw = String((error && error.message) || error || "")
-    const code = ERROR_CODES.find((item) => raw.includes(item))
+    const code = [...ERROR_CODES].sort((a, b) => b.length - a.length).find((item) => raw.includes(item))
     return code ? t(`error.${code}`, { defaultValue: raw }) : raw
   }
 
-  // ---- artwork: stage_<stage> replaces the default decoration at that stage
+  // Gallery choices are global; only explicit legacy mode follows relationship stages.
+  const library = state.portraits
+  const portraitPrefs: PortraitPrefs = library?.settings || { mode: "legacy", selected_id: "", pool_ids: null }
+  const portraitMode = portraitPrefs.mode
+  const prefsKey = JSON.stringify(portraitPrefs) + (library?.revision || "")
   const decoration = state.decoration || {}
   const stageArt = scope && decoration.stages ? decoration.stages[scope.stage] : undefined
-  const artVersion =
+  const legacyVersion =
     stageArt && stageArt.available
       ? stageArt.version || ""
       : decoration.default && decoration.default.available
@@ -431,24 +563,90 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         : ""
   const artStage = scope ? scope.stage : ""
   useEffect(() => {
-    if (!artVersion) {
+    const request = ++portraitRequest.current
+    if (!library || portraitMode === "legacy" || portraitMode === "off") {
+      setPortrait(null)
+      setArtError("")
+      setArtChoosing(false)
+      return
+    }
+    let alive = true
+    setArtChoosing(true)
+    setArtError("")
+    api.call("choose_portrait", {}).then((res: any) => {
+      const item = unwrap(res, "available")
+      if (alive && request === portraitRequest.current) setPortrait(item.available ? item as Portrait : null)
+    }).catch((error: any) => { if (alive && request === portraitRequest.current) { setPortrait(null); setArtError(errorText(error)) } })
+      .finally(() => { if (alive && request === portraitRequest.current) setArtChoosing(false) })
+    return () => { alive = false }
+  }, [prefsKey, artRetry])
+  const artVersion = portraitMode === "legacy" ? legacyVersion : portrait?.version || ""
+  useEffect(() => {
+    if (portraitMode === "off" || !artVersion) {
       setArt("")
+      setArtLoading(false)
       return
     }
     const cached = artCache.current[artVersion]
     if (cached) {
       setArt(cached)
+      setArtLoading(false)
       return
     }
     let alive = true
-    api.call("get_decoration", { stage: artStage }).then((res: any) => {
+    setArtLoading(true)
+    const request = portraitMode === "legacy"
+      ? api.call("get_decoration", { stage: artStage })
+      : api.call("get_portrait", { item_id: portrait?.id })
+    request.then((res: any) => {
       const payload = unwrap(res, "available")
       const url = payload.available && typeof payload.data_url === "string" ? payload.data_url : ""
-      if (url) artCache.current[String(payload.version || artVersion)] = url
+      if (url) rememberImage(artCache.current, String(payload.version || artVersion), url, 6)
       if (alive) setArt(url)
-    }).catch(() => { if (alive) setArt("") })
+    }).catch((error: any) => { if (alive) { setArt(""); setArtError(errorText(error)) } })
+      .finally(() => { if (alive) setArtLoading(false) })
     return () => { alive = false }
-  }, [artVersion, artStage])
+  }, [artVersion, portraitMode, portraitMode === "legacy" ? artStage : "", artRetry])
+
+  useEffect(() => {
+    if (!gallery) return
+    let alive = true
+    setGalleryLoading(true)
+    setGalleryError("")
+    // Debounce search while keeping only the current page's thumbnails mounted.
+    const timer = setTimeout(() => {
+      api.call("list_portraits", { page: galleryPage, collection: galleryCollection, query: gallerySearch })
+        .then((res: any) => { if (alive) setGalleryData(unwrap(res, "items") as PortraitPage) })
+        .catch((error: any) => { if (alive) { setGalleryData(null); setGalleryError(errorText(error)) } })
+        .finally(() => { if (alive) setGalleryLoading(false) })
+    }, 180)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [gallery, galleryPage, galleryCollection, gallerySearch, galleryRetry, library?.revision])
+
+  function openGallery(purpose: "fixed" | "pool") {
+    setChosenId(portraitPrefs.selected_id)
+    setPoolDraft(portraitPrefs.pool_ids === null ? null : [...portraitPrefs.pool_ids])
+    setGalleryPage(0)
+    setGalleryCollection("")
+    setGallerySearch("")
+    setGalleryData(null)
+    setGallery(purpose)
+  }
+
+  async function savePortraitPrefs(next: PortraitPrefs) {
+    return run("set_portraits", next, t("toast.saved", { defaultValue: "已保存" }))
+  }
+
+  async function shufflePortrait() {
+    const request = ++portraitRequest.current
+    setArtChoosing(true)
+    setArtError("")
+    try {
+      const item = unwrap(await api.call("choose_portrait", { previous_id: portrait?.id || "" }), "available")
+      if (request === portraitRequest.current) setPortrait(item.available ? item as Portrait : null)
+    } catch (error: any) { if (request === portraitRequest.current) setArtError(errorText(error)) }
+    finally { if (request === portraitRequest.current) setArtChoosing(false) }
+  }
 
   // ---- nickname drafts follow the selected scope until the user edits them
   const savedNicknames = (scope && scope.nicknames) || {}
@@ -581,7 +779,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     return ""
   }
 
-  const hasArt = Boolean(art)
+  const hasArt = portraitMode !== "off" && Boolean(art)
   const percent = scope ? Math.max(0, Math.min(100, scope.affection)) : 0
   const settings = state.settings || { require_confession: true, decay: false, auto_score: true }
   const decayRules = state.decay_rules || { grace_days: 3, per_day: 1 }
@@ -778,6 +976,13 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           </div>
         </section>
 
+      </div>
+    )
+  }
+
+  function renderOverviewDates(current: Scope) {
+    return (
+      <section className="lwy-overview-footer" aria-label={sectionLabel("dates")}>
         <div className="lwy-summary">
           <div className="lwy-summary-item">
             <span className="lwy-sub">{t("overview.firstMet", { defaultValue: "相识的日子" })}</span>
@@ -789,7 +994,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             {upcoming.length ? <span className="lwy-sub">{countdown(upcoming[0].days_until)}</span> : null}
           </div>
         </div>
-      </div>
+      </section>
     )
   }
 
@@ -954,6 +1159,60 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function renderSettings(current: Scope | undefined) {
     return (
       <div className="lwy-sections">
+        {library ? (
+          <section className="lwy-card lwy-portrait-settings">
+            <h2 className="lwy-h">{t("art.title", { defaultValue: "立绘" })}</h2>
+            <div className="lwy-portrait-modes" role="group" aria-label={t("art.mode", { defaultValue: "立绘模式" })}>
+              {(["fixed", "random", "off"] as const).map(mode => (
+                <button type="button" key={mode} aria-pressed={portraitMode === mode ? "true" : "false"}
+                  disabled={busy || (mode !== "off" && !library.count)}
+                  onClick={() => { void savePortraitPrefs({ ...portraitPrefs, mode }) }}>
+                  {t(`art.mode.${mode}`, { defaultValue: mode === "fixed" ? "固定" : mode === "random" ? "随机" : "关闭" })}
+                </button>
+              ))}
+              {legacyVersion || portraitMode === "legacy" ? (
+                <button type="button" aria-pressed={portraitMode === "legacy" ? "true" : "false"} disabled={busy}
+                  onClick={() => { void savePortraitPrefs({ ...portraitPrefs, mode: "legacy" }) }}>
+                  {t("art.mode.legacy", { defaultValue: "旧版阶段图" })}
+                </button>
+              ) : null}
+            </div>
+            {portraitMode === "fixed" || portraitMode === "random" ? (
+              <div className="lwy-set-row">
+                <span className="lwy-hint">{portrait?.name || t("art.none", { defaultValue: "未选择立绘" })}</span>
+                <div className="lwy-btns">
+                  <Button tone="default" disabled={busy || !library.count} onClick={() => openGallery("fixed")}>
+                    {t("art.browse", { defaultValue: "选择立绘" })}
+                  </Button>
+                  {portraitMode === "random" ? (
+                    <button type="button" className="lwy-icon-button" disabled={busy || artLoading || artChoosing || library.pool_count < 2}
+                      title={t("art.shuffle", { defaultValue: "换一张" })} aria-label={t("art.shuffle", { defaultValue: "换一张" })}
+                      onClick={shufflePortrait}>↻</button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            {portraitMode === "random" ? (
+              <div className="lwy-set-row">
+                <span className="lwy-note">{t("art.poolCount", { n: library.pool_count, defaultValue: "随机范围：{n} 张" })}</span>
+                <Button tone="default" disabled={busy || !library.count} onClick={() => openGallery("pool")}>
+                  {t("art.editPool", { defaultValue: "选择随机范围" })}
+                </Button>
+              </div>
+            ) : null}
+            {!library.count ? <p className="lwy-note">{t("art.empty", { defaultValue: "图库里还没有可用的立绘。" })}</p> : null}
+            {portraitMode === "random" && !library.pool_count ? (
+              <Alert tone="info" message={t("art.emptyPool", { defaultValue: "随机范围为空，请选择图片。" })} />
+            ) : null}
+            {library.catalog_error ? <Alert tone="warning" message={t("art.catalogError", { defaultValue: "部分立绘条目无法读取，请检查图库清单。" })} /> : null}
+            {artError ? (
+              <div className="lwy-set-row">
+                <Alert tone="warning" message={artError} />
+                <Button tone="default" disabled={artLoading || artChoosing} onClick={() => { setArtRetry(artRetry + 1) }}>{t("art.retry", { defaultValue: "重试" })}</Button>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
         <section className="lwy-card lwy-set">
           <h2 className="lwy-h">{t("rules.title", { defaultValue: "关系规则" })}</h2>
           <div className="lwy-rule">
@@ -1088,8 +1347,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         </div>
       </aside>
 
-      <main className="lwy-workspace" ref={workspaceRef}>
-        <div className={hasArt ? "lwy-page-layout has-art" : "lwy-page-layout"}>
+      <main className="lwy-workspace" ref={workspaceRef} aria-busy={artLoading || artChoosing ? "true" : "false"}>
+        <div className={["lwy-page-layout", hasArt ? "has-art" : "", activeSection === "heart" && scope ? "is-overview" : ""].join(" ")}>
           <div className="lwy-page-content">
             <header className="lwy-head">
               <div className="lwy-head-text">
@@ -1147,11 +1406,102 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           </div>
           {hasArt ? (
             <aside className="lwy-art" aria-hidden="true">
-              <img key={artVersion} src={art} alt="" onError={() => setArt("")} />
+              <img key={artVersion} src={art} alt="" onError={() => {
+                setArt("")
+                setArtError(t("art.imageError", { defaultValue: "图片加载失败，请重试。" }))
+              }} />
             </aside>
           ) : null}
+          {activeSection === "heart" && scope ? renderOverviewDates(scope) : null}
         </div>
       </main>
+
+      <Modal open={Boolean(gallery)} size="lg" className="lwy-gallery-modal"
+        title={gallery === "pool" ? t("art.editPool", { defaultValue: "选择随机范围" }) : t("art.browse", { defaultValue: "选择立绘" })}
+        onClose={closeGallery}
+        footer={
+          <div className="lwy-btns">
+            <Button tone="default" disabled={busy} onClick={() => { setGallery("") }}>{t("common.cancel", { defaultValue: "取消" })}</Button>
+            <Button tone="primary" disabled={busy || (gallery === "fixed" && !chosenId)}
+              onClick={async () => {
+                const next = gallery === "fixed"
+                  ? { ...portraitPrefs, mode: "fixed" as const, selected_id: chosenId }
+                  : { ...portraitPrefs, pool_ids: poolDraft }
+                if (await savePortraitPrefs(next)) setGallery("")
+              }}>
+              {gallery === "fixed" ? t("art.useImage", { defaultValue: "使用此立绘" }) : t("common.save", { defaultValue: "保存" })}
+            </Button>
+          </div>
+        }>
+        <div className="lwy-gallery">
+          <div className="lwy-gallery-filters">
+            <label>
+              <span>{t("art.collection", { defaultValue: "图集" })}</span>
+              <Select value={galleryCollection} options={[
+                { value: "", label: t("art.allCollections", { defaultValue: "全部图集" }) },
+                ...(library?.collections || []).map(name => ({ value: name, label: name })),
+              ]} onChange={(value: string) => { setGalleryCollection(value); setGalleryPage(0) }} />
+            </label>
+            <label>
+              <span>{t("art.search", { defaultValue: "搜索" })}</span>
+              <Input value={gallerySearch} placeholder={t("art.searchPlaceholder", { defaultValue: "名称或图集" })}
+                onChange={(value: string) => { setGallerySearch(value.slice(0, 120)); setGalleryPage(0) }} />
+            </label>
+          </div>
+          {gallery === "pool" ? (
+            <div className="lwy-gallery-tools">
+              <span className="lwy-note">{t("art.selectedCount", { n: poolDraft === null ? library?.count || 0 : poolDraft.length,
+                defaultValue: "已选 {n} 张" })}</span>
+              <div className="lwy-btns">
+                <Button tone="default" disabled={busy} onClick={() => { setPoolDraft(null) }}>{t("art.selectAll", { defaultValue: "全部加入" })}</Button>
+                <Button tone="default" disabled={busy} onClick={() => { setPoolDraft([]) }}>{t("art.clearPool", { defaultValue: "清空选择" })}</Button>
+              </div>
+            </div>
+          ) : null}
+          {galleryLoading ? <div className="lwy-gallery-state">{t("art.loading", { defaultValue: "加载中…" })}</div>
+            : galleryError ? <div className="lwy-gallery-state">
+              <Alert tone="warning" message={galleryError} />
+              <Button tone="default" onClick={() => { setGalleryRetry(galleryRetry + 1) }}>{t("art.retry", { defaultValue: "重试" })}</Button>
+            </div>
+            : !galleryData?.items.length ? <div className="lwy-gallery-state">{t("art.noResults", { defaultValue: "没有符合条件的立绘。" })}</div>
+            : <div className="lwy-gallery-grid">
+              {galleryData.items.map(item => {
+                const selected = gallery === "pool" ? poolDraft === null || poolDraft.includes(item.id) : chosenId === item.id
+                const content = <PortraitThumb item={item} api={api} cache={thumbCache.current}
+                  loading={t("art.loading", { defaultValue: "加载中…" })}
+                  failed={t("art.imageError", { defaultValue: "图片加载失败，请重试。" })} />
+                return gallery === "pool" ? (
+                  <label key={item.id} className={selected ? "lwy-portrait-choice chosen" : "lwy-portrait-choice"}>
+                    <input type="checkbox" checked={selected} disabled={busy} onChange={() => {
+                      const ids = poolDraft === null ? library?.ids || [] : poolDraft
+                      setPoolDraft(selected ? ids.filter(id => id !== item.id) : [...ids, item.id])
+                    }} />
+                    {content}<span className="lwy-portrait-name">{item.name}</span>
+                  </label>
+                ) : (
+                  <button type="button" key={item.id} disabled={busy} aria-pressed={selected ? "true" : "false"}
+                    className={selected ? "lwy-portrait-choice chosen" : "lwy-portrait-choice"} onClick={() => setChosenId(item.id)}>
+                    {content}<span className="lwy-portrait-name">{item.name}</span>
+                  </button>
+                )
+              })}
+            </div>}
+          {galleryData && !galleryLoading && !galleryError ? (
+            <div className="lwy-gallery-pager">
+              <span className="lwy-note">{t("art.pageCount", { page: galleryData.page + 1, pages: galleryData.pages, total: galleryData.total,
+                defaultValue: "第 {page} / {pages} 页 · 共 {total} 张" })}</span>
+              <div className="lwy-btns">
+                <button type="button" className="lwy-icon-button" disabled={galleryData.page === 0}
+                  title={t("art.previous", { defaultValue: "上一页" })} aria-label={t("art.previous", { defaultValue: "上一页" })}
+                  onClick={() => setGalleryPage(galleryData.page - 1)}>‹</button>
+                <button type="button" className="lwy-icon-button" disabled={galleryData.page + 1 >= galleryData.pages}
+                  title={t("art.next", { defaultValue: "下一页" })} aria-label={t("art.next", { defaultValue: "下一页" })}
+                  onClick={() => setGalleryPage(galleryData.page + 1)}>›</button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </Modal>
 
       <Modal
         open={editing}

@@ -1,7 +1,7 @@
 [plugin]
 id = "love_with_you"
 name = "与你相恋"
-version = "0.4.0"
+version = "0.5.0"
 type = "plugin"
 description = "恋爱关系插件：好感度 0–100、陌生到恋人五个阶段，每轮对话后自动判断好感变化，角色在聊天中随关系调整语气和分寸；支持多角色共用或各自独立的好感。"
 short_description = "Romance layer: affection 0-100 and five relationship stages that shape how the character talks to you."

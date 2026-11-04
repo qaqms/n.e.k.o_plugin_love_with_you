@@ -50,6 +50,7 @@ from . import _conversation as conv
 from . import _engine as engine
 from . import _host as host
 from . import _judge as judge
+from . import _portraits as portraits
 from . import _prompts as prompts
 from . import _scoring as scoring
 from ._storage import StateFile
@@ -128,6 +129,7 @@ class LoveWithYouPlugin(NekoPluginBase):
         self._last_tool_verify = 0.0
         # image path -> (version, data URL); insertion-ordered for eviction
         self._art_cache: dict[str, tuple[str, str]] = {}
+        self._portraits: portraits.PortraitLibrary | None = None
         self._last_decay_day: str | None = None
         # Conversation bus -> exchanges -> scoring worker.
         self._cursor: conv.BusCursor | None = None
@@ -165,6 +167,13 @@ class LoveWithYouPlugin(NekoPluginBase):
         raw, warning = await asyncio.to_thread(self._state_file.load)
         if warning:
             self.logger.warning("与你相恋: {}", warning)
+        self._portraits = await asyncio.to_thread(
+            portraits.PortraitLibrary,
+            self.plugin_dir / "assets" / "portraits",
+            StateFile(self.data_path("portraits.json")),
+        )
+        if self._portraits.warning:
+            self.logger.warning("与你相恋: {}", self._portraits.warning)
         with self._lock:
             self._state = engine.normalize_state(raw)
             self._ready = True
@@ -920,6 +929,7 @@ class LoveWithYouPlugin(NekoPluginBase):
                 "anniversaries": engine.ANNIVERSARY_LIMIT,
             },
             "decoration": await asyncio.to_thread(self._decoration_meta),
+            "portraits": await asyncio.to_thread(self._portraits.summary) if self._portraits else None,
         }
 
     @ui.action(label=tr("actions.setPerCharacter.label", default="切换独立好感"), refresh_context=True)
@@ -1153,6 +1163,65 @@ class LoveWithYouPlugin(NekoPluginBase):
             return Ok(await asyncio.to_thread(self._load_decoration, stage))
         except OSError as exc:
             return Err(SdkError(f"decoration unreadable: {type(exc).__name__}"))
+
+    async def _portrait_call(self, method: str, *args: Any):
+        if self._portraits is None:
+            return Err(SdkError("portrait_not_ready"))
+        try:
+            result = await asyncio.to_thread(getattr(self._portraits, method), *args)
+            return Ok(result)
+        except portraits.PortraitError as exc:
+            return Err(SdkError(str(exc)))
+        except OSError:
+            return Err(SdkError("portrait_save_failed"))
+
+    @ui.action(label=tr("actions.listPortraits.label", default="浏览立绘"), refresh_context=False)
+    @plugin_entry(
+        id="list_portraits",
+        name=tr("actions.listPortraits.label", default="浏览立绘"),
+        description=tr("entries.listPortraits.description", default="分页浏览共用立绘库。"),
+        input_schema={"type": "object", "properties": {
+            "page": {"type": "integer"}, "collection": {"type": "string"}, "query": {"type": "string"},
+        }},
+    )
+    async def list_portraits(self, page: Any = 0, collection: Any = "", query: Any = "", **_: Any):
+        return await self._portrait_call("list_items", page, collection, query)
+
+    @ui.action(label=tr("actions.getPortrait.label", default="读取立绘"), refresh_context=False)
+    @plugin_entry(
+        id="get_portrait",
+        name=tr("actions.getPortrait.label", default="读取立绘"),
+        description=tr("entries.getPortrait.description", default="按图片 ID 读取展示图或缩略图。"),
+        input_schema={"type": "object", "properties": {
+            "item_id": {"type": "string"}, "thumbnail": {"type": "boolean"},
+        }, "required": ["item_id"]},
+    )
+    async def get_portrait(self, item_id: Any = None, thumbnail: Any = False, **_: Any):
+        return await self._portrait_call("image", item_id, thumbnail)
+
+    @ui.action(label=tr("actions.choosePortrait.label", default="换一张立绘"), refresh_context=False)
+    @plugin_entry(
+        id="choose_portrait",
+        name=tr("actions.choosePortrait.label", default="换一张立绘"),
+        description=tr("entries.choosePortrait.description", default="按共用偏好选取立绘，随机时避免紧接着重复。"),
+        input_schema={"type": "object", "properties": {"previous_id": {"type": "string"}}},
+    )
+    async def choose_portrait(self, previous_id: Any = "", **_: Any):
+        return await self._portrait_call("choose", previous_id)
+
+    @ui.action(label=tr("actions.setPortraits.label", default="保存立绘设置"), refresh_context=True)
+    @plugin_entry(
+        id="set_portraits",
+        name=tr("actions.setPortraits.label", default="保存立绘设置"),
+        description=tr("entries.setPortraits.description", default="保存所有角色共用的立绘模式、固定图片和随机范围。"),
+        input_schema={"type": "object", "properties": {
+            "mode": {"type": "string", "enum": ["fixed", "random", "off", "legacy"]},
+            "selected_id": {"type": "string"},
+            "pool_ids": {"type": ["array", "null"], "items": {"type": "string"}},
+        }, "required": ["mode", "selected_id", "pool_ids"]},
+    )
+    async def set_portraits(self, mode: Any = None, selected_id: Any = "", pool_ids: Any = None, **_: Any):
+        return await self._portrait_call("update", mode, selected_id, pool_ids)
 
     @ui.action(label=tr("actions.syncCharacters.label", default="刷新角色"), refresh_context=True)
     @plugin_entry(

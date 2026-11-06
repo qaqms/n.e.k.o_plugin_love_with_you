@@ -8,7 +8,12 @@ dependencies = []
 [tool.pyright]
 extraPaths = ["../N.E.K.O"]
 
+[tool.pytest.ini_options]
+# The standalone source folder is not importable as a top-level Python package.
+# Keep the release CLI's plain `pytest tests` collection inside tests/.
+addopts = "--rootdir=tests --confcutdir=tests --import-mode=importlib -p no:cacheprovider --basetemp=../.pytest-love-with-you"
+
 # Keep local pytest temp output (created on Windows when TEMP is unusable)
 # out of the installable package.
 [tool.neko.build]
-exclude_dirs = ["pytest-of-*", "tools"]
+exclude_dirs = ["pytest-of-*", ".benchmarks", "tools"]

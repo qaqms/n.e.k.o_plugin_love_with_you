@@ -133,7 +133,16 @@ def test_manual_set_respects_gate(engine):
 def test_existing_lovers_count_as_confessed(engine):
     state = engine.normalize_state({"shared": {"affection": 90, "stage": "lover"}})
     assert state["shared"]["confessed"] is True and state["shared"]["stage"] == "lover"
-    assert state["settings"] == {"require_confession": True, "decay": False, "auto_score": True}
+    assert state["settings"] == engine.DEFAULT_SETTINGS
+
+
+def test_pending_gate_survives_reload_above_threshold(engine):
+    state = engine.new_state()
+    engine.set_affection(state["shared"], 90, gate=True)
+    restored = engine.normalize_state(state)
+    assert restored["shared"]["stage"] == "ambiguous"
+    assert restored["shared"]["confessed"] is False
+    assert engine.awaiting_confession(restored["shared"], True)
 
 
 # ------------------------------------------------------------ settings

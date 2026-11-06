@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import calendar
 import copy
+import math
 import re
 import time
 import uuid
@@ -22,6 +23,8 @@ from typing import Any, Iterator
 
 # v2 added first_met / milestones / nicknames per record and global anniversaries.
 # v3 added cooldown, decay, daily trend and confession per record, and settings.
+# The proactive flow is opt-in and migrates old state files through the same
+# settings normalizer.
 SCHEMA_VERSION = 3
 
 AFFECTION_MIN = 0
@@ -70,7 +73,17 @@ TREND_DAYS = 365
 
 # auto_score: the plugin scores each finished exchange (user message + reply)
 # itself instead of waiting for the chat model to call love_update.
-DEFAULT_SETTINGS: dict[str, bool] = {"require_confession": True, "decay": False, "auto_score": True}
+DEFAULT_SETTINGS: dict[str, bool] = {
+    "require_confession": True,
+    "decay": False,
+    "auto_score": True,
+    "proactive_confession": False,
+}
+PROACTIVE_CONFESSION_SETTING = "proactive_confession"
+PROACTIVE_CONFESSION_MAX_ATTEMPTS = 3
+PROACTIVE_CONFESSION_WAIT_SECONDS = 30 * 60
+PROACTIVE_CONFESSION_COOLDOWN_SECONDS = 24 * 60 * 60
+PROACTIVE_CONFESSION_TIMEOUT_COOLDOWN_SECONDS = 6 * 60 * 60
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -175,6 +188,44 @@ def awaiting_confession(record: dict[str, Any], gate: bool) -> bool:
     return bool(gate) and not record.get("confessed") and int(record.get("affection", 0)) >= LOVER_THRESHOLD
 
 
+def proactive_confession_state(record: dict[str, Any]) -> dict[str, Any]:
+    """Return a normalized, persisted state for the optional proactive flow."""
+    raw = record.get("proactive_confession")
+    if not isinstance(raw, dict):
+        raw = {}
+    status = raw.get("status")
+    if not isinstance(status, str) or status not in {"idle", "waiting", "declined", "accepted"}:
+        status = "idle"
+    attempts = raw.get("attempts")
+    if isinstance(attempts, bool) or not isinstance(attempts, int):
+        attempts = 0
+    attempts = max(0, min(PROACTIVE_CONFESSION_MAX_ATTEMPTS, attempts))
+
+    def timestamp(key: str) -> float | None:
+        value = raw.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0:
+            return float(value)
+        return None
+
+    target = clean_text(raw.get("target"), 100) if isinstance(raw.get("target"), str) else ""
+    values: dict[str, Any] = {
+        "status": status,
+        "attempts": attempts,
+        "target": target,
+        "last_attempt_at": timestamp("last_attempt_at"),
+        "waiting_since": timestamp("waiting_since"),
+        "cooldown_until": timestamp("cooldown_until") or 0.0,
+        "reply_at": timestamp("reply_at"),
+        "reply_seen": raw.get("reply_seen") is True and timestamp("reply_at") is not None,
+        "answer_turns": max(0, min(100, raw["answer_turns"]))
+        if type(raw.get("answer_turns")) is int else 0,
+    }
+    if status == "waiting" and (not target or values["waiting_since"] is None):
+        values.update(status="idle", reply_seen=False, reply_at=None)
+    record["proactive_confession"] = values
+    return values
+
+
 def stage_progress(affection: int, stage: str) -> dict[str, Any]:
     """Progress information for UI and tool output."""
     idx = stage_index(stage)
@@ -219,6 +270,19 @@ def new_record(affection: int = 0, now: float | None = None) -> dict[str, Any]:
         "confessed": stage == "lover",
         "confessed_on": None,
         "confession": "",
+        # Optional proactive confession flow. It is deliberately separate
+        # from the relationship gate and harmless when the setting is off.
+        "proactive_confession": {
+            "status": "idle",
+            "attempts": 0,
+            "target": "",
+            "last_attempt_at": None,
+            "waiting_since": None,
+            "cooldown_until": 0.0,
+            "reply_seen": False,
+            "reply_at": None,
+            "answer_turns": 0,
+        },
         # date -> value at the end of that day, for the trend chart.
         "daily": {day: value},
     }
@@ -287,8 +351,15 @@ def _normalize_v3(record: dict[str, Any], raw: dict[str, Any]) -> None:
         parsed = _parse_day(raw.get(key))
         if parsed is not None:
             record[key] = parsed.isoformat()
-    # Records already at "lover" before the gate existed count as confessed.
-    record["confessed"] = raw.get("confessed") is True or record["stage"] == "lover"
+    # Keep an explicit pending gate on reload: resolving stage from 85 points
+    # must not turn a saved "ambiguous", confessed=false record into a lover.
+    # Old records already stored as lovers still migrate as confirmed.
+    record["confessed"] = (
+        raw.get("confessed") is True or raw.get("stage") == "lover"
+        or (raw.get("confessed") is not False and record["stage"] == "lover")
+    )
+    if not record["confessed"] and record["stage"] == "lover":
+        record["stage"] = "ambiguous"
     confessed_on = _parse_day(raw.get("confessed_on"))
     record["confessed_on"] = confessed_on.isoformat() if confessed_on and record["confessed"] else None
     record["confession"] = clean_text(raw.get("confession"), CONFESSION_MOMENT_MAX_CHARS) if record["confessed"] else ""
@@ -306,6 +377,10 @@ def _normalize_v3(record: dict[str, Any], raw: dict[str, Any]) -> None:
             if isinstance(ts, (int, float)) and isinstance(value, (int, float)):
                 points[today_str(ts)] = clamp_affection(value)
     record["daily"] = dict(sorted(points.items())[-DAILY_POINTS_LIMIT:]) or {record["day"]: record["affection"]}
+    proactive = raw.get("proactive_confession")
+    if isinstance(proactive, dict):
+        record["proactive_confession"] = copy.deepcopy(proactive)
+    proactive_confession_state(record)
 
 
 def _record_milestones(record: dict[str, Any], previous_stage: str, new_stage: str, ts: float) -> None:
@@ -557,6 +632,9 @@ def confess(record: dict[str, Any], moment: Any = "", now: float | None = None) 
     record["confessed"] = True
     record["confessed_on"] = today_str(ts)
     record["confession"] = clean_text(moment, CONFESSION_MOMENT_MAX_CHARS)
+    proactive = record.get("proactive_confession")
+    if isinstance(proactive, dict) and proactive.get("attempts", 0):
+        proactive.update(status="accepted", waiting_since=None, reply_seen=False, reply_at=None)
     new_stage = resolve_stage(previous_stage, affection)
     _settle(record, previous_stage, new_stage, ts)
     record["updated_at"] = ts

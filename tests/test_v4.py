@@ -23,6 +23,8 @@ def test_parse_record_shapes(conv):
     reply = conv.parse_record(_rec("assistant_message", "YUI", "喵~", DAY + 1, nested=True))
     assert user == conv.Message(ts=DAY, role="user", lanlan="YUI", content="摸摸头")
     assert reply is not None and reply.role == "reply" and reply.content == "喵~"
+    proactive = conv.parse_proactive_record(_rec("proactive_reply", "YUI", "我有话想对你说", DAY + 2))
+    assert proactive == conv.Message(ts=DAY + 2, role="proactive_reply", lanlan="YUI", content="我有话想对你说")
 
 
 def test_parse_record_skips_other_turns(conv):
@@ -31,6 +33,11 @@ def test_parse_record_skips_other_turns(conv):
     assert conv.parse_record(_rec("user_message", "", "hi", DAY)) is None
     assert conv.parse_record(_rec("user_message", "YUI", "   ", DAY)) is None
     assert conv.parse_record({"content": "hi", "metadata": {"turn_type": "user_message", "lanlan_name": "Y"}}) is None
+    assert conv.parse_proactive_record(_rec("assistant_message", "YUI", "喵", DAY)) is None
+    assert conv.parse_proactive_record({
+        "content": "我喜欢你，和我在一起吧", "timestamp": DAY,
+        "metadata": {"event_type": "proactive_confession", "turn_type": "proactive_instruction", "lanlan_name": "YUI"},
+    }) is None
 
 
 def test_parse_record_clips_long_text(conv):
@@ -77,6 +84,14 @@ def test_tracker_keeps_characters_apart(conv):
     assert tracker.feed(conv.Message(DAY + 1, "reply", "ATLS", "ATLS 的回复")) is None
     exchange = tracker.feed(conv.Message(DAY + 2, "reply", "YUI", "YUI 的回复"))
     assert exchange is not None and exchange.lanlan == "YUI" and exchange.user == "给 YUI 的"
+
+
+def test_tracker_never_pairs_a_user_message_with_proactive_speech(conv):
+    tracker = conv.ExchangeTracker()
+    tracker.feed(conv.Message(DAY, "user", "YUI", "你好"))
+    assert tracker.feed(conv.Message(DAY + 1, "proactive_reply", "YUI", "早上好")) is None
+    exchange = tracker.feed(conv.Message(DAY + 2, "reply", "YUI", "你好呀"))
+    assert exchange is not None and exchange.user == "你好"
 
 
 # ------------------------------------------------------------ scoring
@@ -162,6 +177,33 @@ def test_rule_verdict_confession_needs_gate_and_acceptance(scoring):
     assert scoring.rule_verdict(user, "我愿意！", awaiting_confession=False).confession is False
     assert scoring.rule_verdict(user, "对不起，还不行", awaiting_confession=True).confession is False
     assert scoring.rule_verdict("我喜欢你", "好呀", awaiting_confession=True).confession is False
+
+
+def test_proactive_response_requires_clear_answer(scoring):
+    assert scoring.proactive_response("我愿意") == "accept"
+    assert scoring.proactive_response("我愿意和你在一起") == "accept"
+    assert scoring.proactive_response("我也喜欢你") == "accept"
+    assert scoring.proactive_response("好，我们在一起") == "accept"
+    assert scoring.proactive_response("我不想和你在一起") == "refuse"
+    assert scoring.proactive_response("我也喜欢你，但是我还没准备好") == "refuse"
+    assert scoring.proactive_response("好") is None
+    assert scoring.proactive_response("我愿意帮你找个对象") is None
+    assert scoring.proactive_response("我愿意，但我是说愿意帮你") is None
+    assert scoring.proactive_response("我愿意，开玩笑的") is None
+    assert scoring.proactive_response("如果我说我愿意呢？") is None
+    assert scoring.proactive_response("我愿意吗？") is None
+    assert scoring.proactive_response("我愿意", require_relationship=True) is None
+    assert scoring.proactive_response("我愿意和你在一起", require_relationship=True) == "accept"
+
+
+def test_proactive_reply_must_contain_a_real_proposal(scoring):
+    assert scoring.confession_proposal("我喜欢你，和我在一起吧")
+    assert scoring.confession_proposal("我喜欢你，你愿意和我在一起吗？")
+    assert not scoring.confession_proposal("我喜欢你")
+    assert not scoring.confession_proposal("我喜欢你，和我在一起吧，开玩笑的")
+    assert not scoring.confession_proposal("如果我说我喜欢你，和我在一起吧")
+    assert not scoring.confession_proposal("我喜欢你，但是我还不想和你在一起")
+    assert not scoring.confession_proposal("我喜欢你，和我在一起吧。你愿意帮我找一本书吗？")
 
 
 # ------------------------------------------------------------ model gateway

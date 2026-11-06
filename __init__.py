@@ -28,6 +28,7 @@ import queue
 import threading
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable
@@ -74,8 +75,13 @@ _BUS_POLL_LIMIT = 50
 _WARN_THROTTLE_SECONDS = 300.0
 # Exchanges waiting for scoring; the oldest is dropped when full.
 _SCORE_QUEUE_MAX = 8
+_SCORE_STOP_SECONDS = 5.0
+_SCORE_CLOSE_SECONDS = 2.0
 # How often to look again for a model bound to the "judge" usage.
 _MODEL_RECHECK_SECONDS = 60.0
+# Proactive confession is opt-in and deliberately sparse.  The state itself
+# lives in each relationship record so a restart cannot repeat a confession.
+_PROACTIVE_CONFESSION_SETTING = engine.PROACTIVE_CONFESSION_SETTING
 
 # Artwork: assets/decoration.<ext> is the default; assets/stage_<stage>.<ext>
 # replaces it while the relationship is at that stage.
@@ -91,6 +97,14 @@ _ART_MIME = {
 # oversized frames, so each image is capped well below that.
 _ART_MAX_BYTES = 1024 * 1024
 _ART_CACHE_LIMIT = 6
+
+
+@dataclass(frozen=True)
+class _ScoreJob:
+    exchange: conv.Exchange
+    scope: str
+    generation: int
+    revision: int
 
 
 def _role_suffix(name: str) -> str:
@@ -134,8 +148,14 @@ class LoveWithYouPlugin(NekoPluginBase):
         # Conversation bus -> exchanges -> scoring worker.
         self._cursor: conv.BusCursor | None = None
         self._tracker = conv.ExchangeTracker()
-        self._jobs: queue.Queue[conv.Exchange | None] = queue.Queue(maxsize=_SCORE_QUEUE_MAX)
+        self._latest_message_ts: dict[str, float] = {}
+        self._jobs: queue.Queue[_ScoreJob | None] = queue.Queue(maxsize=_SCORE_QUEUE_MAX)
+        self._score_generation = 0
+        self._score_revisions: dict[str, int] = {}
         self._worker: threading.Thread | None = None
+        self._worker_loop: asyncio.AbstractEventLoop | None = None
+        self._score_task: asyncio.Task[None] | None = None
+        self._score_job: _ScoreJob | None = None
         self._stopping = threading.Event()
         # (prompt) -> (text | None, status); replaceable in tests.
         self._complete: Callable[[str], Any] = self._model_complete
@@ -163,6 +183,9 @@ class LoveWithYouPlugin(NekoPluginBase):
 
     @lifecycle(id="startup")
     async def startup(self, **_: Any):
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                return Err(SdkError("scoring_worker_already_running"))
         self._state_file = StateFile(self.data_path(_STATE_FILE))
         raw, warning = await asyncio.to_thread(self._state_file.load)
         if warning:
@@ -176,6 +199,7 @@ class LoveWithYouPlugin(NekoPluginBase):
             self.logger.warning("与你相恋: {}", self._portraits.warning)
         with self._lock:
             self._state = engine.normalize_state(raw)
+            self._invalidate_scoring_locked()
             self._ready = True
         # Only messages from now on are scored; history was never scored live.
         self._cursor = conv.BusCursor(time.time())
@@ -188,7 +212,8 @@ class LoveWithYouPlugin(NekoPluginBase):
     @lifecycle(id="shutdown")
     async def shutdown(self, **_: Any):
         # State is persisted on every change; the host clears our LLM tools on stop.
-        await asyncio.to_thread(self._stop_worker)
+        if not await asyncio.to_thread(self._stop_worker):
+            return Err(SdkError("scoring_worker_stop_timeout"))
         return Ok({"status": "stopped"})
 
     # timer_interval(name=...) takes a plain string, not a tr() reference.
@@ -202,6 +227,7 @@ class LoveWithYouPlugin(NekoPluginBase):
         if now - self._last_tool_verify >= _TOOL_VERIFY_SECONDS:
             await self._verify_tools()
         self._daily_decay()
+        self._expire_proactive_confessions()
         await self._poll_conversations()
         self._flush_context()
         # Also picks up day rollover: today's anniversaries live in the description.
@@ -247,6 +273,45 @@ class LoveWithYouPlugin(NekoPluginBase):
             self._try_save_locked()
         for scope, removed, value in changes:
             self.logger.info("与你相恋: decay scope={} removed={} value={}", scope, removed, value)
+
+    def _expire_proactive_confessions(self) -> None:
+        """Release unanswered proactive confessions after their wait window."""
+        now = time.time()
+        changed = False
+        with self._lock:
+            if not self._state["settings"].get(_PROACTIVE_CONFESSION_SETTING):
+                return
+            for _scope, record in engine.active_records(self._state):
+                state = engine.proactive_confession_state(record)
+                changed = self._expire_proactive_locked(state, now) or changed
+            if changed:
+                self._try_save_locked()
+
+    @staticmethod
+    def _expire_proactive_locked(state: dict[str, Any], now: float) -> bool:
+        waiting_since = state.get("waiting_since")
+        if state["status"] != "waiting" or waiting_since is None:
+            return False
+        if now - waiting_since < engine.PROACTIVE_CONFESSION_WAIT_SECONDS:
+            return False
+        state.update(
+            status="idle", waiting_since=None, reply_seen=False, reply_at=None,
+            cooldown_until=max(
+                float(state.get("cooldown_until") or 0),
+                waiting_since + engine.PROACTIVE_CONFESSION_WAIT_SECONDS
+                + engine.PROACTIVE_CONFESSION_TIMEOUT_COOLDOWN_SECONDS,
+            ),
+        )
+        return True
+
+    def _cancel_proactive_locked(self, scope: str | None = None) -> None:
+        """User edits invalidate outstanding proposals, preserving their limits."""
+        for key, record in engine.iter_records(self._state):
+            if scope is not None and scope != key:
+                continue
+            state = engine.proactive_confession_state(record)
+            if state["status"] == "waiting":
+                state.update(status="idle", waiting_since=None, reply_seen=False, reply_at=None)
 
     def _scope_record_locked(self, scope: Any) -> dict[str, Any]:
         """Validate a scope coming from the panel. Caller holds ``self._lock``."""
@@ -578,7 +643,7 @@ class LoveWithYouPlugin(NekoPluginBase):
                 pushes.append((target, text, stage, (key, transition)))
         for target, text, stage, (key, transition) in pushes:
             try:
-                self.push_message(
+                receipt = self.push_message(
                     source=self.plugin_id,
                     visibility=[],
                     ai_behavior="read",
@@ -588,6 +653,8 @@ class LoveWithYouPlugin(NekoPluginBase):
                     coalesce_key=f"{self.plugin_id}:context:{target}",
                     metadata={"event_type": "relationship_context", "stage": stage},
                 )
+                if isinstance(receipt, dict) and receipt.get("submitted") is False:
+                    raise RuntimeError("submission_rejected")
             except Exception as exc:
                 with self._lock:
                     self._context_entry(target)["retry_at"] = now + _CONTEXT_RETRY_SECONDS
@@ -633,7 +700,11 @@ class LoveWithYouPlugin(NekoPluginBase):
         except TypeError:
             records = []
         self._note_bus(True, "")
-        messages = [message for message in (conv.parse_record(record) for record in records) if message]
+        messages: list[conv.Message] = []
+        for record in records:
+            message = conv.parse_proactive_record(record) or conv.parse_record(record)
+            if message:
+                messages.append(message)
         for message in cursor.fresh(messages):
             self._on_message(message)
 
@@ -651,7 +722,16 @@ class LoveWithYouPlugin(NekoPluginBase):
                 self.logger.warning("与你相恋: conversation bus not readable: {}", error)
 
     def _on_message(self, message: conv.Message) -> None:
+        stage_change: tuple[str, str, str] | None = None
         with self._lock:
+            if not self._ready or self._stopping.is_set():
+                return
+            if message.role == conv.PROACTIVE_REPLY_TURN:
+                self._on_proactive_reply_locked(message)
+                return
+            self._latest_message_ts[message.lanlan] = max(
+                message.ts, self._latest_message_ts.get(message.lanlan, 0)
+            )
             if message.role == "user":
                 self._auto["seen"] += 1
                 self._context_entry(message.lanlan)["turns"] += 1
@@ -660,44 +740,255 @@ class LoveWithYouPlugin(NekoPluginBase):
                 # A real chat message is the best activity signal decay can get.
                 if record is not None and engine.mark_active(record):
                     self._try_save_locked()
-            auto = bool(self._state["settings"].get("auto_score"))
-        exchange = self._tracker.feed(message)
-        if exchange is not None and auto:
-            self._enqueue(exchange)
+                stage_change = self._handle_proactive_response_locked(message)
+            elif message.role == "reply":
+                self._note_intervening_reply_locked(message)
+            exchange = self._tracker.feed(message)
+            if exchange is not None:
+                self._enqueue(exchange)
+        if stage_change:
+            self._notify_stage_change(stage_change[0], stage_change[1], stage_change[2])
+
+    def _on_proactive_reply_locked(self, message: conv.Message) -> None:
+        """Mark that the host delivered a proactive reply for this character."""
+        if not self._state["settings"].get(_PROACTIVE_CONFESSION_SETTING):
+            return
+        scope = engine.scope_key_for(self._state, message.lanlan)
+        record = engine.get_record(self._state, scope, create=False)
+        if record is None:
+            return
+        state = engine.proactive_confession_state(record)
+        if self._expire_proactive_locked(state, time.time()):
+            self._try_save_locked()
+        if state["status"] != "waiting" or state["target"] != message.lanlan:
+            return
+        if state["reply_seen"]:
+            self._note_intervening_reply_locked(message)
+            return
+        if (
+            message.ts <= state["waiting_since"] or message.truncated
+            or not scoring.confession_proposal(message.content)
+        ):
+            return
+        state["reply_seen"] = True
+        state["reply_at"] = message.ts
+        self._tracker.reset(message.lanlan)
+        self._try_save_locked()
+
+    def _note_intervening_reply_locked(self, message: conv.Message) -> None:
+        """Another character turn can make a later standalone yes ambiguous."""
+        scope = engine.scope_key_for(self._state, message.lanlan)
+        record = engine.get_record(self._state, scope, create=False)
+        if record is None:
+            return
+        state = engine.proactive_confession_state(record)
+        if (
+            state["status"] == "waiting" and state["target"] == message.lanlan
+            and state["reply_seen"] and message.ts > state["reply_at"] and not state["answer_turns"]
+        ):
+            state["answer_turns"] = 1
+            self._try_save_locked()
+
+    def _handle_proactive_response_locked(self, message: conv.Message) -> tuple[str, str, str] | None:
+        """Apply an explicit answer to a delivered proactive confession."""
+        if not self._state["settings"].get(_PROACTIVE_CONFESSION_SETTING):
+            return None
+        scope = engine.scope_key_for(self._state, message.lanlan)
+        record = engine.get_record(self._state, scope, create=False)
+        if record is None:
+            return None
+        state = engine.proactive_confession_state(record)
+        if self._expire_proactive_locked(state, time.time()):
+            self._try_save_locked()
+        if (
+            state["status"] != "waiting" or state["target"] != message.lanlan
+            or not state["reply_seen"] or message.ts <= state["reply_at"]
+        ):
+            return None
+        decision = None if message.truncated else scoring.proactive_response(
+            message.content, require_relationship=state["answer_turns"] > 0
+        )
+        state["answer_turns"] = min(100, state["answer_turns"] + 1)
+        if decision is None:
+            self._try_save_locked()
+            return None
+        now = time.time()
+        if decision == "refuse":
+            state.update(
+                status="declined",
+                waiting_since=None,
+                reply_seen=False,
+                cooldown_until=now + engine.PROACTIVE_CONFESSION_COOLDOWN_SECONDS,
+            )
+            self._try_save_locked()
+            self.logger.info("与你相恋: proactive confession declined scope={}", scope)
+            return None
+        if not self._gate() or not engine.awaiting_confession(record, True):
+            state.update(status="idle", waiting_since=None, reply_seen=False)
+            self._try_save_locked()
+            return None
+        try:
+            outcome = engine.confess(record, "猫娘主动告白后，对方明确答应了")
+        except engine.EngineError:
+            return None
+        state.update(status="accepted", waiting_since=None, reply_seen=False)
+        engine.mark_active(record)
+        self._try_save_locked()
+        self.logger.info("与你相恋: proactive confession accepted scope={}", scope)
+        if outcome["stage_changed"]:
+            return scope, outcome["previous_stage"], outcome["stage"]
+        return None
+
+    def _maybe_trigger_proactive_confession(self, job: _ScoreJob, verdict: scoring.Verdict) -> None:
+        """Ask the character to confess once the opt-in conditions are met."""
+        now = time.time()
+        with self._lock:
+            if (
+                not self._score_current_locked(job) or verdict.delta < 0
+                or not self._state["settings"].get(_PROACTIVE_CONFESSION_SETTING)
+            ):
+                return
+            character, scope = job.exchange.lanlan, job.scope
+            if self._latest_message_ts.get(character, job.exchange.ts) > job.exchange.ts:
+                return  # a newer user message/reply arrived while the judge was working
+            record = engine.get_record(self._state, scope, create=False)
+            if (
+                record is None or record["stage"] != "ambiguous"
+                or not engine.awaiting_confession(record, self._gate())
+            ):
+                return
+            state = engine.proactive_confession_state(record)
+            if self._expire_proactive_locked(state, now):
+                self._try_save_locked()
+            if state["status"] == "waiting" or state["status"] == "accepted":
+                return
+            if state["attempts"] >= engine.PROACTIVE_CONFESSION_MAX_ATTEMPTS:
+                return
+            if float(state.get("cooldown_until") or 0.0) > now:
+                return
+            state.update(
+                status="waiting",
+                attempts=state["attempts"] + 1,
+                last_attempt_at=now,
+                waiting_since=now,
+                reply_seen=False,
+                reply_at=None,
+                answer_turns=0,
+                target=character,
+                cooldown_until=now + engine.PROACTIVE_CONFESSION_TIMEOUT_COOLDOWN_SECONDS,
+            )
+            self._save_locked()
+            # SDK submission is synchronous and only enqueues a local payload.
+            # Keep the lock through it so a setting edit cannot race the send.
+            try:
+                receipt = self.push_message(
+                    source=self.plugin_id,
+                    visibility=[],
+                    ai_behavior="respond",
+                    parts=[{"type": "text", "text": prompts.proactive_confession_prompt()}],
+                    target_lanlan=character,
+                    coalesce_key=f"{self.plugin_id}:confession:{character}",
+                    metadata={"event_type": "proactive_confession"},
+                )
+                if isinstance(receipt, dict) and receipt.get("submitted") is False:
+                    raise RuntimeError("submission_rejected")
+            except Exception as exc:
+                state.update(status="idle", waiting_since=None, reply_seen=False)
+                self._try_save_locked()
+                self.logger.warning("与你相恋: proactive confession to {} failed: {}", character, type(exc).__name__)
+                return
+        self.logger.info("与你相恋: proactive confession requested character={} attempt={}", character, state["attempts"])
 
     # ------------------------------------------------------------ scoring worker
 
-    def _enqueue(self, exchange: conv.Exchange) -> None:
-        while True:
+    def _score_current_locked(self, job: _ScoreJob) -> bool:
+        return (
+            self._ready
+            and not self._stopping.is_set()
+            and bool(self._state["settings"].get("auto_score"))
+            and job.generation == self._score_generation
+            and job.revision == self._score_revisions.get(job.scope, 0)
+            and job.scope == engine.scope_key_for(self._state, job.exchange.lanlan)
+        )
+
+    def _invalidate_scoring_locked(self, scope: str | None = None) -> None:
+        """Invalidate queued/in-flight results. Caller holds the state lock."""
+        if scope is None:
+            self._score_generation += 1
+            self._score_revisions.clear()
+        else:
+            self._score_revisions[scope] = self._score_revisions.get(scope, 0) + 1
+        character = (
+            scope[len(engine.CHAR_SCOPE_PREFIX):] if scope and scope.startswith(engine.CHAR_SCOPE_PREFIX) else None
+        )
+        self._tracker.reset(character)
+        # Cancellation saves time; the revision check is still authoritative
+        # when a model client finishes despite cancellation.
+        task, loop, job = self._score_task, self._worker_loop, self._score_job
+        if task is not None and loop is not None and job is not None and (scope is None or job.scope == scope):
             try:
-                self._jobs.put_nowait(exchange)
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass  # the worker already closed this loop
+
+    def _enqueue(self, exchange: conv.Exchange) -> None:
+        with self._lock:
+            if not self._ready or self._stopping.is_set() or not self._state["settings"].get("auto_score"):
                 return
-            except queue.Full:
+            scope = engine.scope_key_for(self._state, exchange.lanlan)
+            job = _ScoreJob(exchange, scope, self._score_generation, self._score_revisions.get(scope, 0))
+            while True:
                 try:
-                    self._jobs.get_nowait()  # drop the oldest; the newest matters more
-                except queue.Empty:
-                    pass
+                    self._jobs.put_nowait(job)
+                    return
+                except queue.Full:
+                    try:
+                        self._jobs.get_nowait()  # drop the oldest; the newest matters more
+                    except queue.Empty:
+                        pass
 
     def _start_worker(self) -> None:
-        if self._worker is not None and self._worker.is_alive():
-            return
-        self._stopping.clear()
-        self._worker = threading.Thread(target=self._worker_main, name="love_with_you-score", daemon=True)
-        self._worker.start()
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                if self._stopping.is_set():
+                    raise SdkError("scoring_worker_still_stopping")
+                return
+            if self._stopping.is_set():
+                while True:
+                    try:
+                        self._jobs.get_nowait()
+                    except queue.Empty:
+                        break
+            self._stopping.clear()
+            self._worker = threading.Thread(target=self._worker_main, name="love_with_you-score", daemon=True)
+            self._worker.start()
 
-    def _stop_worker(self) -> None:
-        self._stopping.set()
-        try:
+    def _stop_worker(self) -> bool:
+        with self._lock:
+            self._ready = False
+            self._stopping.set()
+            self._invalidate_scoring_locked()
+            while True:
+                try:
+                    self._jobs.get_nowait()
+                except queue.Empty:
+                    break
             self._jobs.put_nowait(None)
-        except queue.Full:
-            pass
-        worker = self._worker
+            worker = self._worker
         if worker is not None:
-            worker.join(timeout=5.0)
-        self._worker = None
+            worker.join(timeout=_SCORE_STOP_SECONDS)
+            if worker.is_alive():
+                self.logger.warning("与你相恋: scoring worker is still stopping")
+                return False
+        with self._lock:
+            if self._worker is worker:
+                self._worker = None
+        return True
 
     def _worker_main(self) -> None:
         loop = asyncio.new_event_loop()
+        with self._lock:
+            self._worker_loop = loop
         try:
             while not self._stopping.is_set():
                 try:
@@ -706,10 +997,24 @@ class LoveWithYouPlugin(NekoPluginBase):
                     continue
                 if job is None:
                     break
+                with self._lock:
+                    if not self._score_current_locked(job):
+                        continue
+                    task = loop.create_task(self._score(job))
+                    self._score_task = task
+                    self._score_job = job
                 try:
-                    loop.run_until_complete(self._score(job))
+                    loop.run_until_complete(task)
+                except asyncio.CancelledError:
+                    pass
                 except Exception as exc:  # one bad exchange must not stop scoring
-                    self._note_score_failure(f"crash_{type(exc).__name__}")
+                    with self._lock:
+                        if self._score_current_locked(job):
+                            self._note_score_failure(f"crash_{type(exc).__name__}")
+                finally:
+                    with self._lock:
+                        self._score_task = None
+                        self._score_job = None
         finally:
             # The SDK keeps one gateway client per event loop; release ours.
             try:
@@ -717,22 +1022,29 @@ class LoveWithYouPlugin(NekoPluginBase):
                 if callable(closer):
                     pending = closer()
                     if inspect.isawaitable(pending):
-                        loop.run_until_complete(pending)
+                        loop.run_until_complete(asyncio.wait_for(pending, timeout=_SCORE_CLOSE_SECONDS))
             except Exception:
                 pass
             loop.close()
+            with self._lock:
+                self._worker_loop = None
 
     async def _model_complete(self, prompt: str) -> tuple[str | None, str]:
         return await judge.complete(self.ctx.models, prompt)
 
-    async def _score(self, exchange: conv.Exchange) -> None:
+    async def _score(self, job: _ScoreJob) -> None:
         with self._lock:
-            if not self._state["settings"].get("auto_score"):
+            if not self._score_current_locked(job):
                 return
-            scope = engine.scope_key_for(self._state, exchange.lanlan)
-            record = engine.get_record(self._state, scope) or engine.new_record()
+            exchange = job.exchange
+            record = engine.get_record(self._state, job.scope) or engine.new_record()
             stage = engine.record_stage(record, int(record.get("affection", 0)))
             waiting = engine.awaiting_confession(record, self._gate())
+            if exchange.truncated:
+                waiting = False
+            proactive = record.get("proactive_confession", {})
+            if proactive.get("status") in {"waiting", "declined"} and not scoring.confession_proposal(exchange.user):
+                waiting = False  # proactive consent is handled only by the explicit response path
             prompt = scoring.build_prompt(
                 character=exchange.lanlan,
                 stage_name=prompts.stage_name(stage),
@@ -745,32 +1057,44 @@ class LoveWithYouPlugin(NekoPluginBase):
             )
         verdict: scoring.Verdict | None = None
         status = judge.UNBOUND
-        if time.monotonic() >= self._model_retry_at:
+        model_attempted = time.monotonic() >= self._model_retry_at
+        if model_attempted:
             text, status = await self._complete(prompt)
             verdict = scoring.parse_verdict(text) if text else None
             if text and verdict is None:
                 status = "unparsable_reply"
-            if status in (judge.UNBOUND, judge.UNAVAILABLE):
-                # Binding changes are rare; re-check once a minute, not every turn.
-                self._model_retry_at = time.monotonic() + _MODEL_RECHECK_SECONDS
-            elif verdict is None:
-                self._note_score_failure(status)
         mode = "model" if verdict is not None else "rules"
         if verdict is None:
-            verdict = scoring.rule_verdict(exchange.user, exchange.reply, awaiting_confession=waiting)
-        with self._lock:
-            self._auto["mode"] = mode
-            self._auto["model_status"] = "ok" if mode == "model" else status
-        self._apply_verdict(scope, verdict, mode)
+            verdict = scoring.rule_verdict(
+                exchange.user, exchange.reply, previous_user=exchange.previous_user,
+                previous_reply=exchange.previous_reply, awaiting_confession=waiting,
+            )
+        else:
+            verdict = scoring.guard_verdict(
+                verdict, user=exchange.user, reply=exchange.reply, previous_user=exchange.previous_user,
+                previous_reply=exchange.previous_reply, awaiting_confession=waiting,
+            )
+        self._apply_verdict(job, verdict, mode, status, model_attempted=model_attempted)
 
-    def _apply_verdict(self, scope: str, verdict: scoring.Verdict, mode: str = "model") -> None:
+    def _apply_verdict(
+        self, job: _ScoreJob, verdict: scoring.Verdict, mode: str, status: str, *, model_attempted: bool
+    ) -> None:
         changes: list[tuple[str, str]] = []
         result: dict[str, Any] | None = None
         confessed = False
         with self._lock:
+            if not self._score_current_locked(job):
+                return
+            scope = job.scope
             record = engine.get_record(self._state, scope)
             if record is None:
                 return
+            self._auto["mode"] = mode
+            self._auto["model_status"] = "ok" if mode == "model" else status
+            if model_attempted and status in (judge.UNBOUND, judge.UNAVAILABLE):
+                self._model_retry_at = time.monotonic() + _MODEL_RECHECK_SECONDS
+            elif model_attempted and mode == "rules":
+                self._note_score_failure(status)
             gate = self._gate()
             if verdict.delta:
                 result = engine.apply_model_delta(
@@ -778,7 +1102,18 @@ class LoveWithYouPlugin(NekoPluginBase):
                 )
                 if result["stage_changed"]:
                     changes.append((result["previous_stage"], result["stage"]))
-            if verdict.confession and engine.awaiting_confession(record, gate):
+            # A pending proactive proposal is confirmed only by the direct,
+            # role-matched response handler. A stale/other character's score
+            # result cannot shortcut that decision via model JSON.
+            proactive = record.get("proactive_confession", {})
+            consent_for_pending = (
+                proactive.get("status") in {"waiting", "declined"}
+                and not scoring.confession_proposal(job.exchange.user)
+            )
+            if (
+                verdict.confession and not job.exchange.truncated
+                and not consent_for_pending and engine.awaiting_confession(record, gate)
+            ):
                 try:
                     outcome = engine.confess(record, verdict.reason)
                 except engine.EngineError:
@@ -794,6 +1129,8 @@ class LoveWithYouPlugin(NekoPluginBase):
                 self._auto["last_error"] = ""
             if (result and result["applied"]) or confessed:
                 self._try_save_locked()
+            if changes:
+                self._notify_stage_change(scope, changes[0][0], changes[-1][1])
         self.logger.info(
             "与你相恋: auto score mode={} scope={} requested={} applied={} value={} limited_by={} confession={} reason={}",
             mode,
@@ -805,8 +1142,10 @@ class LoveWithYouPlugin(NekoPluginBase):
             confessed,
             verdict.reason,
         )
-        if changes:
-            self._notify_stage_change(scope, changes[0][0], changes[-1][1])
+        # Trigger only after this exchange has been fully scored.  This keeps
+        # the proactive flow quiet during idle timer ticks and prevents a
+        # second confession from being queued while one is awaiting an answer.
+        self._maybe_trigger_proactive_confession(job, verdict)
 
     def _note_score_failure(self, reason: str) -> None:
         with self._lock:
@@ -956,6 +1295,8 @@ class LoveWithYouPlugin(NekoPluginBase):
             except engine.EngineError as exc:
                 return Err(SdkError(exc.code))
             if result["changed"]:
+                self._invalidate_scoring_locked()
+                self._cancel_proactive_locked()
                 # The switch itself counts as activity, so decay never bites a
                 # record that was frozen while its mode was off.
                 for _scope, record in engine.active_records(self._state):
@@ -1007,6 +1348,8 @@ class LoveWithYouPlugin(NekoPluginBase):
             with self._lock:
                 record = self._scope_record_locked(scope)
                 result = engine.set_affection(record, value, source=source, gate=self._gate())
+                self._invalidate_scoring_locked(str(scope))
+                self._cancel_proactive_locked(str(scope))
                 self._save_locked()
         except engine.EngineError as exc:
             return Err(SdkError(exc.code))
@@ -1116,30 +1459,49 @@ class LoveWithYouPlugin(NekoPluginBase):
     @plugin_entry(
         id="set_settings",
         name=tr("entries.setSettings.name", default="修改设置"),
-        description=tr("entries.setSettings.description", default="开关告白门槛、好感随时间变淡和自动判断好感。"),
+        description=tr(
+            "entries.setSettings.description", default="开关告白门槛、主动告白、好感随时间变淡和自动判断好感。"
+        ),
         input_schema={
             "type": "object",
             "properties": {
                 "require_confession": {"type": "boolean"},
                 "decay": {"type": "boolean"},
                 "auto_score": {"type": "boolean"},
+                "proactive_confession": {"type": "boolean"},
             },
         },
     )
-    async def set_settings(self, require_confession: Any = None, decay: Any = None, auto_score: Any = None, **_: Any):
+    async def set_settings(
+        self,
+        require_confession: Any = None,
+        decay: Any = None,
+        auto_score: Any = None,
+        proactive_confession: Any = None,
+        **_: Any,
+    ):
         changes = {
             key: value
             for key, value in (
                 ("require_confession", require_confession),
                 ("decay", decay),
                 ("auto_score", auto_score),
+                ("proactive_confession", proactive_confession),
             )
             if value is not None
         }
         notices: list[dict[str, str]] = []
         try:
             with self._lock:
+                before = dict(self._state["settings"])
                 result = engine.update_settings(self._state, changes)
+                if any(before.get(key, False) != result["settings"].get(key, False) for key in ("auto_score", "require_confession")):
+                    self._invalidate_scoring_locked()
+                    self._cancel_proactive_locked()
+                if before.get(_PROACTIVE_CONFESSION_SETTING, False) and not result["settings"].get(
+                    _PROACTIVE_CONFESSION_SETTING, False
+                ):
+                    self._cancel_proactive_locked()
                 active = {scope for scope, _record in engine.active_records(self._state)}
                 notices = [change for change in result["stage_changes"] if change["scope"] in active]
                 self._save_locked()

@@ -37,6 +37,9 @@ async def complete(models: Any, prompt: str) -> tuple[str | None, str]:
         response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=USAGE,
+                # Keep one user message for compatibility with host model
+                # adapters; build_prompt embeds the same guardrails alongside
+                # the JSON-delimited dialogue data.
                 messages=[{"role": "user", "content": prompt}],
                 max_completion_tokens=MAX_TOKENS,
                 temperature=0.2,

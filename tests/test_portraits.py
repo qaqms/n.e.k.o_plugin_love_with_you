@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
-from conftest import PLUGIN_ROOT, _load
 
-
-@pytest.fixture
-def portraits():
-    return _load("_portraits")
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 def make_library(tmp_path, portraits, storage, count=3):

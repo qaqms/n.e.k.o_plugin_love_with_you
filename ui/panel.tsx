@@ -79,7 +79,7 @@ type Dashboard = {
     title_chars?: number
     anniversaries?: number
   }
-  settings?: { require_confession: boolean; decay: boolean; auto_score?: boolean }
+  settings?: { require_confession: boolean; decay: boolean; auto_score?: boolean; proactive_confession?: boolean }
   decay_rules?: { grace_days: number; per_day: number }
   auto_status?: {
     bus_ok: boolean | null
@@ -683,7 +683,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     if (ok) await run("set_per_character", { enabled: next }, t("toast.saved", { defaultValue: "已保存" }))
   }
 
-  async function toggleSetting(key: "require_confession" | "decay" | "auto_score", next: boolean) {
+  async function toggleSetting(key: "require_confession" | "decay" | "auto_score" | "proactive_confession", next: boolean) {
     const rules = state.decay_rules || { grace_days: 3, per_day: 1 }
     if (key === "decay" && next) {
       const ok = await confirm({
@@ -781,7 +781,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   const hasArt = portraitMode !== "off" && Boolean(art)
   const percent = scope ? Math.max(0, Math.min(100, scope.affection)) : 0
-  const settings = state.settings || { require_confession: true, decay: false, auto_score: true }
+  const settings = state.settings || { require_confession: true, decay: false, auto_score: true, proactive_confession: false }
   const decayRules = state.decay_rules || { grace_days: 3, per_day: 1 }
   const autoStatus = state.auto_status
   function autoStatusText(): string {
@@ -1241,6 +1241,19 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             />
             <p className="lwy-note">
               {t("rules.confessionNote", { defaultValue: "好感到 80 后先停在「暧昧」，等你们在聊天里真的告白、彼此答应，才成为恋人。已经是恋人的不受影响。" })}
+            </p>
+          </div>
+          <div className="lwy-rule">
+            <Switch
+              checked={Boolean(settings.proactive_confession)}
+              disabled={busy || !settings.require_confession || settings.auto_score === false}
+              label={t("rules.proactiveConfession", { defaultValue: "允许猫娘主动告白" })}
+              onChange={(value: boolean) => toggleSetting("proactive_confession", value)}
+            />
+            <p className="lwy-note">
+              {t("rules.proactiveConfessionNote", {
+                defaultValue: "需开启自动判断好感和告白门槛。好感达到 80 后，猫娘可在正常聊天后主动告白，等你明确答应；拒绝或犹豫后冷却 24 小时，30 分钟未确认则冷却 6 小时，每份关系最多尝试 3 次。默认关闭。",
+              })}
             </p>
           </div>
           <div className="lwy-rule">

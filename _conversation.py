@@ -6,17 +6,22 @@ character's reply, each tagged with the character name. This module turns
 those records into messages, drops ones already seen, and pairs each user
 message with the reply that follows it, per character.
 
-Proactive turns (``proactive_*``) are ignored: nothing the user said caused
-them, so they are not something to score.
+Proactive turns (``proactive_*``) are kept separate from ordinary exchanges:
+nothing the user said caused them, so they are not something to score.  The
+plugin uses ``proactive_reply`` to confirm that a proactive prompt actually
+reached the character before interpreting a following user message as its
+answer.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
 USER_TURN = "user_message"
 REPLY_TURN = "assistant_message"
+PROACTIVE_REPLY_TURN = "proactive_reply"
 
 # Text kept per message when building a scoring prompt.
 MESSAGE_MAX_CHARS = 300
@@ -29,9 +34,10 @@ SEEN_LIMIT = 256
 @dataclass(frozen=True)
 class Message:
     ts: float
-    role: str  # "user" | "reply"
+    role: str  # "user" | "reply" | "proactive_reply"
     lanlan: str
     content: str
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,7 @@ class Exchange:
     previous_user: str
     previous_reply: str
     ts: float
+    truncated: bool = False
 
 
 def _field(record: Any, name: str) -> Any:
@@ -83,7 +90,41 @@ def parse_record(record: Any) -> Message | None:
         ts = metadata.get("ts")
     if not isinstance(ts, (int, float)) or isinstance(ts, bool):
         return None
-    return Message(ts=float(ts), role=role, lanlan=lanlan.strip(), content=_clip(content))
+    if not math.isfinite(ts):
+        return None
+    normalized = " ".join(content.split())
+    return Message(
+        ts=float(ts), role=role, lanlan=lanlan.strip(), content=_clip(content),
+        truncated=len(normalized) > MESSAGE_MAX_CHARS,
+    )
+
+
+def parse_proactive_record(record: Any) -> Message | None:
+    """Parse a proactive reply without making it part of a scored exchange."""
+    metadata = _as_dict(_field(record, "metadata"))
+    raw = _as_dict(_field(record, "raw"))
+    raw_meta = _as_dict(raw.get("metadata"))
+    turn_type = _field(record, "turn_type") or metadata.get("turn_type") or raw_meta.get("turn_type")
+    # The prompt itself can carry event_type=proactive_confession. Only a
+    # generated reply confirms delivery, never an instruction bus record.
+    if turn_type != PROACTIVE_REPLY_TURN:
+        return None
+    lanlan = _field(record, "lanlan_name") or metadata.get("lanlan_name") or raw_meta.get("lanlan_name")
+    content = _field(record, "content") or raw.get("content")
+    if not isinstance(lanlan, str) or not lanlan.strip() or not isinstance(content, str) or not content.strip():
+        return None
+    ts = _field(record, "timestamp")
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        ts = metadata.get("ts")
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        return None
+    if not math.isfinite(ts):
+        return None
+    normalized = " ".join(content.split())
+    return Message(
+        ts=float(ts), role=PROACTIVE_REPLY_TURN, lanlan=lanlan.strip(), content=_clip(content),
+        truncated=len(normalized) > MESSAGE_MAX_CHARS,
+    )
 
 
 class BusCursor:
@@ -113,21 +154,43 @@ class ExchangeTracker:
     """Pairs user messages with the next reply, per character."""
 
     def __init__(self) -> None:
-        self._pending: dict[str, list[str]] = {}
-        self._last: dict[str, tuple[str, str]] = {}
+        self._pending: dict[str, list[Message]] = {}
+        self._pending_truncated: set[str] = set()
+        self._last: dict[str, tuple[str, str, bool]] = {}
+
+    def reset(self, lanlan: str | None = None) -> None:
+        """Forget exchanges across a relationship reset or scoring-mode change."""
+        if lanlan is None:
+            self._pending.clear()
+            self._pending_truncated.clear()
+            self._last.clear()
+        else:
+            self._pending.pop(lanlan, None)
+            self._pending_truncated.discard(lanlan)
+            self._last.pop(lanlan, None)
 
     def feed(self, message: Message) -> Exchange | None:
         if message.role == "user":
             pending = self._pending.setdefault(message.lanlan, [])
-            pending.append(message.content)
+            pending.append(message)
+            if len(pending) > PENDING_MAX_MESSAGES:
+                self._pending_truncated.add(message.lanlan)
             del pending[:-PENDING_MAX_MESSAGES]
+            return None
+        if message.role != "reply":
             return None
         pending = self._pending.pop(message.lanlan, None)
         if not pending:
             return None  # a reply nobody asked for in this window (e.g. a greeting)
-        user = _clip(" / ".join(pending))
-        previous_user, previous_reply = self._last.get(message.lanlan, ("", ""))
-        self._last[message.lanlan] = (user, message.content)
+        joined = " / ".join(item.content for item in pending)
+        truncated = (
+            message.truncated or any(item.truncated for item in pending)
+            or len(joined) > MESSAGE_MAX_CHARS or message.lanlan in self._pending_truncated
+        )
+        self._pending_truncated.discard(message.lanlan)
+        user = _clip(joined)
+        previous_user, previous_reply, previous_truncated = self._last.get(message.lanlan, ("", "", False))
+        self._last[message.lanlan] = (user, message.content, truncated)
         return Exchange(
             lanlan=message.lanlan,
             user=user,
@@ -135,4 +198,5 @@ class ExchangeTracker:
             previous_user=previous_user,
             previous_reply=previous_reply,
             ts=message.ts,
+            truncated=truncated or previous_truncated,
         )

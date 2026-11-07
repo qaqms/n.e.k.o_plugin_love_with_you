@@ -94,6 +94,36 @@ def test_tracker_never_pairs_a_user_message_with_proactive_speech(conv):
     assert exchange is not None and exchange.user == "你好"
 
 
+def test_arrival_cursor_and_spoken_chronology_remain_separate(conv):
+    raw = _rec("assistant_message", "YUI", "较早开始的回复", DAY + 5, nested=True)
+    raw["metadata"]["ts"] = DAY + 1
+    reply = conv.parse_record(raw)
+    assert reply.ts == DAY + 5 and reply.said_at == DAY + 1
+    cursor = conv.BusCursor(DAY + 3)
+    assert cursor.fresh([reply]) == [reply]
+    assert cursor.since == DAY + 5
+    assert cursor.fresh([reply]) == []
+
+
+def test_tracker_leaves_newer_user_for_its_own_reply(conv):
+    tracker = conv.ExchangeTracker()
+    tracker.feed(conv.Message(100, "user", "YUI", "帮我找书", spoken_at=100))
+    tracker.feed(conv.Message(102, "user", "YUI", "和我在一起吧", spoken_at=102))
+    old = tracker.feed(conv.Message(103, "reply", "YUI", "我愿意", spoken_at=101))
+    assert old.user == "帮我找书"
+    new = tracker.feed(conv.Message(104, "reply", "YUI", "我还没准备好", spoken_at=103.5))
+    assert new.user == "和我在一起吧"
+    assert new.previous_user == old.user and new.previous_reply == old.reply
+
+
+def test_reply_older_than_all_pending_users_does_not_consume_them(conv):
+    tracker = conv.ExchangeTracker()
+    tracker.feed(conv.Message(102, "user", "YUI", "新问题", spoken_at=102))
+    assert tracker.feed(conv.Message(103, "reply", "YUI", "旧回答", spoken_at=101)) is None
+    current = tracker.feed(conv.Message(104, "reply", "YUI", "新回答", spoken_at=103.5))
+    assert current.user == "新问题" and current.previous_user == ""
+
+
 # ------------------------------------------------------------ scoring
 
 

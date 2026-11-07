@@ -84,6 +84,7 @@ PROACTIVE_CONFESSION_MAX_ATTEMPTS = 3
 PROACTIVE_CONFESSION_WAIT_SECONDS = 30 * 60
 PROACTIVE_CONFESSION_COOLDOWN_SECONDS = 24 * 60 * 60
 PROACTIVE_CONFESSION_TIMEOUT_COOLDOWN_SECONDS = 6 * 60 * 60
+PROACTIVE_CONFESSION_UNDELIVERED_COOLDOWN_SECONDS = 60
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -194,7 +195,7 @@ def proactive_confession_state(record: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
     status = raw.get("status")
-    if not isinstance(status, str) or status not in {"idle", "waiting", "declined", "accepted"}:
+    if not isinstance(status, str) or status not in {"idle", "dispatching", "waiting", "declined", "accepted"}:
         status = "idle"
     attempts = raw.get("attempts")
     if isinstance(attempts, bool) or not isinstance(attempts, int):
@@ -217,10 +218,11 @@ def proactive_confession_state(record: dict[str, Any]) -> dict[str, Any]:
         "cooldown_until": timestamp("cooldown_until") or 0.0,
         "reply_at": timestamp("reply_at"),
         "reply_seen": raw.get("reply_seen") is True and timestamp("reply_at") is not None,
+        "delivery_seen": raw.get("delivery_seen") is True,
         "answer_turns": max(0, min(100, raw["answer_turns"]))
         if type(raw.get("answer_turns")) is int else 0,
     }
-    if status == "waiting" and (not target or values["waiting_since"] is None):
+    if status in {"dispatching", "waiting"} and (not target or values["waiting_since"] is None):
         values.update(status="idle", reply_seen=False, reply_at=None)
     record["proactive_confession"] = values
     return values
@@ -281,6 +283,7 @@ def new_record(affection: int = 0, now: float | None = None) -> dict[str, Any]:
             "cooldown_until": 0.0,
             "reply_seen": False,
             "reply_at": None,
+            "delivery_seen": False,
             "answer_turns": 0,
         },
         # date -> value at the end of that day, for the trend chart.
@@ -634,7 +637,13 @@ def confess(record: dict[str, Any], moment: Any = "", now: float | None = None) 
     record["confession"] = clean_text(moment, CONFESSION_MOMENT_MAX_CHARS)
     proactive = record.get("proactive_confession")
     if isinstance(proactive, dict) and proactive.get("attempts", 0):
-        proactive.update(status="accepted", waiting_since=None, reply_seen=False, reply_at=None)
+        proactive.update(
+            status="accepted",
+            waiting_since=None,
+            reply_seen=False,
+            reply_at=None,
+            delivery_seen=False,
+        )
     new_stage = resolve_stage(previous_stage, affection)
     _settle(record, previous_stage, new_stage, ts)
     record["updated_at"] = ts

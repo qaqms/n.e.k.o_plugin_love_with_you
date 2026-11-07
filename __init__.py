@@ -28,6 +28,7 @@ import queue
 import threading
 import time
 from collections.abc import Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -46,6 +47,7 @@ from plugin.sdk.plugin import (
     ui,
 )
 
+from . import _appearance as appearance
 from . import _calendar as cal
 from . import _conversation as conv
 from . import _engine as engine
@@ -144,11 +146,14 @@ class LoveWithYouPlugin(NekoPluginBase):
         # image path -> (version, data URL); insertion-ordered for eviction
         self._art_cache: dict[str, tuple[str, str]] = {}
         self._portraits: portraits.PortraitLibrary | None = None
+        self._appearance: appearance.AppearancePrefs | None = None
         self._last_decay_day: str | None = None
         # Conversation bus -> exchanges -> scoring worker.
         self._cursor: conv.BusCursor | None = None
         self._tracker = conv.ExchangeTracker()
         self._latest_message_ts: dict[str, float] = {}
+        # Dialogue text stays in memory, never in the persisted relationship.
+        self._pending_answers: dict[str, list[conv.Message]] = {}
         self._jobs: queue.Queue[_ScoreJob | None] = queue.Queue(maxsize=_SCORE_QUEUE_MAX)
         self._score_generation = 0
         self._score_revisions: dict[str, int] = {}
@@ -197,9 +202,22 @@ class LoveWithYouPlugin(NekoPluginBase):
         )
         if self._portraits.warning:
             self.logger.warning("与你相恋: {}", self._portraits.warning)
+        self._appearance = await asyncio.to_thread(
+            appearance.AppearancePrefs, StateFile(self.data_path("appearance.json")),
+        )
+        if self._appearance.warning:
+            self.logger.warning("与你相恋: {}", self._appearance.warning)
         with self._lock:
             self._state = engine.normalize_state(raw)
             self._invalidate_scoring_locked()
+            recovered = False
+            recovery_now = time.time()
+            for _scope, record in engine.iter_records(self._state):
+                state = engine.proactive_confession_state(record)
+                if state["status"] == "dispatching":
+                    recovered = self._expire_proactive_locked(state, recovery_now) or recovered
+            if recovered or raw != self._state:
+                self._try_save_locked()
             self._ready = True
         # Only messages from now on are scored; history was never scored live.
         self._cursor = conv.BusCursor(time.time())
@@ -235,6 +253,16 @@ class LoveWithYouPlugin(NekoPluginBase):
         return Ok({"tools": len(self._registered)})
 
     # ------------------------------------------------------------ state helpers
+
+    @contextmanager
+    def _state_transaction_locked(self):
+        """Roll back a failed edit before any later operation can persist it."""
+        before = copy.deepcopy(self._state)
+        try:
+            yield
+        except BaseException:
+            self._state = before
+            raise
 
     def _save_locked(self) -> None:
         """Persist the current state. Caller holds ``self._lock``."""
@@ -281,25 +309,53 @@ class LoveWithYouPlugin(NekoPluginBase):
         with self._lock:
             if not self._state["settings"].get(_PROACTIVE_CONFESSION_SETTING):
                 return
-            for _scope, record in engine.active_records(self._state):
+            for scope, record in engine.active_records(self._state):
                 state = engine.proactive_confession_state(record)
-                changed = self._expire_proactive_locked(state, now) or changed
+                if self._expire_proactive_locked(state, now):
+                    self._pending_answers.pop(scope, None)
+                    changed = True
             if changed:
                 self._try_save_locked()
 
     @staticmethod
     def _expire_proactive_locked(state: dict[str, Any], now: float) -> bool:
+        if state["status"] == "dispatching":
+            # A crash can leave the durable state between the pre-send save
+            # and the SDK call. The queue has no delivery receipt, so treat
+            # that attempt as undelivered and allow a later retry.
+            state.update(
+                status="idle",
+                attempts=max(0, int(state.get("attempts") or 0) - 1),
+                waiting_since=None,
+                reply_seen=False,
+                reply_at=None,
+                delivery_seen=False,
+                cooldown_until=now + engine.PROACTIVE_CONFESSION_UNDELIVERED_COOLDOWN_SECONDS,
+            )
+            return True
         waiting_since = state.get("waiting_since")
         if state["status"] != "waiting" or waiting_since is None:
             return False
         if now - waiting_since < engine.PROACTIVE_CONFESSION_WAIT_SECONDS:
             return False
+        delivered = bool(state.get("delivery_seen"))
+        attempts = int(state.get("attempts") or 0)
+        if not delivered:
+            # ``push_message(submitted=True)`` only means that the local
+            # queue accepted the payload. If no proactive reply reached the
+            # conversation bus, do not spend one of the three real attempts.
+            attempts = max(0, attempts - 1)
         state.update(
-            status="idle", waiting_since=None, reply_seen=False, reply_at=None,
-            cooldown_until=max(
-                float(state.get("cooldown_until") or 0),
-                waiting_since + engine.PROACTIVE_CONFESSION_WAIT_SECONDS
-                + engine.PROACTIVE_CONFESSION_TIMEOUT_COOLDOWN_SECONDS,
+            status="idle",
+            attempts=attempts,
+            waiting_since=None,
+            reply_seen=False,
+            reply_at=None,
+            delivery_seen=False,
+            cooldown_until=now + (
+                engine.PROACTIVE_CONFESSION_TIMEOUT_COOLDOWN_SECONDS
+                if delivered
+                else engine.PROACTIVE_CONFESSION_UNDELIVERED_COOLDOWN_SECONDS
             ),
         )
         return True
@@ -311,7 +367,13 @@ class LoveWithYouPlugin(NekoPluginBase):
                 continue
             state = engine.proactive_confession_state(record)
             if state["status"] == "waiting":
-                state.update(status="idle", waiting_since=None, reply_seen=False, reply_at=None)
+                state.update(
+                    status="idle",
+                    waiting_since=None,
+                    reply_seen=False,
+                    reply_at=None,
+                    delivery_seen=False,
+                )
 
     def _scope_record_locked(self, scope: Any) -> dict[str, Any]:
         """Validate a scope coming from the panel. Caller holds ``self._lock``."""
@@ -340,7 +402,7 @@ class LoveWithYouPlugin(NekoPluginBase):
         if result is None:
             return
         names, current = result
-        with self._lock:
+        with self._lock, self._state_transaction_locked():
             changed = names != self._state["known_characters"]
             if current and current != self._state["current_character"]:
                 self._state["current_character"] = current
@@ -471,11 +533,13 @@ class LoveWithYouPlugin(NekoPluginBase):
     def _make_state_handler(self, bound_scope: str) -> Callable[..., Any]:
         async def handler(**_: Any) -> dict[str, Any]:
             today = date.today()
-            with self._lock:
+            with self._lock, self._state_transaction_locked():
                 scope = self._effective_scope(bound_scope)
+                created = engine.get_record(self._state, scope, create=False) is None
                 record = engine.get_record(self._state, scope) or engine.new_record()
-                if engine.mark_active(record):
-                    self._try_save_locked()
+                active = engine.mark_active(record)
+                if active or created:
+                    self._save_locked()
                 view = engine.record_view(record, history_limit=0, gate=self._gate())
                 events = _record_events(record, self._state.get("anniversaries", []), today, upcoming=False)
                 met_day = _met_day(record, today)
@@ -500,14 +564,15 @@ class LoveWithYouPlugin(NekoPluginBase):
         async def handler(delta: Any = None, reason: Any = None, **_: Any) -> dict[str, Any]:
             scope = bound_scope
             try:
-                with self._lock:
+                with self._lock, self._state_transaction_locked():
                     scope = self._effective_scope(bound_scope)
+                    created = engine.get_record(self._state, scope, create=False) is None
                     record = engine.get_record(self._state, scope)
                     if record is None:
                         raise engine.EngineError("unknown_scope")
                     result = engine.apply_model_delta(record, delta, reason, gate=self._gate())
                     active = engine.mark_active(record)
-                    if result["applied"] != 0 or active:
+                    if result["applied"] != 0 or active or created:
                         self._save_locked()
             except engine.EngineError as exc:
                 self.logger.info("与你相恋: love_update rejected scope={} code={}", scope, exc.code)
@@ -542,7 +607,7 @@ class LoveWithYouPlugin(NekoPluginBase):
         async def handler(moment: Any = None, **_: Any) -> dict[str, Any]:
             scope = bound_scope
             try:
-                with self._lock:
+                with self._lock, self._state_transaction_locked():
                     scope = self._effective_scope(bound_scope)
                     record = engine.get_record(self._state, scope)
                     if record is None:
@@ -727,53 +792,71 @@ class LoveWithYouPlugin(NekoPluginBase):
             if not self._ready or self._stopping.is_set():
                 return
             if message.role == conv.PROACTIVE_REPLY_TURN:
-                self._on_proactive_reply_locked(message)
-                return
-            self._latest_message_ts[message.lanlan] = max(
-                message.ts, self._latest_message_ts.get(message.lanlan, 0)
-            )
-            if message.role == "user":
-                self._auto["seen"] += 1
-                self._context_entry(message.lanlan)["turns"] += 1
-                scope = engine.scope_key_for(self._state, message.lanlan)
-                record = engine.get_record(self._state, scope)
-                # A real chat message is the best activity signal decay can get.
-                if record is not None and engine.mark_active(record):
-                    self._try_save_locked()
-                stage_change = self._handle_proactive_response_locked(message)
-            elif message.role == "reply":
-                self._note_intervening_reply_locked(message)
-            exchange = self._tracker.feed(message)
-            if exchange is not None:
-                self._enqueue(exchange)
+                stage_change = self._on_proactive_reply_locked(message)
+            else:
+                self._latest_message_ts[message.lanlan] = max(
+                    message.said_at, self._latest_message_ts.get(message.lanlan, 0)
+                )
+                if message.role == "user":
+                    self._auto["seen"] += 1
+                    self._context_entry(message.lanlan)["turns"] += 1
+                    scope = engine.scope_key_for(self._state, message.lanlan)
+                    created = engine.get_record(self._state, scope, create=False) is None
+                    record = engine.get_record(self._state, scope)
+                    # A real chat message is the best activity signal decay can get.
+                    if record is not None:
+                        active = engine.mark_active(record)
+                        if active or created:
+                            self._try_save_locked()
+                    stage_change = self._handle_proactive_response_locked(message)
+                elif message.role == "reply":
+                    self._note_intervening_reply_locked(message)
+                exchange = self._tracker.feed(message)
+                if exchange is not None:
+                    self._enqueue(exchange)
         if stage_change:
             self._notify_stage_change(stage_change[0], stage_change[1], stage_change[2])
 
-    def _on_proactive_reply_locked(self, message: conv.Message) -> None:
+    def _on_proactive_reply_locked(self, message: conv.Message) -> tuple[str, str, str] | None:
         """Mark that the host delivered a proactive reply for this character."""
         if not self._state["settings"].get(_PROACTIVE_CONFESSION_SETTING):
-            return
+            return None
+        metadata = message.metadata
+        if metadata.get("event_type") is not None and metadata.get("event_type") != "proactive_confession":
+            return None
+        if metadata.get("plugin_id") is not None and metadata.get("plugin_id") != self.plugin_id:
+            return None
         scope = engine.scope_key_for(self._state, message.lanlan)
         record = engine.get_record(self._state, scope, create=False)
         if record is None:
-            return
+            return None
         state = engine.proactive_confession_state(record)
         if self._expire_proactive_locked(state, time.time()):
+            self._pending_answers.pop(scope, None)
             self._try_save_locked()
         if state["status"] != "waiting" or state["target"] != message.lanlan:
-            return
+            return None
         if state["reply_seen"]:
             self._note_intervening_reply_locked(message)
-            return
+            return None
         if (
-            message.ts <= state["waiting_since"] or message.truncated
+            message.said_at <= state["waiting_since"] or message.truncated
             or not scoring.confession_proposal(message.content)
         ):
-            return
+            return None
+        pending = sorted(self._pending_answers.pop(scope, []), key=lambda item: item.said_at)
         state["reply_seen"] = True
-        state["reply_at"] = message.ts
+        state["reply_at"] = message.said_at
+        state["delivery_seen"] = True
         self._tracker.reset(message.lanlan)
         self._try_save_locked()
+        stage_change: tuple[str, str, str] | None = None
+        for answer in pending:
+            current_state = engine.proactive_confession_state(record)
+            if current_state["status"] != "waiting":
+                break
+            stage_change = self._handle_proactive_response_locked(answer) or stage_change
+        return stage_change
 
     def _note_intervening_reply_locked(self, message: conv.Message) -> None:
         """Another character turn can make a later standalone yes ambiguous."""
@@ -784,7 +867,7 @@ class LoveWithYouPlugin(NekoPluginBase):
         state = engine.proactive_confession_state(record)
         if (
             state["status"] == "waiting" and state["target"] == message.lanlan
-            and state["reply_seen"] and message.ts > state["reply_at"] and not state["answer_turns"]
+            and state["reply_seen"] and message.said_at > state["reply_at"] and not state["answer_turns"]
         ):
             state["answer_turns"] = 1
             self._try_save_locked()
@@ -799,11 +882,22 @@ class LoveWithYouPlugin(NekoPluginBase):
             return None
         state = engine.proactive_confession_state(record)
         if self._expire_proactive_locked(state, time.time()):
+            self._pending_answers.pop(scope, None)
             self._try_save_locked()
-        if (
-            state["status"] != "waiting" or state["target"] != message.lanlan
-            or not state["reply_seen"] or message.ts <= state["reply_at"]
-        ):
+        if state["status"] != "waiting" or state["target"] != message.lanlan or not state["reply_seen"]:
+            if (
+                state["status"] == "waiting"
+                and state["target"] == message.lanlan
+                and not state["reply_seen"]
+                and message.said_at > (state.get("waiting_since") or 0)
+            ):
+                pending = self._pending_answers.setdefault(scope, [])
+                if message not in pending:
+                    pending.append(message)
+                    pending.sort(key=lambda item: item.said_at)
+                    del pending[:-4]
+            return None
+        if message.said_at <= state["reply_at"]:
             return None
         decision = None if message.truncated else scoring.proactive_response(
             message.content, require_relationship=state["answer_turns"] > 0
@@ -819,19 +913,30 @@ class LoveWithYouPlugin(NekoPluginBase):
                 waiting_since=None,
                 reply_seen=False,
                 cooldown_until=now + engine.PROACTIVE_CONFESSION_COOLDOWN_SECONDS,
+                delivery_seen=False,
             )
             self._try_save_locked()
             self.logger.info("与你相恋: proactive confession declined scope={}", scope)
             return None
         if not self._gate() or not engine.awaiting_confession(record, True):
-            state.update(status="idle", waiting_since=None, reply_seen=False)
+            state.update(
+                status="idle",
+                waiting_since=None,
+                reply_seen=False,
+                delivery_seen=False,
+            )
             self._try_save_locked()
             return None
         try:
             outcome = engine.confess(record, "猫娘主动告白后，对方明确答应了")
         except engine.EngineError:
             return None
-        state.update(status="accepted", waiting_since=None, reply_seen=False)
+        state.update(
+            status="accepted",
+            waiting_since=None,
+            reply_seen=False,
+            delivery_seen=False,
+        )
         engine.mark_active(record)
         self._try_save_locked()
         self.logger.info("与你相恋: proactive confession accepted scope={}", scope)
@@ -849,7 +954,7 @@ class LoveWithYouPlugin(NekoPluginBase):
             ):
                 return
             character, scope = job.exchange.lanlan, job.scope
-            if self._latest_message_ts.get(character, job.exchange.ts) > job.exchange.ts:
+            if self._latest_message_ts.get(character, job.exchange.said_at) > job.exchange.said_at:
                 return  # a newer user message/reply arrived while the judge was working
             record = engine.get_record(self._state, scope, create=False)
             if (
@@ -866,18 +971,21 @@ class LoveWithYouPlugin(NekoPluginBase):
                 return
             if float(state.get("cooldown_until") or 0.0) > now:
                 return
-            state.update(
-                status="waiting",
-                attempts=state["attempts"] + 1,
-                last_attempt_at=now,
-                waiting_since=now,
-                reply_seen=False,
-                reply_at=None,
-                answer_turns=0,
-                target=character,
-                cooldown_until=now + engine.PROACTIVE_CONFESSION_TIMEOUT_COOLDOWN_SECONDS,
-            )
-            self._save_locked()
+            with self._state_transaction_locked():
+                state.update(
+                    status="dispatching",
+                    attempts=state["attempts"] + 1,
+                    last_attempt_at=now,
+                    waiting_since=now,
+                    reply_seen=False,
+                    reply_at=None,
+                    answer_turns=0,
+                    target=character,
+                    cooldown_until=now + engine.PROACTIVE_CONFESSION_TIMEOUT_COOLDOWN_SECONDS,
+                    delivery_seen=False,
+                )
+                self._save_locked()
+            self._pending_answers.pop(scope, None)
             # SDK submission is synchronous and only enqueues a local payload.
             # Keep the lock through it so a setting edit cannot race the send.
             try:
@@ -893,10 +1001,22 @@ class LoveWithYouPlugin(NekoPluginBase):
                 if isinstance(receipt, dict) and receipt.get("submitted") is False:
                     raise RuntimeError("submission_rejected")
             except Exception as exc:
-                state.update(status="idle", waiting_since=None, reply_seen=False)
+                state.update(
+                    status="idle",
+                    waiting_since=None,
+                    reply_seen=False,
+                    reply_at=None,
+                    delivery_seen=False,
+                    cooldown_until=now + engine.PROACTIVE_CONFESSION_UNDELIVERED_COOLDOWN_SECONDS,
+                )
                 self._try_save_locked()
                 self.logger.warning("与你相恋: proactive confession to {} failed: {}", character, type(exc).__name__)
                 return
+            state.update(
+                status="waiting",
+                cooldown_until=now + engine.PROACTIVE_CONFESSION_TIMEOUT_COOLDOWN_SECONDS,
+            )
+            self._save_locked()
         self.logger.info("与你相恋: proactive confession requested character={} attempt={}", character, state["attempts"])
 
     # ------------------------------------------------------------ scoring worker
@@ -922,6 +1042,10 @@ class LoveWithYouPlugin(NekoPluginBase):
             scope[len(engine.CHAR_SCOPE_PREFIX):] if scope and scope.startswith(engine.CHAR_SCOPE_PREFIX) else None
         )
         self._tracker.reset(character)
+        if scope is None:
+            self._pending_answers.clear()
+        else:
+            self._pending_answers.pop(scope, None)
         # Cancellation saves time; the revision check is still authoritative
         # when a model client finishes despite cancellation.
         task, loop, job = self._score_task, self._worker_loop, self._score_job
@@ -1037,7 +1161,7 @@ class LoveWithYouPlugin(NekoPluginBase):
             if not self._score_current_locked(job):
                 return
             exchange = job.exchange
-            record = engine.get_record(self._state, job.scope) or engine.new_record()
+            record = engine.get_record(self._state, job.scope, create=False) or engine.new_record()
             stage = engine.record_stage(record, int(record.get("affection", 0)))
             waiting = engine.awaiting_confession(record, self._gate())
             if exchange.truncated:
@@ -1086,6 +1210,7 @@ class LoveWithYouPlugin(NekoPluginBase):
             if not self._score_current_locked(job):
                 return
             scope = job.scope
+            created = engine.get_record(self._state, scope, create=False) is None
             record = engine.get_record(self._state, scope)
             if record is None:
                 return
@@ -1127,7 +1252,7 @@ class LoveWithYouPlugin(NekoPluginBase):
             self._auto["last_delta"] = result["applied"] if result else 0
             if mode == "model":
                 self._auto["last_error"] = ""
-            if (result and result["applied"]) or confessed:
+            if created or (result and result["applied"]) or confessed:
                 self._try_save_locked()
             if changes:
                 self._notify_stage_change(scope, changes[0][0], changes[-1][1])
@@ -1269,7 +1394,28 @@ class LoveWithYouPlugin(NekoPluginBase):
             },
             "decoration": await asyncio.to_thread(self._decoration_meta),
             "portraits": await asyncio.to_thread(self._portraits.summary) if self._portraits else None,
+            "appearance": self._appearance.summary() if self._appearance else dict(appearance.DEFAULTS),
         }
+
+    @ui.action(label=tr("actions.setAppearance.label", default="保存外观"), refresh_context=True)
+    @plugin_entry(
+        id="set_appearance",
+        name=tr("actions.setAppearance.label", default="保存外观"),
+        description=tr("entries.setAppearance.description", default="保存所有角色共用的主题色和深浅色模式。"),
+        input_schema={"type": "object", "properties": {
+            "accent_color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
+            "color_scheme": {"type": "string", "enum": ["system", "light", "dark"]},
+        }, "required": ["accent_color", "color_scheme"]},
+    )
+    async def set_appearance(self, accent_color: Any = None, color_scheme: Any = None, **_: Any):
+        if self._appearance is None:
+            return Err(SdkError("appearance_not_ready"))
+        try:
+            return Ok(await asyncio.to_thread(self._appearance.update, accent_color, color_scheme))
+        except appearance.AppearanceError as exc:
+            return Err(SdkError(str(exc)))
+        except OSError:
+            return Err(SdkError("appearance_save_failed"))
 
     @ui.action(label=tr("actions.setPerCharacter.label", default="切换独立好感"), refresh_context=True)
     @plugin_entry(
@@ -1289,19 +1435,19 @@ class LoveWithYouPlugin(NekoPluginBase):
         if not isinstance(enabled, bool):
             return Err(SdkError("enabled must be a boolean"))
         await self._sync_characters()
-        with self._lock:
+        with self._lock, self._state_transaction_locked():
             try:
                 result = engine.set_per_character(self._state, enabled, self._state["current_character"])
             except engine.EngineError as exc:
                 return Err(SdkError(exc.code))
             if result["changed"]:
-                self._invalidate_scoring_locked()
                 self._cancel_proactive_locked()
                 # The switch itself counts as activity, so decay never bites a
                 # record that was frozen while its mode was off.
                 for _scope, record in engine.active_records(self._state):
                     engine.mark_active(record)
                 self._save_locked()
+                self._invalidate_scoring_locked()
         if result["changed"]:
             self.logger.info("与你相恋: per_character={} current={}", enabled, result.get("current_character"))
         self._reconcile_tools()
@@ -1345,12 +1491,12 @@ class LoveWithYouPlugin(NekoPluginBase):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return Err(SdkError("value must be a number"))
         try:
-            with self._lock:
+            with self._lock, self._state_transaction_locked():
                 record = self._scope_record_locked(scope)
                 result = engine.set_affection(record, value, source=source, gate=self._gate())
-                self._invalidate_scoring_locked(str(scope))
                 self._cancel_proactive_locked(str(scope))
                 self._save_locked()
+                self._invalidate_scoring_locked(str(scope))
         except engine.EngineError as exc:
             return Err(SdkError(exc.code))
         self.logger.info("与你相恋: {} scope={} value={}", source, scope, result["affection"])
@@ -1361,7 +1507,7 @@ class LoveWithYouPlugin(NekoPluginBase):
 
     def _edit_scope(self, scope: Any, action: str, change: Callable[[dict[str, Any]], Any]):
         try:
-            with self._lock:
+            with self._lock, self._state_transaction_locked():
                 record = self._scope_record_locked(scope)
                 result = change(record)
                 self._save_locked()
@@ -1424,7 +1570,7 @@ class LoveWithYouPlugin(NekoPluginBase):
     )
     async def add_anniversary(self, title: Any = None, month: Any = None, day: Any = None, **_: Any):
         try:
-            with self._lock:
+            with self._lock, self._state_transaction_locked():
                 item = engine.add_anniversary(self._state, title, month, day)
                 self._save_locked()
         except engine.EngineError as exc:
@@ -1445,7 +1591,7 @@ class LoveWithYouPlugin(NekoPluginBase):
         },
     )
     async def remove_anniversary(self, id: Any = None, **_: Any):  # noqa: A002 - entry argument name
-        with self._lock:
+        with self._lock, self._state_transaction_locked():
             removed = engine.remove_anniversary(self._state, id)
             if removed:
                 self._save_locked()
@@ -1492,11 +1638,14 @@ class LoveWithYouPlugin(NekoPluginBase):
         }
         notices: list[dict[str, str]] = []
         try:
-            with self._lock:
+            with self._lock, self._state_transaction_locked():
                 before = dict(self._state["settings"])
                 result = engine.update_settings(self._state, changes)
-                if any(before.get(key, False) != result["settings"].get(key, False) for key in ("auto_score", "require_confession")):
-                    self._invalidate_scoring_locked()
+                invalidate = any(
+                    before.get(key, False) != result["settings"].get(key, False)
+                    for key in ("auto_score", "require_confession")
+                )
+                if invalidate:
                     self._cancel_proactive_locked()
                 if before.get(_PROACTIVE_CONFESSION_SETTING, False) and not result["settings"].get(
                     _PROACTIVE_CONFESSION_SETTING, False
@@ -1505,6 +1654,10 @@ class LoveWithYouPlugin(NekoPluginBase):
                 active = {scope for scope, _record in engine.active_records(self._state)}
                 notices = [change for change in result["stage_changes"] if change["scope"] in active]
                 self._save_locked()
+                if invalidate:
+                    self._invalidate_scoring_locked()
+                elif not result["settings"].get(_PROACTIVE_CONFESSION_SETTING, False):
+                    self._pending_answers.clear()
         except engine.EngineError as exc:
             return Err(SdkError(exc.code))
         self.logger.info("与你相恋: settings {}", result["settings"])

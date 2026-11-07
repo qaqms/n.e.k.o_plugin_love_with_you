@@ -1,0 +1,15 @@
+{
+  "name": "love-with-you-ui-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "preview": "node ui_preview.mjs",
+    "test": "node --test test_ui.mjs test_theme.mjs",
+    "check": "node check_ui.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0",
+    "sucrase": "^3.35.0",
+    "typescript": "^5.9.0"
+  }
+}

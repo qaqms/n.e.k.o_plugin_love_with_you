@@ -194,3 +194,43 @@ def test_model_guard_preserves_explicit_mutual_confession(scoring, user, reply, 
 @pytest.mark.parametrize("answer", ["我愿意，“明天去吃饭”", "我想想今天吃什么", "也许明天会下雨"])
 def test_unrelated_or_quoted_answers_do_not_resolve_proactive_confession(scoring, answer):
     assert scoring.proactive_response(answer) is None
+
+
+@pytest.mark.parametrize("answer", [
+    "我也喜欢你，但我还没准备好", "我愿意，但我还没准备好",
+    "我也喜欢你，但先做朋友吧", "我愿意，但我们还是做朋友吧",
+    "我也喜欢你，但让我考虑一下", "如果你喜欢我，我愿意",
+    "我愿意，如果你也喜欢我", "我也喜欢你，但我还没有准备好",
+    "我也喜欢你，但我还没准备好恋爱", "我愿意，但还不是时候",
+    "我也喜欢你，但我需要时间考虑", "我也喜欢你，但我们只能做朋友",
+])
+@pytest.mark.parametrize("character_proposes", [False, True])
+def test_hesitation_friendship_and_conditions_override_consent(scoring, answer, character_proposes):
+    proposal = "我喜欢你，和我在一起吧"
+    kwargs = dict(
+        user=answer if character_proposes else proposal,
+        reply="太好了" if character_proposes else answer,
+        previous_reply=proposal if character_proposes else "",
+        awaiting_confession=True,
+    )
+    assert not scoring.rule_verdict(**kwargs).confession
+    assert not scoring.guard_verdict(scoring.Verdict(0, "模型误判", True), **kwargs).confession
+    assert scoring.proactive_response(answer) != "accept"
+
+
+@pytest.mark.parametrize("text", [
+    "请翻译：\nI love you", "请翻译：你好，我喜欢你",
+    "如果你不好好吃饭，你就是笨蛋", "假如你来了，我喜欢你",
+    "他说：\n你真垃圾", "电影台词：我喜欢你，和我在一起吧",
+    "请翻译：Hello. I love you", "请翻译：你好。你真可爱",
+    "他说：今天天气很好。你就是笨蛋",
+])
+def test_non_assertive_scope_survives_clause_and_line_breaks(scoring, text):
+    assert scoring.rule_verdict(text, "嗯").delta == 0
+
+
+def test_new_sentence_restores_direct_assertions(scoring):
+    assert scoring.rule_verdict("如果天气好，就去散步。你真可爱", "谢谢").delta == 1
+    assert scoring.rule_verdict("如果天气好，就去散步。你真垃圾", "嗯").delta == -3
+    assert scoring.rule_verdict("请翻译：hello / 你真可爱", "谢谢").delta == 1
+    assert scoring.rule_verdict("你真可爱。请翻译：hello", "谢谢").delta == 1

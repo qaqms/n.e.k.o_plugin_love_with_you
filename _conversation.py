@@ -16,7 +16,7 @@ answer.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 USER_TURN = "user_message"
@@ -38,6 +38,14 @@ class Message:
     lanlan: str
     content: str
     truncated: bool = False
+    source: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    spoken_at: float | None = None
+
+    @property
+    def said_at(self) -> float:
+        """Dialogue chronology, separate from the bus arrival cursor."""
+        return self.ts if self.spoken_at is None else self.spoken_at
 
 
 @dataclass(frozen=True)
@@ -49,6 +57,11 @@ class Exchange:
     previous_reply: str
     ts: float
     truncated: bool = False
+    spoken_at: float | None = None
+
+    @property
+    def said_at(self) -> float:
+        return self.ts if self.spoken_at is None else self.spoken_at
 
 
 def _field(record: Any, name: str) -> Any:
@@ -61,9 +74,26 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _correlation_metadata(*values: dict[str, Any]) -> dict[str, Any]:
+    keys = {"event_type", "source_name", "plugin_id", "coalesce_key"}
+    result: dict[str, Any] = {}
+    for value in values:
+        for key in keys:
+            if key in value:
+                result[key] = value[key]
+    return result
+
+
 def _clip(text: str) -> str:
     text = " ".join(str(text or "").split())
     return text[:MESSAGE_MAX_CHARS]
+
+
+def _timestamp(*values: Any) -> float | None:
+    for value in values:
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            return float(value)
+    return None
 
 
 def parse_record(record: Any) -> Message | None:
@@ -85,17 +115,18 @@ def parse_record(record: Any) -> Message | None:
         return None
     # timestamp = arrival on the bus (what since_ts filters on); metadata.ts is
     # when it was said and is only a fallback.
-    ts = _field(record, "timestamp")
-    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
-        ts = metadata.get("ts")
-    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
-        return None
-    if not math.isfinite(ts):
+    spoken_at = _timestamp(metadata.get("ts"), raw_meta.get("ts"))
+    ts = _timestamp(_field(record, "timestamp"), spoken_at)
+    if ts is None:
         return None
     normalized = " ".join(content.split())
+    source = _field(record, "source") or metadata.get("source") or raw_meta.get("source")
     return Message(
         ts=float(ts), role=role, lanlan=lanlan.strip(), content=_clip(content),
         truncated=len(normalized) > MESSAGE_MAX_CHARS,
+        source=str(source or ""),
+        metadata=_correlation_metadata(raw_meta, metadata),
+        spoken_at=spoken_at,
     )
 
 
@@ -113,17 +144,18 @@ def parse_proactive_record(record: Any) -> Message | None:
     content = _field(record, "content") or raw.get("content")
     if not isinstance(lanlan, str) or not lanlan.strip() or not isinstance(content, str) or not content.strip():
         return None
-    ts = _field(record, "timestamp")
-    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
-        ts = metadata.get("ts")
-    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
-        return None
-    if not math.isfinite(ts):
+    spoken_at = _timestamp(metadata.get("ts"), raw_meta.get("ts"))
+    ts = _timestamp(_field(record, "timestamp"), spoken_at)
+    if ts is None:
         return None
     normalized = " ".join(content.split())
+    source = _field(record, "source") or metadata.get("source") or raw_meta.get("source")
     return Message(
         ts=float(ts), role=PROACTIVE_REPLY_TURN, lanlan=lanlan.strip(), content=_clip(content),
         truncated=len(normalized) > MESSAGE_MAX_CHARS,
+        source=str(source or ""),
+        metadata=_correlation_metadata(raw_meta, metadata),
+        spoken_at=spoken_at,
     )
 
 
@@ -179,7 +211,16 @@ class ExchangeTracker:
             return None
         if message.role != "reply":
             return None
-        pending = self._pending.pop(message.lanlan, None)
+        queued = self._pending.get(message.lanlan, [])
+        pending = sorted(
+            (item for item in queued if item.said_at <= message.said_at),
+            key=lambda item: item.said_at,
+        )
+        remaining = [item for item in queued if item.said_at > message.said_at]
+        if remaining:
+            self._pending[message.lanlan] = remaining
+        else:
+            self._pending.pop(message.lanlan, None)
         if not pending:
             return None  # a reply nobody asked for in this window (e.g. a greeting)
         joined = " / ".join(item.content for item in pending)
@@ -187,7 +228,8 @@ class ExchangeTracker:
             message.truncated or any(item.truncated for item in pending)
             or len(joined) > MESSAGE_MAX_CHARS or message.lanlan in self._pending_truncated
         )
-        self._pending_truncated.discard(message.lanlan)
+        if not remaining:
+            self._pending_truncated.discard(message.lanlan)
         user = _clip(joined)
         previous_user, previous_reply, previous_truncated = self._last.get(message.lanlan, ("", "", False))
         self._last[message.lanlan] = (user, message.content, truncated)
@@ -199,4 +241,5 @@ class ExchangeTracker:
             previous_reply=previous_reply,
             ts=message.ts,
             truncated=truncated or previous_truncated,
+            spoken_at=message.spoken_at,
         )

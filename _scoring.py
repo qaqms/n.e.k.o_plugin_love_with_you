@@ -161,8 +161,12 @@ def parse_verdict(text: Any) -> Verdict | None:
 # than interpreting every occurrence of "garbage", "boring" or "cute" as personal.
 _QUOTED = re.compile(r'```.*?```|`[^`]*`|“[^”]*”|「[^」]*」|『[^』]*』|‘[^’]*’|"[^"]*"', re.S)
 _SPLIT = re.compile(r"[，,。.!！；;\n/]+|(?<=[?？])")
+_SENTENCES = re.compile(r"[。.!！；;]+")
 _CONNECTOR = re.compile(r"^(?:(?:但是|可是|不过|其实|而且|还有|所以|然后|今天|喂|哼|但)[\s、]*)+")
-_NON_ASSERTIVE = re.compile(r"^(?:如果|假如|假设|要是|比如|例如|电影|台词|歌词|请翻译|翻译|引用|复述|他说|她说|有人说|别人说)")
+_NON_ASSERTIVE = re.compile(
+    r"^(?:(?P<conditional>如果|假如|假设|要是|比如|例如)|"
+    r"电影|台词|歌词|请翻译|翻译|引用|复述|他说|她说|有人说|别人说)"
+)
 _MODIFIERS = r"(?:(?:这个|这人|就|是|个|真的|真|太|很|好|简直|实在|根本|完全|有点|那么|这么|特别|非常|怎么这么|可真)\s*){0,5}"
 _SUBJECT = r"(?:你|我(?:真的)?(?:觉得|认为)你)\s*"
 _SUFFIX = r"[啊呀呢吧啦了哦哟哈嘿嘻~…\s]*"
@@ -213,6 +217,7 @@ _REFUSAL = re.compile(
     rf"^(?:我)?(?:当然|现在|暂时|还|真的|并)?(?:不愿意|不能答应|不会答应|不答应|不行|不要|再等等|还没准备好){_SUFFIX}$"
     r"|(?:不|还不|暂时不|没)(?:想|愿意|能|可以|打算|准备好).{0,8}(?:在一起|交往|谈恋爱|做你|当你|答应)"
     r"|(?:只是|只当|只做|还是做)朋友"
+    rf"|^(?:我们)?(?:先做|还是先做|只做|只当|还是做|只是|只能做|只能当)朋友{_SUFFIX}$"
 )
 _PROACTIVE_ACCEPT = re.compile(
     rf"^(?:(?:我)?(?:当然愿意|愿意|答应(?:你)?)"
@@ -227,7 +232,10 @@ _PROACTIVE_REFUSAL = re.compile(
 )
 _HESITATION = re.compile(r"不确定|考虑|想想|没准备好|没想好|再等等|先等等|暂时|也许|可能|算了|只.{0,2}朋友")
 _DIRECT_HESITATION = re.compile(
-    rf"^(?:(?:我)?(?:还|现在|暂时|有点|真的)?(?:不确定|没准备好|没想好|需要考虑(?:一下)?|想想|考虑(?:一下)?)"
+    rf"^(?:(?:我)?(?:(?:还|现在|暂时|有点|真的)){{0,3}}(?:不确定|"
+    rf"(?:没|没有)准备好(?:谈恋爱|恋爱|交往|和你在一起)?|没想好|"
+    rf"需要(?:一点)?时间(?:考虑(?:一下)?)?|需要考虑(?:一下)?|想想|考虑(?:一下)?)"
+    rf"|(?:现在|还|现在还)?不是时候"
     rf"|让我(?:想想|考虑(?:一下)?)|再等等|先等等|也许吧|可能吧|算了){_SUFFIX}$"
 )
 _RELATIONSHIP_ACCEPT = re.compile(r"在一起|交往|(?:做|当)你的(?:女朋友|男朋友|恋人|对象)")
@@ -242,7 +250,23 @@ def _clauses(text: str) -> list[str]:
 
 
 def _assertions(text: str) -> list[str]:
-    return [part for part in _clauses(text) if not _NON_ASSERTIVE.match(part) and not re.search(r"[?？]|[吗么]$", part)]
+    # Conditions extend through their sentence. Translation/reported text may
+    # contain several sentences, so conservatively ignore the rest of that turn.
+    text = _QUOTED.sub("", unicodedata.normalize("NFKC", str(text or "")).casefold())
+    assertions: list[str] = []
+    for turn in text.split("/"):
+        reported = False
+        for sentence in _SENTENCES.split(turn):
+            for part in _clauses(sentence):
+                marker = _NON_ASSERTIVE.match(part)
+                if marker:
+                    reported = marker.group("conditional") is None
+                    break
+                if not re.search(r"[?？]|[吗么]$", part):
+                    assertions.append(part)
+            if reported:
+                break
+    return assertions
 
 
 def _joking(text: str) -> bool:
@@ -295,23 +319,23 @@ def _proposal(text: str) -> bool:
 
 
 def _refuses(text: str) -> bool:
-    return any(
-        _REFUSAL.search(part)
-        and (
-            "在一起" in part
-            or "交往" in part
-            or "谈恋爱" in part
-            or "做你" in part
-            or "当你" in part
-            or "答应" in part
+    for part in _assertions(text):
+        if _DIRECT_HESITATION.fullmatch(part):
+            return True
+        if _REFUSAL.search(part) and (
+            any(marker in part for marker in ("在一起", "交往", "谈恋爱", "做你", "当你", "答应", "朋友"))
             or part.strip() in {"不愿意", "不行", "不要", "再等等"}
-        )
-        for part in _assertions(text)
-    )
+        ):
+            return True
+    return False
 
 
 def _accepts(text: str) -> bool:
-    return not _joking(text) and not _refuses(text) and any(_ACCEPT.fullmatch(part) for part in _assertions(text))
+    return (
+        not _joking(text) and not _refuses(text)
+        and not any(_NON_ASSERTIVE.match(part) for part in _clauses(text))
+        and any(_ACCEPT.fullmatch(part) for part in _assertions(text))
+    )
 
 
 def confession_proposal(text: str) -> bool:

@@ -2,7 +2,7 @@
 
 ## Identity Lock
 - plugin_id: `love_with_you`
-- folder: `love_with_you/`（开发模式加载 / 打包均要求目录名 = 插件 ID）
+- folder: `love_with_you/`（宿主加载目录须与入口包名一致；仓库目录可用 `tools/prepare_development.py` 在仓库旁生成 `.neko-dev/love_with_you/` 开发副本）
 - GitHub 仓库: `n.e.k.o_plugin_love_with_you`
 - name: 与你相恋
 - entry: `plugin.plugins.love_with_you:LoveWithYouPlugin`
@@ -10,6 +10,12 @@
 
 ## Purpose
 给 N.E.K.O 角色加一层“恋爱关系”：好感度 0–100、五个关系阶段，角色在文字聊天中按阶段调整语气，并由模型按规则加减好感。
+
+## Appearance Preferences
+
+- `_appearance.py` 使用独立 `appearance.json` 保存所有角色共用的 `accent_color` 与 `color_scheme`（system/light/dark），不混入关系状态或评分代次。严格接受六位十六进制颜色；存储成功后再更新内存。
+- `ui/theme.ts` 提供六种配色、自定义颜色规范化、对比度计算和 CSS 变量生成。主题应用于整个插件 iframe，包括弹窗与确认提示。正文与强调文字分别计算颜色，保留加分/扣分的语义色。
+- 外观修改先在当前面板实时预览，用户显式保存；未保存的草稿跨页面、角色和后台刷新保留，关闭面板后丢弃。保存成功后的刷新失败沿用现有独立重试逻辑。
 
 ## Package Type and Capabilities
 - package type: `plugin`（独立插件，走插件市场分发）

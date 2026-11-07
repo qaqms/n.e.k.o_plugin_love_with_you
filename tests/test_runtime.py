@@ -93,6 +93,37 @@ def exchange(runtime, character="YUI", ts=1.0):
     return runtime.conv.Exchange(character, "hello", "reply", "", "", ts)
 
 
+def test_appearance_action_persists_globally_without_editing_relationships(plugin, runtime, tmp_path):
+    before = copy.deepcopy(plugin._state)
+    plugin._appearance = runtime.appearance.AppearancePrefs(runtime.StateFile(tmp_path / "appearance.json"))
+    result = asyncio.run(plugin.set_appearance(accent_color="#7DB9E8", color_scheme="dark"))
+    assert isinstance(result, runtime.Ok)
+    dashboard = asyncio.run(plugin.dashboard())
+    assert dashboard["appearance"] == {"accent_color": "#7db9e8", "color_scheme": "dark"}
+    assert plugin._state == before
+    assert runtime.appearance.AppearancePrefs(runtime.StateFile(tmp_path / "appearance.json")).summary() == dashboard["appearance"]
+
+
+def test_appearance_action_reports_failed_save_and_preserves_preferences(plugin, runtime, tmp_path, monkeypatch):
+    store = runtime.StateFile(tmp_path / "appearance.json")
+    plugin._appearance = runtime.appearance.AppearancePrefs(store)
+    monkeypatch.setattr(store, "save", Mock(side_effect=OSError("disk full")))
+    result = asyncio.run(plugin.set_appearance(accent_color="#7db9e8", color_scheme="light"))
+    assert isinstance(result, runtime.Err)
+    assert str(result.error) == "appearance_save_failed"
+    assert plugin._appearance.summary() == runtime.appearance.DEFAULTS
+    invalid = asyncio.run(plugin.set_appearance(accent_color="red", color_scheme="light"))
+    assert isinstance(invalid, runtime.Err)
+    assert str(invalid.error) == "appearance_invalid_settings"
+
+
+def test_appearance_not_ready_uses_defaults_and_returns_retryable_error(plugin, runtime):
+    assert asyncio.run(plugin.dashboard())["appearance"] == runtime.appearance.DEFAULTS
+    result = asyncio.run(plugin.set_appearance(accent_color="#7db9e8", color_scheme="system"))
+    assert isinstance(result, runtime.Err)
+    assert str(result.error) == "appearance_not_ready"
+
+
 def take_job(plugin, runtime, character="YUI"):
     plugin._enqueue(exchange(runtime, character))
     return plugin._jobs.get_nowait()
@@ -554,16 +585,69 @@ def test_other_characters_and_non_confession_replies_cannot_confirm(plugin, runt
     assert not plugin._state["shared"]["confessed"]
 
 
-def test_proactive_reply_and_user_answer_must_follow_attempt_in_order(plugin, runtime):
+def test_proactive_reply_and_user_answer_may_arrive_out_of_order(plugin, runtime):
     now, _ = request_confession(plugin, runtime)
     plugin._on_message(runtime.conv.Message(now - 1, "proactive_reply", "YUI", "我喜欢你，和我在一起吧"))
-    plugin._on_message(runtime.conv.Message(now, "user", "YUI", "我愿意"))
+    plugin._on_message(runtime.conv.Message(now + 1, "user", "YUI", "我愿意", spoken_at=now + 1))
     assert not plugin._state["shared"]["confessed"]
-    plugin._on_message(runtime.conv.Message(now + 2, "proactive_reply", "YUI", "我喜欢你，和我在一起吧"))
-    plugin._on_message(runtime.conv.Message(now + 1, "user", "YUI", "我愿意"))
-    assert not plugin._state["shared"]["confessed"]
-    plugin._on_message(runtime.conv.Message(now + 3, "user", "YUI", "我愿意"))
+    plugin._on_message(runtime.conv.Message(
+        now + 2, "proactive_reply", "YUI", "我喜欢你，和我在一起吧", spoken_at=now + 0.5
+    ))
     assert plugin._state["shared"]["confessed"]
+    plugin._on_message(runtime.conv.Message(now + 1, "user", "YUI", "我愿意"))
+    assert plugin._state["shared"]["confessed"]
+
+
+def test_pending_ambiguous_answer_is_replayed_before_explicit_consent(plugin, runtime):
+    now, _ = request_confession(plugin, runtime)
+    plugin._on_message(runtime.conv.Message(now + 1, "user", "YUI", "好"))
+    assert plugin._pending_answers["shared"]
+    plugin._on_message(runtime.conv.Message(
+        now + 2, "proactive_reply", "YUI", "我喜欢你，和我在一起吧", spoken_at=now + 0.5
+    ))
+    state = plugin._state["shared"]["proactive_confession"]
+    assert state["answer_turns"] == 1
+    assert not plugin._state["shared"]["confessed"]
+    plugin._on_message(runtime.conv.Message(now + 3, "user", "YUI", "我愿意和你在一起"))
+    assert plugin._state["shared"]["confessed"]
+
+
+def test_proactive_reply_with_other_event_source_is_ignored(plugin, runtime):
+    now, _ = request_confession(plugin, runtime)
+    plugin._on_message(
+        runtime.conv.Message(
+            now + 1,
+            "proactive_reply",
+            "YUI",
+            "我喜欢你，和我在一起吧",
+            metadata={"event_type": "other_event"},
+        )
+    )
+    state = plugin._state["shared"]["proactive_confession"]
+    assert not state["delivery_seen"] and not state["reply_seen"]
+    plugin._on_message(runtime.conv.Message(now + 2, "proactive_reply", "YUI", "我喜欢你，和我在一起吧"))
+    state = plugin._state["shared"]["proactive_confession"]
+    assert state["delivery_seen"] and state["reply_seen"]
+
+
+def test_undelivered_waiting_confession_releases_attempt(plugin, runtime):
+    now, _ = request_confession(plugin, runtime)
+    state = plugin._state["shared"]["proactive_confession"]
+    later = now + runtime.engine.PROACTIVE_CONFESSION_WAIT_SECONDS + 1
+    assert plugin._expire_proactive_locked(state, later)
+    assert state["status"] == "idle"
+    assert state["attempts"] == 0
+    assert state["cooldown_until"] == later + runtime.engine.PROACTIVE_CONFESSION_UNDELIVERED_COOLDOWN_SECONDS
+
+
+def test_dispatching_confession_is_recovered_as_undelivered(plugin, runtime):
+    now, _ = request_confession(plugin, runtime)
+    state = plugin._state["shared"]["proactive_confession"]
+    state["status"] = "dispatching"
+    assert plugin._expire_proactive_locked(state, now + 1)
+    assert state["status"] == "idle"
+    assert state["attempts"] == 0
+    assert state["cooldown_until"] > now
 
 
 def test_pending_proposal_survives_restart_without_a_second_send(plugin, runtime):
@@ -783,3 +867,142 @@ def test_rejected_context_submission_keeps_relationship_context_for_retry(plugin
     entry = plugin._context["YUI"]
     assert entry["key"] is None
     assert entry["retry_at"] > runtime.time.monotonic()
+
+
+@pytest.mark.parametrize("spoken_at", [None, -1, 1])
+def test_consent_before_actual_proposal_never_confirms(plugin, runtime, spoken_at):
+    now, _ = request_confession(plugin, runtime)
+    plugin._on_message(runtime.conv.Message(
+        now + 1, "user", "YUI", "我愿意",
+        spoken_at=None if spoken_at is None else now + spoken_at,
+    ))
+    plugin._on_message(runtime.conv.Message(
+        now + 20, "proactive_reply", "YUI", "我喜欢你，和我在一起吧", spoken_at=now + 10,
+    ))
+    assert not plugin._state["shared"]["confessed"]
+    assert plugin._state["shared"]["proactive_confession"]["answer_turns"] == 0
+    plugin._on_message(runtime.conv.Message(now + 21, "user", "YUI", "我愿意"))
+    assert plugin._state["shared"]["confessed"]
+
+
+def test_buffered_chat_is_memory_only_even_when_other_edits_save(plugin, runtime):
+    now, _ = request_confession(plugin, runtime)
+    private = "这段私密聊天不应出现在状态文件里"
+    plugin._on_message(runtime.conv.Message(now + 1, "user", "YUI", private))
+    assert plugin._pending_answers["shared"][0].content == private
+    asyncio.run(plugin.set_nicknames(scope="shared", nicknames={"stranger": "朋友"}))
+    assert private not in plugin._state_file.path.read_text(encoding="utf-8")
+    assert "pending_answers" not in plugin._state_file.path.read_text(encoding="utf-8")
+
+
+def test_startup_purges_legacy_pending_chat_from_disk(plugin, runtime):
+    now, _ = request_confession(plugin, runtime)
+    private = "旧版保存下来的私人内容"
+    plugin._state["shared"]["proactive_confession"]["pending_answers"] = [
+        {"ts": now + 1, "content": private, "truncated": False},
+    ]
+    plugin._state_file.save(plugin._state)
+    plugin._start_worker = Mock()
+    asyncio.run(plugin.startup())
+    assert "pending_answers" not in plugin._state["shared"]["proactive_confession"]
+    assert private not in plugin._state_file.path.read_text(encoding="utf-8")
+    assert plugin._pending_answers == {}
+
+
+@pytest.mark.parametrize("operation", [
+    "manual", "reset", "independent", "settings", "nicknames", "first_met",
+    "anniversary_add", "anniversary_remove", "update_tool", "confess_tool",
+])
+def test_save_failure_rolls_back_edits_and_does_not_invalidate_scoring(plugin, runtime, operation, monkeypatch):
+    item = runtime.engine.add_anniversary(plugin._state, "生日", 3, 8)
+    runtime.engine.set_affection(plugin._state["shared"], 85, gate=True)
+    plugin._save_locked()
+    before = copy.deepcopy(plugin._state)
+    saved = plugin._state_file.path.read_bytes()
+    job = take_job(plugin, runtime)
+    with monkeypatch.context() as patch:
+        patch.setattr(plugin._state_file, "save", Mock(side_effect=PermissionError("read-only")))
+        with pytest.raises(runtime.SdkError, match="failed to save state"):
+            if operation == "manual":
+                asyncio.run(plugin.set_affection(scope="shared", value=42))
+            elif operation == "reset":
+                asyncio.run(plugin.reset_affection(scope="shared"))
+            elif operation == "independent":
+                asyncio.run(plugin.set_per_character(enabled=True))
+            elif operation == "settings":
+                asyncio.run(plugin.set_settings(require_confession=False, auto_score=False))
+            elif operation == "nicknames":
+                asyncio.run(plugin.set_nicknames(scope="shared", nicknames={"stranger": "朋友"}))
+            elif operation == "first_met":
+                asyncio.run(plugin.set_first_met(scope="shared", date="2020-01-01"))
+            elif operation == "anniversary_add":
+                asyncio.run(plugin.add_anniversary(title="纪念日", month=5, day=9))
+            elif operation == "anniversary_remove":
+                asyncio.run(plugin.remove_anniversary(id=item["id"]))
+            elif operation == "update_tool":
+                asyncio.run(plugin._make_update_handler("shared")(delta=2, reason="关心"))
+            elif operation == "confess_tool":
+                asyncio.run(plugin._make_confess_handler("shared")(moment="彼此答应"))
+    assert plugin._state == before
+    assert plugin._state_file.path.read_bytes() == saved
+    assert plugin._score_current_locked(job)
+    asyncio.run(plugin.set_nicknames(scope="shared", nicknames={"stranger": "朋友"}))
+    restored, _ = plugin._state_file.load()
+    expected = copy.deepcopy(before)
+    expected["shared"]["nicknames"] = {"stranger": "朋友"}
+    assert restored == expected
+
+
+@pytest.mark.parametrize("path", ["chat", "state_tool", "update_tool", "zero_score"])
+def test_first_independent_interaction_persists_even_without_affection_change(plugin, runtime, path):
+    asyncio.run(plugin.set_per_character(enabled=True))
+    assert "MIO" not in plugin._state["characters"]
+    if path == "chat":
+        plugin._on_message(runtime.conv.Message(1, "user", "MIO", "今天天气怎么样"))
+        plugin._on_message(runtime.conv.Message(2, "reply", "MIO", "天气晴朗"))
+        plugin._complete = AsyncMock(return_value=(None, runtime.judge.UNBOUND))
+        asyncio.run(plugin._score(plugin._jobs.get_nowait()))
+    elif path == "state_tool":
+        asyncio.run(plugin._make_state_handler("char:MIO")())
+    elif path == "update_tool":
+        asyncio.run(plugin._make_update_handler("char:MIO")(delta=0, reason="普通聊天"))
+    else:
+        plugin._apply_verdict(
+            take_job(plugin, runtime, "MIO"), runtime.scoring.Verdict(0, "", False),
+            "rules", runtime.judge.UNBOUND, model_attempted=False,
+        )
+    saved, _ = plugin._state_file.load()
+    restored = runtime.engine.normalize_state(saved)["characters"]["MIO"]
+    assert restored["affection"] == 0
+    assert restored["first_met"] == plugin._state["characters"]["MIO"]["first_met"]
+
+
+def test_interrupted_reply_cannot_accept_the_next_users_confession(plugin, runtime):
+    runtime.engine.set_affection(plugin._state["shared"], 85, gate=True)
+    for turn_type, text, arrival, spoken in [
+        ("user_message", "你愿意帮我找书吗", 100, 100),
+        ("user_message", "我喜欢你，和我在一起吧", 102, 102),
+        ("assistant_message", "我愿意", 103, 101),
+        ("assistant_message", "我还没准备好", 104, 103.5),
+    ]:
+        plugin._on_message(runtime.conv.parse_record({
+            "timestamp": arrival, "content": text,
+            "metadata": {"ts": spoken, "turn_type": turn_type, "lanlan_name": "YUI"},
+        }))
+    assert plugin._jobs.qsize() == 2
+    plugin._complete = AsyncMock(return_value=(None, runtime.judge.UNBOUND))
+    while not plugin._jobs.empty():
+        asyncio.run(plugin._score(plugin._jobs.get_nowait()))
+    assert not plugin._state["shared"]["confessed"]
+
+
+def test_delayed_old_reply_cannot_trigger_proactive_confession_during_a_new_turn(plugin, runtime):
+    runtime.engine.set_affection(plugin._state["shared"], 85, gate=True)
+    plugin._state["settings"]["proactive_confession"] = True
+    plugin.push_message = Mock()
+    plugin._on_message(runtime.conv.Message(100, "user", "YUI", "你好", spoken_at=100))
+    plugin._on_message(runtime.conv.Message(102, "user", "YUI", "我还有个问题", spoken_at=102))
+    plugin._on_message(runtime.conv.Message(103, "reply", "YUI", "你好呀", spoken_at=101))
+    job = plugin._jobs.get_nowait()
+    plugin._apply_verdict(job, runtime.scoring.Verdict(0, "", False), "rules", "unbound", model_attempted=False)
+    plugin.push_message.assert_not_called()

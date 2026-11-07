@@ -39,6 +39,11 @@ def storage():
 
 
 @pytest.fixture(scope="session")
+def appearance():
+    return _load("_appearance")
+
+
+@pytest.fixture(scope="session")
 def portraits():
     return _load("_portraits")
 

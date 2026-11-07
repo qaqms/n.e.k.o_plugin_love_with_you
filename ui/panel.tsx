@@ -3,6 +3,7 @@ import {
   Button,
   Input,
   Modal,
+  NumberInput,
   Select,
   Slider,
   Switch,
@@ -14,6 +15,9 @@ import {
   useToast,
 } from "@neko/plugin-ui"
 import type { PluginSurfaceProps } from "@neko/plugin-ui"
+import { Icon } from "./icons"
+import { DEFAULT_APPEARANCE, THEME_PRESETS, normalizeAppearance, themeCss } from "./theme"
+import type { Appearance } from "./theme"
 
 type HistoryItem = { ts: number; delta: number; value: number; reason: string; source: string }
 
@@ -63,6 +67,7 @@ type Scope = {
 }
 
 type Dashboard = {
+  appearance?: Appearance
   per_character?: boolean
   current_character?: string | null
   known_characters?: string[]
@@ -100,6 +105,7 @@ type Dashboard = {
 type Section = "heart" | "history" | "dates" | "nicknames" | "settings"
 
 const SECTIONS: Section[] = ["heart", "history", "dates", "nicknames", "settings"]
+const SECTION_ICONS = { heart: "Heart", history: "History", dates: "CalendarDays", nicknames: "MessageCircle", settings: "Settings" } as const
 const TREND_RANGES = [30, 90, 365]
 
 // Backend error codes the panel can explain; anything else is shown verbatim.
@@ -121,67 +127,78 @@ const ERROR_CODES = [
   "portrait_too_large",
   "portrait_not_ready",
   "portrait_save_failed",
+  "appearance_invalid_settings",
+  "appearance_not_ready",
+  "appearance_save_failed",
 ]
 
 // Theme + host-control overrides are document-wide on purpose: useConfirm()
 // mounts its dialog on <body>, outside the .lwy tree.
 const STYLE = `
-:root { --rose: #e8768f; --rose-strong: #d65f7a; --rose-soft: rgba(232, 118, 143, 0.14);
-  --rose-line: rgba(232, 118, 143, 0.42); --primary: var(--rose); }
+:root { font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
 .neko-button { border: 1px solid var(--border); border-radius: 6px; padding: 7px 12px; background: transparent;
   color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.4; }
-.neko-button:not(:disabled):hover { transform: none; box-shadow: none; border-color: var(--rose-line); color: var(--rose); }
-.neko-button[data-tone="primary"] { background: var(--rose); border-color: var(--rose); color: #fff; }
-.neko-button[data-tone="primary"]:not(:disabled):hover { background: var(--rose-strong); border-color: var(--rose-strong); color: #fff; }
+.neko-button:not(:disabled):hover { transform: none; box-shadow: none; border-color: var(--accent-line); color: var(--accent-strong); }
+.neko-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; white-space: normal; }
+.neko-button[data-tone="primary"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.neko-button[data-tone="primary"]:not(:disabled):hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
 .neko-button[data-tone="danger"] { background: transparent; }
 .neko-button[data-tone="danger"]:not(:disabled):hover { background: rgba(245, 108, 108, 0.1); color: var(--danger);
   border-color: rgba(245, 108, 108, 0.5); }
 .neko-button:disabled { opacity: 0.45; cursor: not-allowed; }
-.neko-button:focus-visible { outline: 2px solid var(--rose-line); outline-offset: 2px; }
+.neko-button:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .neko-input { border-radius: 6px; padding: 8px 12px; font-size: 14px; min-width: 0; max-width: 100%; box-sizing: border-box; }
-.neko-input:focus { border-color: var(--rose-line); box-shadow: 0 0 0 3px var(--rose-soft); }
+.neko-input:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
 .neko-switch { gap: 10px; color: var(--text); font-size: 14px; cursor: pointer; }
 .neko-switch .neko-checkbox { appearance: none; -webkit-appearance: none; flex: none; position: relative; margin: 0;
   width: 34px; height: 20px; border-radius: 999px; background: rgba(148, 163, 184, 0.45); cursor: pointer;
   transition: background-color 160ms ease; }
 .neko-switch .neko-checkbox::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
   border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); transition: transform 160ms ease; }
-.neko-switch .neko-checkbox:checked { background: var(--rose); }
-.neko-switch .neko-checkbox:checked::after { transform: translateX(14px); }
-.neko-switch .neko-checkbox:focus-visible { outline: 2px solid var(--rose-line); outline-offset: 2px; }
+.neko-switch .neko-checkbox:checked { background: var(--accent); }
+.neko-switch .neko-checkbox:checked::after { transform: translateX(14px); background: var(--on-accent); }
+.neko-switch .neko-checkbox:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .neko-switch .neko-checkbox:disabled { opacity: 0.5; cursor: not-allowed; }
 html, body { margin: 0; }
+.neko-select { min-width: 0; max-width: 100%; }
+.neko-modal { border-radius: 8px; max-height: calc(100dvh - 32px); display: flex; flex-direction: column; }
+.neko-modal-body { min-height: 0; }
+.neko-modal-header, .neko-modal-footer { flex: none; }
+.neko-modal .lwy-field input { width: 100%; }
+.neko-alert { border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.lwy-icon { display: inline-block; flex: none; width: 18px; height: 18px; background: currentColor;
+  mask-size: contain; mask-position: center; mask-repeat: no-repeat; }
 .lwy, .lwy * { box-sizing: border-box; letter-spacing: 0; }
-.lwy { --ink: var(--text); --hint: var(--muted); --line: var(--border); --card: var(--surface); --sidebar-width: 144px;
+.lwy { --ink: var(--text); --hint: var(--muted); --line: var(--border); --card: var(--surface); --sidebar-width: 160px;
   display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); height: 100vh; height: 100dvh;
   min-height: 0; color: var(--ink); background: var(--bg); overflow: hidden; }
-.lwy.sidebar-collapsed { grid-template-columns: 36px minmax(0, 1fr); }
+.lwy.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
 .lwy-sidebar { display: flex; flex-direction: column; gap: 24px; min-width: 0; min-height: 0;
   padding: 24px 12px 16px; border-right: 1px solid var(--line); background: var(--card); overflow: auto; }
 .lwy-sidebar-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .lwy-brand { flex: 1; min-width: 0; margin: 0; font-size: 16px; line-height: 1.5; font-weight: 700; overflow-wrap: anywhere; }
-.lwy-sidebar-toggle { display: grid; place-items: center; flex: none; width: 28px; height: 32px;
+.lwy-sidebar-toggle { display: grid; place-items: center; flex: none; width: 32px; height: 32px;
   padding: 0; border: 1px solid var(--line); border-radius: 5px; color: var(--hint); background: transparent; cursor: pointer; }
-.lwy-sidebar-toggle:hover { color: var(--rose-strong); border-color: var(--rose-line); background: var(--rose-soft); }
-.lwy-sidebar-chevron { display: block; width: 7px; height: 7px; border-top: 1.5px solid currentColor;
-  border-right: 1.5px solid currentColor; transform: translateX(2px) rotate(-135deg); }
-.sidebar-collapsed .lwy-sidebar-chevron { transform: translateX(-2px) rotate(45deg); }
+.lwy-sidebar-toggle:hover { color: var(--accent-strong); border-color: var(--accent-line); background: var(--accent-soft); }
 .lwy-sidebar-body { display: flex; flex: 1; flex-direction: column; gap: 24px; min-height: 0; }
-.lwy-sidebar-body[hidden] { display: none; }
-.sidebar-collapsed .lwy-sidebar { padding: 24px 3px 16px; overflow: hidden; }
+.sidebar-collapsed .lwy-sidebar { padding: 24px 6px 16px; }
+.sidebar-collapsed .lwy-sidebar-head { justify-content: center; }
+.sidebar-collapsed .lwy-nav-label, .sidebar-collapsed .lwy-sidebar-foot { display: none; }
+.sidebar-collapsed .lwy-nav button { justify-content: center; padding: 10px; }
+.lwy-brand-mark { display: none; color: var(--accent); height: 32px; align-items: center; justify-content: center; }
 .lwy-nav { display: grid; gap: 6px; }
-.lwy-nav button { position: relative; min-height: 44px; width: 100%; border: 0; border-radius: 6px;
+.lwy-nav button { position: relative; display: flex; align-items: center; gap: 9px; min-height: 44px; width: 100%; border: 0; border-radius: 6px;
   padding: 10px; background: transparent; text-align: left; color: var(--hint); font: inherit; font-size: 13px;
   line-height: 1.5; cursor: pointer; overflow-wrap: anywhere; transition: color 160ms ease, background 160ms ease; }
-.lwy-nav button:hover { color: var(--ink); background: var(--rose-soft); }
-.lwy-nav button.on { background: var(--rose-soft); color: var(--rose-strong); font-weight: 600; }
+.lwy-nav button:hover { color: var(--ink); background: var(--accent-soft); }
+.lwy-nav button.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
 .lwy-nav button.on::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px;
-  width: 3px; background: var(--rose-strong); border-radius: 2px; }
-.lwy button:focus-visible, .lwy select:focus-visible { outline: 2px solid var(--rose-strong); outline-offset: 3px; }
+  width: 3px; background: var(--accent-strong); border-radius: 2px; }
+.lwy button:focus-visible, .lwy select:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
 .lwy-sidebar-foot { display: grid; gap: 6px; margin-top: auto; padding: 16px 6px 0;
   border-top: 1px solid var(--line); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .lwy-sidebar-foot strong { font-weight: 600; }
-.lwy-workspace { min-width: 0; min-height: 0; overflow: auto; padding: 32px 36px 40px;
+.lwy-workspace { min-width: 0; min-height: 0; overflow: auto; padding: 28px 32px 36px;
   scrollbar-gutter: stable; }
 .lwy-head { display: flex; justify-content: space-between; align-items: center; gap: 16px;
   flex-wrap: wrap; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
@@ -192,7 +209,8 @@ html, body { margin: 0; }
 .lwy-scope select { max-width: 100%; width: 180px; min-height: 38px; padding: 6px 10px; border: 1px solid var(--line);
   border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; }
 .lwy-notices { display: grid; gap: 12px; margin-bottom: 20px; }
-.lwy-page-layout { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 28px; align-items: start; min-height: 100%; }
+.lwy-page-layout { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 28px; align-items: start;
+  max-width: 1100px; margin: 0 auto; }
 .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(170px, 27%, 220px); }
 .lwy-page-layout.is-overview { align-content: start; }
 .lwy-page-content { min-width: 0; }
@@ -210,27 +228,27 @@ html, body { margin: 0; }
 .lwy-hero { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; padding: 12px 0 8px; }
 .lwy-ring { --p: 0; width: 148px; height: 148px; flex: none; position: relative; }
 .lwy-ring-fill { position: absolute; inset: 0; border-radius: 50%;
-  background: conic-gradient(var(--rose) calc(var(--p) * 1%), var(--rose-soft) 0);
+  background: conic-gradient(var(--accent) calc(var(--p) * 1%), var(--accent-soft) 0);
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 8px), #000 calc(100% - 7px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 8px), #000 calc(100% - 7px)); }
 .lwy-ring-in { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 2px; }
 .lwy-num { font-size: 38px; font-weight: 700; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; }
-.lwy-heart { color: var(--rose); font-size: 14px; animation: lwy-beat 1.6s ease-in-out infinite; }
+.lwy-heart { color: var(--accent); font-size: 14px; animation: lwy-beat 1.6s ease-in-out infinite; }
 .lwy-stage { display: grid; gap: 8px; min-width: 0; flex: 1 1 150px; overflow-wrap: anywhere; }
-.lwy-stage-name { font-size: 26px; font-weight: 700; color: var(--rose-strong); }
+.lwy-stage-name { font-size: 26px; font-weight: 700; color: var(--accent-strong); }
 .lwy-hint { color: var(--hint); font-size: 13px; line-height: 1.6; }
 .lwy-nick { color: var(--ink); font-size: 13px; }
-.lwy-nick b { color: var(--rose); font-weight: 600; }
+.lwy-nick b { color: var(--accent-strong); font-weight: 600; }
 .lwy-banner { display: flex; gap: 8px; align-items: center; margin-top: 20px; padding: 10px 14px; border-radius: 6px;
-  background: var(--rose-soft); color: var(--rose); font-size: 13px; font-weight: 600; }
+  background: var(--accent-soft); color: var(--accent-strong); font-size: 13px; font-weight: 600; }
 .lwy-track { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: relative; margin-top: 20px; }
 .lwy-track::before { content: ""; position: absolute; left: 10%; right: 10%; top: 6px; height: 2px; background: var(--line); }
 .lwy-step { display: grid; justify-items: center; gap: 6px; position: relative; min-width: 0; font-size: 12px; color: var(--hint); }
 .lwy-step span { max-width: 100%; overflow-wrap: anywhere; text-align: center; }
 .lwy-step i { width: 14px; height: 14px; border-radius: 50%; background: var(--bg); border: 2px solid var(--line); }
-.lwy-step.done i { background: var(--rose); border-color: var(--rose); }
-.lwy-step.now i { box-shadow: 0 0 0 4px var(--rose-soft); }
-.lwy-step.now { color: var(--rose); font-weight: 600; }
+.lwy-step.done i { background: var(--accent); border-color: var(--accent); }
+.lwy-step.now i { box-shadow: 0 0 0 4px var(--accent-soft); }
+.lwy-step.now { color: var(--accent-strong); font-weight: 600; }
 .lwy-today { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--hint); margin-top: 24px; }
 .lwy-today b { color: var(--ink); font-weight: 600; }
 .lwy-h { margin: 0 0 16px; font-size: 15px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
@@ -239,26 +257,26 @@ html, body { margin: 0; }
   border-bottom: 1px dashed var(--line); font-size: 13px; }
 .lwy-row:last-child, .lwy-ev:last-child { border-bottom: none; }
 .lwy-d { font-weight: 700; font-variant-numeric: tabular-nums; }
-.lwy-d.up { color: var(--rose); } .lwy-d.down { color: #7c93b3; } .lwy-d.zero { color: var(--hint); }
+.lwy-d.up { color: var(--gain); } .lwy-d.down { color: var(--loss); } .lwy-d.zero { color: var(--hint); }
 .lwy-why { color: var(--ink); overflow-wrap: anywhere; line-height: 1.6; }
-.lwy-when { color: var(--hint); font-size: 12px; }
+.lwy-when { color: var(--hint); font-size: 12px; white-space: nowrap; }
 .lwy-empty { color: var(--hint); font-size: 13px; padding: 10px 0; margin: 0; }
 .lwy-days { display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-end; }
 .lwy-days-item { display: grid; gap: 4px; }
-.lwy-days-num { font-size: 34px; font-weight: 700; line-height: 1; color: var(--rose); font-variant-numeric: tabular-nums; }
+.lwy-days-num { font-size: 34px; font-weight: 700; line-height: 1; color: var(--accent-strong); font-variant-numeric: tabular-nums; }
 .lwy-days-num small { font-size: 13px; font-weight: 500; color: var(--hint); margin-left: 4px; }
 .lwy-marks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .lwy-mark { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; flex-wrap: wrap;
-  background: var(--rose-soft); font-size: 12px; color: var(--hint); }
+  background: var(--accent-soft); font-size: 12px; color: var(--hint); }
 .lwy-mark b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .lwy-ev { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 8px 2px;
   border-bottom: 1px dashed var(--line); font-size: 13px; }
 .lwy-ev-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lwy-ev-date { color: var(--hint); font-size: 12px; font-variant-numeric: tabular-nums; }
-.lwy-cd { color: var(--rose); font-weight: 600; font-size: 12px; font-variant-numeric: tabular-nums; }
-.lwy-x { border: 0; background: transparent; color: var(--hint); cursor: pointer; font-size: 16px; line-height: 1;
-  padding: 2px 6px; border-radius: 6px; }
-.lwy-x:hover { color: var(--rose); background: var(--rose-soft); }
+.lwy-cd { color: var(--accent-strong); font-weight: 600; font-size: 12px; font-variant-numeric: tabular-nums; }
+.lwy-x { display: grid; place-items: center; width: 36px; height: 36px; border: 0; background: transparent; color: var(--hint);
+  cursor: pointer; padding: 6px; border-radius: 6px; }
+.lwy-x:hover { color: var(--accent-strong); background: var(--accent-soft); }
 .lwy-set { display: grid; gap: 18px; }
 .lwy-set-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .lwy-nick-grid { display: grid; grid-template-columns: minmax(56px, auto) minmax(0, 1fr); gap: 18px 16px; align-items: center; }
@@ -266,13 +284,21 @@ html, body { margin: 0; }
 .lwy-nick-grid label span { font-size: 13px; color: var(--hint); overflow-wrap: anywhere; }
 .lwy-field { display: grid; gap: 6px; margin-bottom: 12px; font-size: 13px; color: var(--hint); }
 .lwy-note { color: var(--hint); font-size: 12px; line-height: 1.6; margin: 0; }
-.lwy-btns { display: flex; gap: 8px; flex-wrap: wrap; }
-.lwy-modal-num { font-size: 32px; font-weight: 700; color: var(--rose); text-align: center; }
-.lwy-wait { color: var(--rose); font-size: 13px; font-weight: 600; }
+.lwy-btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lwy-adjust-number .neko-input { font-size: 28px; font-weight: 700; text-align: center; color: var(--accent-strong); }
+.lwy-unsaved { color: var(--accent-strong); font-size: 12px; }
+.lwy-notice-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.lwy-notice-row .neko-alert { flex: 1 1 180px; }
+.lwy-portrait-preview { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.lwy-portrait-preview img { width: 52px; height: 72px; object-fit: contain; flex: none; }
+.lwy-portrait-preview span { overflow-wrap: anywhere; }
+.lwy-today .gain b { color: var(--gain); }
+.lwy-today .loss b { color: var(--loss); }
+.lwy-wait { color: var(--accent-strong); font-size: 13px; font-weight: 600; }
 .lwy-range { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .lwy-range button { border: 1px solid var(--line); background: transparent; color: var(--hint); border-radius: 4px;
   padding: 5px 9px; min-height: 30px; font-size: 12px; cursor: pointer; }
-.lwy-range button.on { background: var(--rose-soft); border-color: transparent; color: var(--rose); font-weight: 600; }
+.lwy-range button.on { background: var(--accent-soft); border-color: transparent; color: var(--accent-strong); font-weight: 600; }
 .lwy-plot { --axis: 44px; display: grid; grid-template-columns: var(--axis) minmax(0, 1fr); gap: 8px; }
 .lwy-axis { position: relative; font-size: 10px; color: var(--hint); }
 .lwy-axis span { position: absolute; right: 0; transform: translateY(50%); line-height: 1; white-space: nowrap; }
@@ -280,18 +306,19 @@ html, body { margin: 0; }
   border-bottom: 1px solid var(--line); }
 .lwy-chart.dense { gap: 0; }
 .lwy-bar { flex: 1 1 0; min-width: 0; border-radius: 3px 3px 0 0; opacity: 0.85; transition: opacity 120ms ease;
-  background: var(--rose); }
+  background: var(--accent); }
 .lwy-chart.dense .lwy-bar { border-radius: 0; }
 .lwy-bar:hover { opacity: 1; }
 .lwy-bar.empty { background: transparent; }
 .lwy-line { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--line); pointer-events: none; z-index: 1; }
 .lwy-chart-foot { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 8px;
   padding-left: calc(var(--axis, 44px) + 8px); font-size: 11px; color: var(--hint); }
-.lwy-quote { margin: 14px 0 0; padding: 10px 12px; border-left: 2px solid var(--rose); border-radius: 0 4px 4px 0;
-  background: var(--rose-soft); color: var(--ink); font-size: 13px; line-height: 1.6; }
+.lwy-quote { margin: 14px 0 0; padding: 10px 12px; border-left: 2px solid var(--accent); border-radius: 0 4px 4px 0;
+  background: var(--accent-soft); color: var(--ink); font-size: 13px; line-height: 1.6; }
 .lwy-rule { display: grid; gap: 6px; }
 .lwy-rule .lwy-note { padding-left: 44px; }
-.lwy-rule .lwy-status { color: var(--rose); }
+.lwy-rule .lwy-status { color: var(--accent-strong); }
+.lwy-rule .lwy-status.warning { color: var(--text); border-left: 2px solid var(--warning); }
 .is-overview .lwy-card { padding-bottom: 0; }
 .lwy-overview-footer { grid-column: 1 / -1; display: grid; grid-template-columns: inherit; column-gap: inherit;
   min-width: 0; margin-top: 24px; padding: 28px 0 26px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -299,16 +326,32 @@ html, body { margin: 0; }
   align-items: start; }
 .lwy-summary-item { display: grid; gap: 8px; min-width: 0; }
 .lwy-summary-value { color: var(--ink); font-size: 20px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
-@media (min-width: 701px) {
-  .lwy-hero, .lwy-summary { display: grid; grid-template-columns: minmax(148px, 1fr) minmax(140px, min(42%, 240px));
-    column-gap: 24px; }
-}
 .lwy-portrait-settings { display: grid; gap: 14px; }
-.lwy-portrait-modes { display: flex; gap: 4px; flex-wrap: wrap; }
-.lwy-portrait-modes button { border: 1px solid var(--line); border-radius: 5px; background: transparent;
+.lwy-segmented { display: flex; gap: 4px; flex-wrap: wrap; }
+.lwy-segmented button { border: 1px solid var(--line); border-radius: 5px; background: transparent;
   color: var(--hint); padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; }
-.lwy-portrait-modes button[aria-pressed="true"] { background: var(--rose-soft); border-color: var(--rose-line); color: var(--rose-strong); }
-.lwy-portrait-modes button:disabled { opacity: 0.5; cursor: not-allowed; }
+.lwy-segmented button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-strong); }
+.lwy-segmented button:disabled { opacity: 0.5; cursor: not-allowed; }
+.lwy-appearance { display: grid; gap: 18px; }
+.lwy-appearance .lwy-card-head { margin-bottom: 0; }
+.lwy-palette { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-width: 540px; }
+.lwy-color-choice { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 44px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.lwy-color-choice > span:not(.lwy-swatch):not(.lwy-icon) { flex: 1; min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.lwy-color-choice[aria-pressed="true"] { border-color: var(--accent-strong); background: var(--accent-soft); }
+.lwy-color-choice:disabled { opacity: .5; cursor: not-allowed; }
+.lwy-color-choice .lwy-icon { width: 16px; height: 16px; color: var(--accent-strong); }
+.lwy-swatch { width: 22px; height: 22px; flex: none; border-radius: 50%; border: 1px solid rgba(0, 0, 0, .15); }
+.lwy-theme-fields { display: flex; gap: 16px 24px; align-items: start; flex-wrap: wrap; }
+.lwy-theme-fields .lwy-field { margin: 0; min-width: 0; }
+.lwy-custom-color { display: flex; align-items: center; gap: 8px; }
+.lwy-custom-color input[type="color"] { width: 40px; height: 36px; padding: 3px; border: 1px solid var(--line);
+  border-radius: 5px; background: var(--card); cursor: pointer; flex: none; }
+.lwy-custom-color .neko-input { width: 116px; font-family: ui-monospace, monospace; }
+.lwy-field-error { color: var(--danger); font-size: 12px; }
+.lwy-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (max-width: 480px) { .lwy-palette { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .lwy-gallery { display: grid; gap: 16px; min-width: 0; letter-spacing: 0; color: var(--text); }
 .lwy-gallery-modal .neko-modal { background: var(--bg); border-radius: 8px; max-height: calc(100dvh - 40px);
   display: flex; flex-direction: column; }
@@ -324,9 +367,9 @@ html, body { margin: 0; }
 .lwy-portrait-choice { --thumb-height: 164px; display: grid; grid-template-rows: var(--thumb-height) auto; position: relative; min-width: 0;
   margin: 0; border: 1px solid var(--border); border-radius: 6px; padding: 8px;
   background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
-.lwy-portrait-choice.chosen { border-color: var(--rose-strong); background: var(--rose-soft); }
-.lwy-portrait-choice:focus-visible, .lwy-portrait-choice:focus-within { outline: 2px solid var(--rose-strong); outline-offset: 2px; }
-.lwy-portrait-choice input { position: absolute; top: 8px; right: 8px; z-index: 1; accent-color: var(--rose-strong); }
+.lwy-portrait-choice.chosen { border-color: var(--accent-strong); background: var(--accent-soft); }
+.lwy-portrait-choice:focus-visible, .lwy-portrait-choice:focus-within { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.lwy-portrait-choice input { position: absolute; top: 8px; right: 8px; z-index: 1; accent-color: var(--accent-strong); }
 .lwy-portrait-thumb { position: relative; width: 100%; height: var(--thumb-height); display: grid; place-items: center;
   overflow: hidden; color: var(--muted); font-size: 12px; }
 .lwy-portrait-thumb img { position: absolute; inset: 0; display: block; width: 100%; height: var(--thumb-height);
@@ -344,18 +387,14 @@ html, body { margin: 0; }
   .lwy-gallery-filters { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 960px) {
-  .lwy { --sidebar-width: 128px; }
+  .lwy { --sidebar-width: 148px; }
   .lwy-sidebar { padding: 24px 12px 16px; }
   .lwy-workspace { padding: 24px; }
   .lwy-page-layout { column-gap: 20px; }
   .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(150px, 28%, 200px); }
   .lwy-art { height: 336px; }
 }
-@media (max-width: 700px) {
-  .lwy { --sidebar-width: 112px; }
-  .lwy-sidebar { gap: 24px; padding: 20px 10px 16px; }
-  .lwy-brand { font-size: 14px; }
-  .lwy-nav button { font-size: 13px; padding: 10px; }
+@media (max-width: 899px) {
   .lwy-workspace { padding: 20px; }
   .lwy-head { margin-bottom: 20px; padding-bottom: 20px; gap: 12px; }
   .lwy-title { font-size: 21px; }
@@ -371,14 +410,19 @@ html, body { margin: 0; }
   .has-art .lwy-overview-footer { grid-row: 4; }
   .lwy-sidebar-foot { padding: 12px 6px 0; }
 }
+@media (max-width: 700px) {
+  .lwy, .lwy.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
+  .lwy .lwy-sidebar { gap: 20px; padding: 20px 6px 16px; }
+  .lwy-sidebar-head { justify-content: center; }
+  .lwy-brand, .lwy-sidebar-toggle, .lwy-nav-label, .lwy-sidebar-foot { display: none; }
+  .lwy-brand-mark { display: flex; }
+  .lwy-nav button { justify-content: center; padding: 10px; }
+  .lwy-workspace { padding: 20px 16px; }
+}
 @media (max-width: 480px) {
-  .lwy { --sidebar-width: 100px; }
-  .lwy-workspace { padding: 20px 14px; }
-  .lwy-sidebar { padding-left: 7px; padding-right: 7px; }
-  .lwy-brand { font-size: 13px; }
-  .lwy-sidebar-head { gap: 4px; }
-  .lwy-nav button { padding: 10px 8px; font-size: 12px; }
-  .lwy-summary { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .lwy-workspace { padding: 18px 14px; }
+  .lwy-summary { gap: 16px; }
+  .lwy-summary-value { font-size: 16px; }
   .lwy-hero { gap: 16px; }
   .lwy-ring { width: 120px; height: 120px; }
   .lwy-num { font-size: 32px; }
@@ -394,6 +438,9 @@ html, body { margin: 0; }
   .lwy-scope select { width: 100%; }
   .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) 72px; column-gap: 10px; }
   .lwy-art { width: 72px; height: 124px; }
+}
+@media (max-width: 359px) {
+  .lwy-summary { grid-template-columns: minmax(0, 1fr); }
 }
 @keyframes lwy-beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.25); } 30% { transform: scale(1); } }
 @keyframes lwy-fade { from { opacity: 0; } to { opacity: 1; } }
@@ -412,7 +459,9 @@ function unwrap(value: any, key: string): any {
 function parseIsoDay(value: string): { y: number; m: number; d: number } | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "")
   if (!match) return null
-  return { y: Number(match[1]), m: Number(match[2]), d: Number(match[3]) }
+  const y = Number(match[1]), m = Number(match[2]), d = Number(match[3])
+  const date = new Date(Date.UTC(y, m - 1, d))
+  return date.getUTCFullYear() === y && date.getUTCMonth() + 1 === m && date.getUTCDate() === d ? { y, m, d } : null
 }
 
 function shiftIso(iso: string, days: number): string {
@@ -478,6 +527,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const limits = state.limits || { per_call: 5, daily_gain: 15, daily_loss: 30 }
   const anniversaries = Array.isArray(state.anniversaries) ? state.anniversaries : []
   const maxAnniversaries = limits.anniversaries || 20
+  const storedAppearance = normalizeAppearance(state.appearance)
+  const storedAppearanceKey = JSON.stringify(storedAppearance)
   const toast = useToast()
   const confirm = useConfirm()
 
@@ -486,9 +537,22 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const [selectedKey, setSelectedKey] = props.useLocalState<string>("lwy:scope", "")
   const [art, setArt] = useState<string>("")
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const [actionError, setActionError] = useState("")
+  const [refreshError, setRefreshError] = useState(false)
+  const [themeEdit, setThemeEdit] = useState<{ values: Appearance; base: Appearance } | null>(null)
+  const liveAppearance = themeEdit?.values || storedAppearance
+  const themeDirty = JSON.stringify(liveAppearance) !== JSON.stringify(themeEdit?.base || storedAppearance)
+  const [colorInput, setColorInput] = useState(storedAppearance.accent_color)
+  const colorInvalid = colorInput.length !== 7 || !/^#[0-9a-f]{6}$/i.test(colorInput)
+  useEffect(() => {
+    setThemeEdit(previous => previous && JSON.stringify(previous.values) !== JSON.stringify(previous.base) ? previous : null)
+  }, [storedAppearanceKey])
+  useEffect(() => { setColorInput(liveAppearance.accent_color) }, [liveAppearance.accent_color])
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(0)
-  const [nickDraft, setNickDraft] = useState<Record<string, string>>({})
+  const [draft, setDraft] = useState<number | "">(0)
+  const [dialogScope, setDialogScope] = useState("")
+  const [nickDrafts, setNickDrafts] = useState<Record<string, { values: Record<string, string>; base: Record<string, string> }>>({})
   const [metOpen, setMetOpen] = useState(false)
   const [metDraft, setMetDraft] = useState("")
   const [annOpen, setAnnOpen] = useState(false)
@@ -513,12 +577,25 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const [galleryRetry, setGalleryRetry] = useState(0)
   const [chosenId, setChosenId] = useState("")
   const [poolDraft, setPoolDraft] = useState<string[] | null>(null)
-  const closeGallery = useCallback(() => { if (!busy) setGallery("") }, [busy])
+  // Stable callbacks keep the host modal from refocusing on every keystroke.
+  const closeGallery = useCallback(() => { if (!busyRef.current) setGallery("") }, [])
+  const closeEditing = useCallback(() => { if (!busyRef.current) setEditing(false) }, [])
+  const closeMet = useCallback(() => { if (!busyRef.current) setMetOpen(false) }, [])
+  const closeAnn = useCallback(() => { if (!busyRef.current) setAnnOpen(false) }, [])
   const workspaceRef = useRef<HTMLElement | null>(null)
+  const dialogOpen = Boolean(gallery || editing || metOpen || annOpen)
+  useEffect(() => {
+    if (!dialogOpen) return
+    const trigger = document.activeElement as HTMLElement | null
+    return () => { if (trigger?.isConnected) trigger.focus({ preventScroll: true }) }
+  }, [dialogOpen])
 
   const fallback = scopes.find((s) => s.is_current) || scopes[0]
   const scope = scopes.find((s) => s.key === selectedKey) || fallback
   const activeSection: Section = SECTIONS.includes(section) ? section : "heart"
+  useEffect(() => {
+    if (scope && selectedKey !== scope.key) setSelectedKey(scope.key)
+  }, [scope?.key, selectedKey])
 
   const stageName = (key: string | null | undefined) => (key ? t(`stage.${key}`, { defaultValue: key }) : "")
   const monthDay = (m: number, d: number) => t("date.monthDay", { m, d, defaultValue: "{m}月{d}日" })
@@ -581,6 +658,11 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     return () => { alive = false }
   }, [prefsKey, artRetry])
   const artVersion = portraitMode === "legacy" ? legacyVersion : portrait?.version || ""
+  function handleArtError() {
+    delete artCache.current[artVersion]
+    setArt("")
+    setArtError(t("art.imageError", { defaultValue: "图片加载失败，请重试。" }))
+  }
   useEffect(() => {
     if (portraitMode === "off" || !artVersion) {
       setArt("")
@@ -590,10 +672,13 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     const cached = artCache.current[artVersion]
     if (cached) {
       setArt(cached)
+      setArtError("")
       setArtLoading(false)
       return
     }
     let alive = true
+    setArt("")
+    setArtError("")
     setArtLoading(true)
     const request = portraitMode === "legacy"
       ? api.call("get_decoration", { stage: artStage })
@@ -602,7 +687,10 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
       const payload = unwrap(res, "available")
       const url = payload.available && typeof payload.data_url === "string" ? payload.data_url : ""
       if (url) rememberImage(artCache.current, String(payload.version || artVersion), url, 6)
-      if (alive) setArt(url)
+      if (alive) {
+        setArt(url)
+        if (!url) setArtError(t("art.imageError", { defaultValue: "图片加载失败，请重试。" }))
+      }
     }).catch((error: any) => { if (alive) { setArt(""); setArtError(errorText(error)) } })
       .finally(() => { if (alive) setArtLoading(false) })
     return () => { alive = false }
@@ -648,26 +736,77 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     finally { if (request === portraitRequest.current) setArtChoosing(false) }
   }
 
-  // ---- nickname drafts follow the selected scope until the user edits them
+  // Preserve each character's edits across navigation and background refreshes.
   const savedNicknames = (scope && scope.nicknames) || {}
   const savedNickKey = scope ? `${scope.key}|${JSON.stringify(savedNicknames)}` : ""
+  const nickEntry = scope ? nickDrafts[scope.key] : undefined
+  const nickDraft = nickEntry?.values || savedNicknames
+  const nickBase = nickEntry?.base || savedNicknames
+  const nickDirty = stages.some(item => (nickDraft[item.key] || "").trim() !== (nickBase[item.key] || ""))
   useEffect(() => {
-    setNickDraft({ ...savedNicknames })
+    if (!scope) return
+    setNickDrafts(previous => {
+      const entry = previous[scope.key]
+      if (entry && stages.some(item => (entry.values[item.key] || "").trim() !== (entry.base[item.key] || ""))) return previous
+      return { ...previous, [scope.key]: { values: { ...savedNicknames }, base: { ...savedNicknames } } }
+    })
   }, [savedNickKey])
-  const nickDirty = stages.some((item) => (nickDraft[item.key] || "").trim() !== (savedNicknames[item.key] || ""))
+
+  function editNickname(key: string, value: string) {
+    if (!scope) return
+    setNickDrafts(previous => ({
+      ...previous, [scope.key]: {
+        base: previous[scope.key]?.base || { ...savedNicknames },
+        values: { ...(previous[scope.key]?.values || savedNicknames), [key]: value.slice(0, limits.nickname_chars || 12) },
+      },
+    }))
+  }
 
   async function run(actionId: string, args: Record<string, unknown>, success: string) {
+    if (busyRef.current) return false
+    busyRef.current = true
     setBusy(true)
+    setActionError("")
     try {
-      await api.call(actionId, args)
+      try {
+        await api.call(actionId, args, { userInitiated: true })
+      } catch (error: any) {
+        setActionError(errorText(error))
+        toast.error(errorText(error))
+        return false
+      }
       toast.success(success)
-      await api.refresh()
+      // A failed refresh must not turn an acknowledged save into a failed save.
+      try {
+        await api.refresh()
+        setRefreshError(false)
+      } catch { setRefreshError(true) }
       return true
-    } catch (error: any) {
-      toast.error(errorText(error))
-      return false
     } finally {
+      busyRef.current = false
       setBusy(false)
+    }
+  }
+
+  async function refreshPanel() {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try { await api.refresh(); setRefreshError(false); setActionError("") }
+    catch { setRefreshError(true) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+
+  function editAppearance(next: Appearance) {
+    setColorInput(next.accent_color)
+    setThemeEdit(previous => ({ values: next, base: previous?.base || storedAppearance }))
+  }
+
+  async function saveAppearance() {
+    if (colorInvalid) return
+    const next = { ...liveAppearance }
+    if (await run("set_appearance", next, t("toast.saved", { defaultValue: "已保存" }))) {
+      setThemeEdit({ values: next, base: next })
     }
   }
 
@@ -723,8 +862,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   }
 
   async function saveDraft() {
-    if (!scope) return
-    if (await run("set_affection", { scope: scope.key, value: draft }, t("toast.saved", { defaultValue: "已保存" }))) {
+    if (!dialogScope || draft === "" || !scopes.some(item => item.key === dialogScope)) return
+    if (await run("set_affection", { scope: dialogScope, value: draft }, t("toast.saved", { defaultValue: "已保存" }))) {
       setEditing(false)
     }
   }
@@ -733,12 +872,15 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     if (!scope) return
     const payload: Record<string, string> = {}
     for (const item of stages) payload[item.key] = (nickDraft[item.key] || "").trim()
-    await run("set_nicknames", { scope: scope.key, nicknames: payload }, t("toast.saved", { defaultValue: "已保存" }))
+    const key = scope.key
+    if (await run("set_nicknames", { scope: key, nicknames: payload }, t("toast.saved", { defaultValue: "已保存" }))) {
+      setNickDrafts(previous => ({ ...previous, [key]: { values: { ...payload }, base: { ...payload } } }))
+    }
   }
 
   async function saveFirstMet() {
-    if (!scope) return
-    if (await run("set_first_met", { scope: scope.key, date: metDraft }, t("toast.saved", { defaultValue: "已保存" }))) {
+    if (!dialogScope || !scopes.some(item => item.key === dialogScope)) return
+    if (await run("set_first_met", { scope: dialogScope, date: metDraft }, t("toast.saved", { defaultValue: "已保存" }))) {
       setMetOpen(false)
     }
   }
@@ -779,7 +921,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     return ""
   }
 
-  const hasArt = portraitMode !== "off" && Boolean(art)
+  const hasArt = activeSection === "heart" && portraitMode !== "off" && Boolean(art)
   const percent = scope ? Math.max(0, Math.min(100, scope.affection)) : 0
   const settings = state.settings || { require_confession: true, decay: false, auto_score: true, proactive_confession: false }
   const decayRules = state.decay_rules || { grace_days: 3, per_day: 1 }
@@ -789,6 +931,9 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     if (autoStatus.bus_ok === false) {
       return t("rules.autoNoBus", { defaultValue: "暂时读不到聊天内容，请确认 N.E.K.O 里的用户插件已开启。" })
     }
+    if (autoStatus.last_error && autoStatus.failed > 0) {
+      return t("rules.autoFailed", { failed: autoStatus.failed, defaultValue: "已有 {failed} 轮判断失败。" })
+    }
     if (autoStatus.scored > 0 && autoStatus.last_ts) {
       const scored = t("rules.autoScored", {
         n: autoStatus.scored,
@@ -796,12 +941,6 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         defaultValue: "已判断 {n} 轮对话，最近一次在{when}。",
       })
       return scored + autoModeText()
-    }
-    if (autoStatus.last_error && autoStatus.failed > 0) {
-      return t("rules.autoFailed", {
-        failed: autoStatus.failed,
-        defaultValue: "已有 {failed} 轮判断失败。",
-      })
     }
     return t("rules.autoIdle", { defaultValue: "开始聊天后，这里会显示判断了多少轮。" })
   }
@@ -871,9 +1010,9 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
       <section className="lwy-card">
         <div className="lwy-card-head">
           <h2 className="lwy-h">{t("trend.title", { defaultValue: "好感走势" })}</h2>
-          <div className="lwy-range">
+          <div className="lwy-range" role="group" aria-label={t("trend.title", { defaultValue: "好感走势" })}>
             {TREND_RANGES.map((n) => (
-              <button key={n} type="button" className={n === days ? "on" : ""} onClick={() => setTrendRange(n)}>
+              <button key={n} type="button" aria-pressed={n === days ? "true" : "false"} className={n === days ? "on" : ""} onClick={() => setTrendRange(n)}>
                 {t("trend.days", { n, defaultValue: "{n} 天" })}
               </button>
             ))}
@@ -885,7 +1024,11 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             <span key={item.key} style={{ bottom: `${item.min}%` }}>{stageName(item.key)}</span>
           ))}
         </div>
-        <div className={days > 90 ? "lwy-chart dense" : "lwy-chart"}>
+        <div className={days > 90 ? "lwy-chart dense" : "lwy-chart"} role="img"
+          aria-label={t("trend.summary", {
+            n: days, from: known[0] ?? "-", to: known[known.length - 1] ?? "-",
+            defaultValue: "最近 {n} 天，好感从 {from} 到 {to}",
+          })}>
           {stages.slice(1).map((item) => (
             <i key={item.key} className="lwy-line" style={{ bottom: `${item.min}%` }} />
           ))}
@@ -917,7 +1060,9 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
       <div className="lwy-sections">
         <section className="lwy-card">
           <div className="lwy-hero">
-            <div className="lwy-ring" style={{ "--p": String(percent) }}>
+            <div className="lwy-ring" style={{ "--p": String(percent) }} role="meter"
+              aria-label={t("common.affection", { defaultValue: "好感度" })}
+              aria-valuemin={0} aria-valuemax={100} aria-valuenow={current.affection}>
               <div className="lwy-ring-fill" />
               <div className="lwy-ring-in">
                 <span className="lwy-num">{current.affection}</span>
@@ -961,6 +1106,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             {stages.map((item, index) => (
               <div
                 key={item.key}
+                aria-current={index === current.stage_index ? "step" : undefined}
                 className={["lwy-step", index <= current.stage_index ? "done" : "", index === current.stage_index ? "now" : ""].join(" ")}
               >
                 <i />
@@ -970,8 +1116,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           </div>
 
           <div className="lwy-today">
-            <span>{t("today.gain", { defaultValue: "今日心动" })} <b>{current.gained_today ? `+${current.gained_today}` : "0"}</b> / {limits.daily_gain}</span>
-            <span>{t("today.loss", { defaultValue: "今日失落" })} <b>{current.lost_today ? `-${current.lost_today}` : "0"}</b> / {limits.daily_loss}</span>
+            <span className="gain">{t("today.gain", { defaultValue: "今日心动" })} <b>{current.gained_today ? `+${current.gained_today}` : "0"}</b> / {limits.daily_gain}</span>
+            <span className="loss">{t("today.loss", { defaultValue: "今日失落" })} <b>{current.lost_today ? `-${current.lost_today}` : "0"}</b> / {limits.daily_loss}</span>
             <span>{t("today.metDay", { n: current.met_day || 1, defaultValue: "相识第 {n} 天" })}</span>
           </div>
         </section>
@@ -1015,7 +1161,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                     {item.source === "confession" ? "♥" : item.delta > 0 ? `+${item.delta}` : String(item.delta)}
                   </span>
                   <span className="lwy-why">{historyText(item)}</span>
-                  <span className="lwy-when">{relativeTime(item.ts)}</span>
+                  <time className="lwy-when" dateTime={new Date(item.ts * 1000).toISOString()}
+                    title={new Date(item.ts * 1000).toLocaleString(props.locale)}>{relativeTime(item.ts)}</time>
                 </div>
               ))}
             </div>
@@ -1032,7 +1179,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         <section className="lwy-card">
           <div className="lwy-card-head">
             <h2 className="lwy-h">{t("dates.ours", { defaultValue: "我们的日子" })}</h2>
-            <Button tone="default" disabled={busy} onClick={() => { setMetDraft(current.first_met || state.today || ""); setMetOpen(true) }}>
+            <Button tone="default" disabled={busy} onClick={() => { setDialogScope(current.key); setMetDraft(current.first_met || state.today || ""); setMetOpen(true) }}>
+              <Icon name="Pencil" />
               {t("dates.editMet", { defaultValue: "修改相识日" })}
             </Button>
           </div>
@@ -1093,6 +1241,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               disabled={busy || anniversaries.length >= maxAnniversaries}
               onClick={() => { setAnnTitle(""); setAnnDate(state.today || ""); setAnnOpen(true) }}
             >
+              <Icon name="Plus" />
               {t("dates.add", { defaultValue: "添加" })}
             </Button>
           </div>
@@ -1109,9 +1258,10 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                     className="lwy-x"
                     disabled={busy}
                     title={t("dates.remove", { defaultValue: "删除" })}
+                    aria-label={t("dates.removeNamed", { name: item.title, defaultValue: "删除「{name}」" })}
                     onClick={() => { void removeAnniversary(item) }}
                   >
-                    ×
+                    <Icon name="Trash2" />
                   </button>
                 </div>
               ))}
@@ -1131,9 +1281,17 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         <section className="lwy-card">
           <div className="lwy-card-head">
             <h2 className="lwy-h">{t("nick.title", { defaultValue: "称呼" })}</h2>
-            <Button tone="primary" disabled={busy || !nickDirty} onClick={saveNicknames}>
-              {t("common.save", { defaultValue: "保存" })}
-            </Button>
+            <div className="lwy-btns">
+              {nickDirty ? <>
+                <span className="lwy-unsaved" role="status">{t("common.unsaved", { defaultValue: "尚未保存" })}</span>
+                <Button tone="default" disabled={busy} onClick={() => {
+                  if (scope) setNickDrafts(previous => ({ ...previous, [scope.key]: { values: { ...savedNicknames }, base: { ...savedNicknames } } }))
+                }}>{t("common.discard", { defaultValue: "撤销修改" })}</Button>
+              </> : null}
+              <Button tone="primary" disabled={busy || !nickDirty} onClick={saveNicknames}>
+                <Icon name="Save" />{busy ? t("common.saving", { defaultValue: "保存中…" }) : t("common.save", { defaultValue: "保存" })}
+              </Button>
+            </div>
           </div>
           <div className="lwy-nick-grid">
             {stages.map((item, index) => (
@@ -1143,7 +1301,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   value={nickDraft[item.key] || ""}
                   disabled={busy}
                   placeholder={inheritedNickname(index) || t("nick.placeholder", { defaultValue: "沿用人设里的称呼" })}
-                  onChange={(value: string) => setNickDraft({ ...nickDraft, [item.key]: value.slice(0, limits.nickname_chars || 12) })}
+                  onChange={(value: string) => editNickname(item.key, value)}
                 />
               </label>
             ))}
@@ -1159,14 +1317,86 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function renderSettings(current: Scope | undefined) {
     return (
       <div className="lwy-sections">
+        <section className="lwy-card lwy-appearance">
+          <div className="lwy-card-head">
+            <h2 className="lwy-h">{t("theme.title", { defaultValue: "外观" })}</h2>
+            <div className="lwy-btns">
+              {themeDirty || colorInvalid ? <>
+                <span className="lwy-unsaved" role="status">{t("common.unsaved", { defaultValue: "尚未保存" })}</span>
+                <Button tone="default" disabled={busy} onClick={() => {
+                  setThemeEdit(null); setColorInput(storedAppearance.accent_color)
+                }}>{t("common.discard", { defaultValue: "撤销修改" })}</Button>
+              </> : null}
+              <Button tone="primary" disabled={busy || !themeDirty || colorInvalid} onClick={saveAppearance}>
+                <Icon name="Save" />{busy ? t("common.saving", { defaultValue: "保存中…" }) : t("common.save", { defaultValue: "保存" })}
+              </Button>
+            </div>
+          </div>
+          <div className="lwy-palette" role="group" aria-label={t("theme.palette", { defaultValue: "主题配色" })}>
+            {THEME_PRESETS.map(item => (
+              <button type="button" key={item.key} className="lwy-color-choice" disabled={busy}
+                aria-pressed={liveAppearance.accent_color === item.color ? "true" : "false"}
+                title={`${t(`theme.${item.key}`, { defaultValue: item.label })} ${item.color.toUpperCase()}`}
+                onClick={() => editAppearance({ ...liveAppearance, accent_color: item.color })}>
+                <span className="lwy-swatch" style={{ background: item.color }} aria-hidden="true" />
+                <span>{t(`theme.${item.key}`, { defaultValue: item.label })}</span>
+                <span style={{ width: "16px", height: "16px", flex: "none" }} aria-hidden="true">
+                  {liveAppearance.accent_color === item.color ? <Icon name="Check" /> : null}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="lwy-theme-fields">
+            <div className="lwy-field">
+              <span>{t("theme.custom", { defaultValue: "自选颜色" })}</span>
+              <div className="lwy-custom-color">
+                <input type="color" value={liveAppearance.accent_color} disabled={busy}
+                  aria-label={t("theme.custom", { defaultValue: "自选颜色" })}
+                  onInput={(event: Event) => editAppearance({ ...liveAppearance, accent_color: (event.target as HTMLInputElement).value })} />
+                <label>
+                  <span className="lwy-sr-only">{t("theme.hex", { defaultValue: "色号" })}</span>
+                  <Input value={colorInput} disabled={busy} invalid={colorInvalid}
+                    onChange={(value: string) => {
+                      setColorInput(value)
+                      if (value.length === 7 && /^#[0-9a-f]{6}$/i.test(value)) editAppearance({ ...liveAppearance, accent_color: value.toLowerCase() })
+                    }} />
+                </label>
+              </div>
+              {colorInvalid ? <span className="lwy-field-error" role="alert">
+                {t("theme.invalidColor", { defaultValue: "请输入 #RRGGBB 格式的色号" })}
+              </span> : null}
+            </div>
+            <div className="lwy-field">
+              <span>{t("theme.scheme", { defaultValue: "显示模式" })}</span>
+              <div className="lwy-segmented" role="group" aria-label={t("theme.scheme", { defaultValue: "显示模式" })}>
+                {(["system", "light", "dark"] as const).map(scheme => (
+                  <button type="button" key={scheme} disabled={busy}
+                    aria-pressed={liveAppearance.color_scheme === scheme ? "true" : "false"}
+                    onClick={() => editAppearance({ ...liveAppearance, color_scheme: scheme })}>
+                    {t(`theme.${scheme}`, { defaultValue: scheme === "system" ? "跟随系统" : scheme === "light" ? "浅色" : "深色" })}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="lwy-btns">
+            <Button tone="default" disabled={busy || (!themeDirty && storedAppearanceKey === JSON.stringify(DEFAULT_APPEARANCE) && !colorInvalid)}
+              onClick={() => editAppearance({ ...DEFAULT_APPEARANCE })}>
+              <Icon name="RotateCw" />{t("theme.restore", { defaultValue: "恢复默认" })}
+            </Button>
+          </div>
+        </section>
         {library ? (
           <section className="lwy-card lwy-portrait-settings">
             <h2 className="lwy-h">{t("art.title", { defaultValue: "立绘" })}</h2>
-            <div className="lwy-portrait-modes" role="group" aria-label={t("art.mode", { defaultValue: "立绘模式" })}>
+            <div className="lwy-segmented" role="group" aria-label={t("art.mode", { defaultValue: "立绘模式" })}>
               {(["fixed", "random", "off"] as const).map(mode => (
                 <button type="button" key={mode} aria-pressed={portraitMode === mode ? "true" : "false"}
                   disabled={busy || (mode !== "off" && !library.count)}
-                  onClick={() => { void savePortraitPrefs({ ...portraitPrefs, mode }) }}>
+                  onClick={() => {
+                    if (mode === "fixed" && !portraitPrefs.selected_id) openGallery("fixed")
+                    else void savePortraitPrefs({ ...portraitPrefs, mode })
+                  }}>
                   {t(`art.mode.${mode}`, { defaultValue: mode === "fixed" ? "固定" : mode === "random" ? "随机" : "关闭" })}
                 </button>
               ))}
@@ -1179,7 +1409,10 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             </div>
             {portraitMode === "fixed" || portraitMode === "random" ? (
               <div className="lwy-set-row">
-                <span className="lwy-hint">{portrait?.name || t("art.none", { defaultValue: "未选择立绘" })}</span>
+                <div className="lwy-portrait-preview">
+                  {art ? <img src={art} alt="" onError={handleArtError} /> : null}
+                  <span className="lwy-hint">{portrait?.name || t("art.none", { defaultValue: "未选择立绘" })}</span>
+                </div>
                 <div className="lwy-btns">
                   <Button tone="default" disabled={busy || !library.count} onClick={() => openGallery("fixed")}>
                     {t("art.browse", { defaultValue: "选择立绘" })}
@@ -1187,7 +1420,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   {portraitMode === "random" ? (
                     <button type="button" className="lwy-icon-button" disabled={busy || artLoading || artChoosing || library.pool_count < 2}
                       title={t("art.shuffle", { defaultValue: "换一张" })} aria-label={t("art.shuffle", { defaultValue: "换一张" })}
-                      onClick={shufflePortrait}>↻</button>
+                      onClick={shufflePortrait}><Icon name="RotateCw" /></button>
                   ) : null}
                 </div>
               </div>
@@ -1230,7 +1463,9 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   })
                 : t("rules.autoScoreOffNote", { defaultValue: "关闭后由角色自己调用工具调整好感，很多模型几乎不会调用。" })}
             </p>
-            {settings.auto_score !== false && autoStatusText() ? <p className="lwy-note lwy-status">{autoStatusText()}</p> : null}
+            {settings.auto_score !== false && autoStatusText() ? <p
+              className={autoStatus?.bus_ok === false || autoStatus?.last_error ? "lwy-note lwy-status warning" : "lwy-note lwy-status"}
+              role="status">{autoStatusText()}</p> : null}
           </div>
           <div className="lwy-rule">
             <Switch
@@ -1283,6 +1518,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               onChange={(value: boolean) => togglePerCharacter(value)}
             />
             <Button tone="default" disabled={busy} onClick={async () => { await run("sync_characters", {}, t("toast.synced", { defaultValue: "已刷新" })) }}>
+              <Icon name="RotateCw" />
               {t("settings.sync", { defaultValue: "刷新角色" })}
             </Button>
           </div>
@@ -1297,7 +1533,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   : t("settings.editingShared", { defaultValue: "正在管理：共用好感" })}
               </span>
               <div className="lwy-btns">
-                <Button tone="default" disabled={busy} onClick={() => { setDraft(current.affection); setEditing(true) }}>
+                <Button tone="default" disabled={busy} onClick={() => { setDialogScope(current.key); setDraft(current.affection); setEditing(true) }}>
+                  <Icon name="Pencil" />
                   {t("settings.adjust", { defaultValue: "调整" })}
                 </Button>
                 <Button tone="danger" disabled={busy} onClick={reset}>
@@ -1313,10 +1550,11 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   return (
     <div className={sidebarCollapsed ? "lwy sidebar-collapsed" : "lwy"}>
-      <style>{STYLE}</style>
+      <style>{STYLE + themeCss(liveAppearance)}</style>
 
       <aside className="lwy-sidebar">
         <div className="lwy-sidebar-head">
+          <span className="lwy-brand-mark" aria-hidden="true"><Icon name="Heart" /></span>
           <h2 className="lwy-brand" hidden={sidebarCollapsed}>{t("panel.title", { defaultValue: "与你相恋" })}</h2>
           <button
             type="button"
@@ -1331,10 +1569,10 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               : t("nav.collapse", { defaultValue: "收起侧栏" })}
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
           >
-            <span className="lwy-sidebar-chevron" aria-hidden="true" />
+            <Icon name={sidebarCollapsed ? "PanelLeftOpen" : "PanelLeftClose"} />
           </button>
         </div>
-        <div id="lwy-sidebar-navigation" className="lwy-sidebar-body" hidden={sidebarCollapsed}>
+        <div id="lwy-sidebar-navigation" className="lwy-sidebar-body">
           <nav className="lwy-nav" aria-label={t("nav.label", { defaultValue: "插件页面" })}>
             {SECTIONS.map((key) => (
               <button
@@ -1342,10 +1580,13 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                 type="button"
                 aria-current={key === activeSection ? "page" : undefined}
                 aria-controls="lwy-page"
+                aria-label={sectionLabel(key)}
+                title={sectionLabel(key)}
                 className={key === activeSection ? "on" : ""}
                 onClick={() => changeSection(key)}
               >
-                {sectionLabel(key)}
+                <Icon name={SECTION_ICONS[key]} />
+                <span className="lwy-nav-label">{sectionLabel(key)}</span>
               </button>
             ))}
           </nav>
@@ -1360,7 +1601,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         </div>
       </aside>
 
-      <main className="lwy-workspace" ref={workspaceRef} aria-busy={artLoading || artChoosing ? "true" : "false"}>
+      <main className="lwy-workspace" ref={workspaceRef} aria-busy={busy ? "true" : "false"}>
         <div className={["lwy-page-layout", hasArt ? "has-art" : "", activeSection === "heart" && scope ? "is-overview" : ""].join(" ")}>
           <div className="lwy-page-content">
             <header className="lwy-head">
@@ -1388,8 +1629,17 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               ) : null}
             </header>
 
-            {state.host_online === false || tooLarge.length ? (
+            {state.host_online === false || tooLarge.length || refreshError || actionError ? (
               <div className="lwy-notices">
+                {actionError ? <div role="alert"><Alert tone="danger" message={actionError} /></div> : null}
+                {refreshError ? (
+                  <div className="lwy-notice-row" role="status">
+                    <Alert tone="warning" message={t("alert.refreshFailed", { defaultValue: "暂时无法刷新面板，当前显示的可能是旧数据。请重试。" })} />
+                    <Button tone="default" disabled={busy} onClick={refreshPanel}>
+                      <Icon name="RotateCw" />{t("common.refresh", { defaultValue: "刷新" })}
+                    </Button>
+                  </div>
+                ) : null}
                 {state.host_online === false ? (
                   <Alert tone="warning" message={t("alert.offline", { defaultValue: "暂时连不上 N.E.K.O 主程序，角色列表可能不是最新的。" })} />
                 ) : null}
@@ -1405,6 +1655,9 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               ) : !scope ? (
                 <section className="lwy-card">
                   <p className="lwy-empty">{t("empty.noCharacters", { defaultValue: "还没有读到角色，稍等片刻或点击设置里的刷新。" })}</p>
+                  <Button tone="default" disabled={busy} onClick={async () => { await run("sync_characters", {}, t("toast.synced", { defaultValue: "已刷新" })) }}>
+                    <Icon name="RotateCw" />{t("settings.sync", { defaultValue: "刷新角色" })}
+                  </Button>
                 </section>
               ) : activeSection === "dates" ? (
                 renderDates(scope)
@@ -1419,10 +1672,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           </div>
           {hasArt ? (
             <aside className="lwy-art" aria-hidden="true">
-              <img key={artVersion} src={art} alt="" onError={() => {
-                setArt("")
-                setArtError(t("art.imageError", { defaultValue: "图片加载失败，请重试。" }))
-              }} />
+              <img key={artVersion} src={art} alt="" onError={handleArtError} />
             </aside>
           ) : null}
           {activeSection === "heart" && scope ? renderOverviewDates(scope) : null}
@@ -1430,11 +1680,12 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
       </main>
 
       <Modal open={Boolean(gallery)} size="lg" className="lwy-gallery-modal"
+        closeOnEscape={!busy} closeOnBackdrop={!busy}
         title={gallery === "pool" ? t("art.editPool", { defaultValue: "选择随机范围" }) : t("art.browse", { defaultValue: "选择立绘" })}
         onClose={closeGallery}
         footer={
           <div className="lwy-btns">
-            <Button tone="default" disabled={busy} onClick={() => { setGallery("") }}>{t("common.cancel", { defaultValue: "取消" })}</Button>
+            <Button tone="default" disabled={busy} onClick={closeGallery}>{t("common.cancel", { defaultValue: "取消" })}</Button>
             <Button tone="primary" disabled={busy || (gallery === "fixed" && !chosenId)}
               onClick={async () => {
                 const next = gallery === "fixed"
@@ -1442,7 +1693,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   : { ...portraitPrefs, pool_ids: poolDraft }
                 if (await savePortraitPrefs(next)) setGallery("")
               }}>
-              {gallery === "fixed" ? t("art.useImage", { defaultValue: "使用此立绘" }) : t("common.save", { defaultValue: "保存" })}
+              <Icon name="Check" />
+              {busy ? t("common.saving", { defaultValue: "保存中…" }) : gallery === "fixed" ? t("art.useImage", { defaultValue: "使用此立绘" }) : t("common.save", { defaultValue: "保存" })}
             </Button>
           </div>
         }>
@@ -1450,14 +1702,14 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           <div className="lwy-gallery-filters">
             <label>
               <span>{t("art.collection", { defaultValue: "图集" })}</span>
-              <Select value={galleryCollection} options={[
+              <Select value={galleryCollection} disabled={busy} options={[
                 { value: "", label: t("art.allCollections", { defaultValue: "全部图集" }) },
                 ...(library?.collections || []).map(name => ({ value: name, label: name })),
               ]} onChange={(value: string) => { setGalleryCollection(value); setGalleryPage(0) }} />
             </label>
             <label>
               <span>{t("art.search", { defaultValue: "搜索" })}</span>
-              <Input value={gallerySearch} placeholder={t("art.searchPlaceholder", { defaultValue: "名称或图集" })}
+              <Input value={gallerySearch} disabled={busy} placeholder={t("art.searchPlaceholder", { defaultValue: "名称或图集" })}
                 onChange={(value: string) => { setGallerySearch(value.slice(0, 120)); setGalleryPage(0) }} />
             </label>
           </div>
@@ -1504,12 +1756,12 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               <span className="lwy-note">{t("art.pageCount", { page: galleryData.page + 1, pages: galleryData.pages, total: galleryData.total,
                 defaultValue: "第 {page} / {pages} 页 · 共 {total} 张" })}</span>
               <div className="lwy-btns">
-                <button type="button" className="lwy-icon-button" disabled={galleryData.page === 0}
+                <button type="button" className="lwy-icon-button" disabled={busy || galleryData.page === 0}
                   title={t("art.previous", { defaultValue: "上一页" })} aria-label={t("art.previous", { defaultValue: "上一页" })}
-                  onClick={() => setGalleryPage(galleryData.page - 1)}>‹</button>
-                <button type="button" className="lwy-icon-button" disabled={galleryData.page + 1 >= galleryData.pages}
+                  onClick={() => setGalleryPage(galleryData.page - 1)}><Icon name="ChevronLeft" /></button>
+                <button type="button" className="lwy-icon-button" disabled={busy || galleryData.page + 1 >= galleryData.pages}
                   title={t("art.next", { defaultValue: "下一页" })} aria-label={t("art.next", { defaultValue: "下一页" })}
-                  onClick={() => setGalleryPage(galleryData.page + 1)}>›</button>
+                  onClick={() => setGalleryPage(galleryData.page + 1)}><Icon name="ChevronRight" /></button>
               </div>
             </div>
           ) : null}
@@ -1520,16 +1772,27 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         open={editing}
         size="sm"
         title={t("adjust.title", { defaultValue: "调整好感" })}
-        onClose={() => setEditing(false)}
+        onClose={closeEditing}
+        closeOnEscape={!busy} closeOnBackdrop={!busy}
         footer={
           <div className="lwy-btns">
-            <Button tone="default" onClick={() => { setEditing(false) }}>{t("common.cancel", { defaultValue: "取消" })}</Button>
-            <Button tone="primary" disabled={busy} onClick={saveDraft}>{t("common.save", { defaultValue: "保存" })}</Button>
+            <Button tone="default" disabled={busy} onClick={closeEditing}>{t("common.cancel", { defaultValue: "取消" })}</Button>
+            <Button tone="primary" disabled={busy || draft === "" || !scopes.some(item => item.key === dialogScope)} onClick={saveDraft}>
+              {busy ? t("common.saving", { defaultValue: "保存中…" }) : t("common.save", { defaultValue: "保存" })}
+            </Button>
           </div>
         }
       >
-        <div className="lwy-modal-num">{draft}</div>
-        <Slider value={draft} min={0} max={100} step={1} onChange={(value: number) => setDraft(value)} />
+        <label className="lwy-field lwy-adjust-number">
+          <span>{t("common.affection", { defaultValue: "好感度" })} · {scopes.find(item => item.key === dialogScope)?.label || t("scope.shared", { defaultValue: "共用" })}</span>
+          <NumberInput value={draft} min={0} max={100} step={1} disabled={busy}
+            onChange={(value: number | string) => setDraft(value === "" ? "" : Math.max(0, Math.min(100, Math.round(Number(value) || 0))))} />
+        </label>
+        <label className="lwy-field">
+          <span>{t("settings.adjust", { defaultValue: "调整" })}</span>
+          <Slider value={draft === "" ? 0 : draft} min={0} max={100} step={1} disabled={busy}
+            showValue={false} onChange={(value: number) => setDraft(value)} />
+        </label>
         <p className="lwy-note">{t("adjust.note", { defaultValue: "手动调整不受每日上限限制，阶段会直接按新数值计算。" })}</p>
       </Modal>
 
@@ -1537,20 +1800,22 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         open={metOpen}
         size="sm"
         title={t("dates.editMet", { defaultValue: "修改相识日" })}
-        onClose={() => setMetOpen(false)}
+        onClose={closeMet}
+        closeOnEscape={!busy} closeOnBackdrop={!busy}
         footer={
           <div className="lwy-btns">
-            <Button tone="default" onClick={() => { setMetOpen(false) }}>{t("common.cancel", { defaultValue: "取消" })}</Button>
-            <Button tone="primary" disabled={busy || !parseIsoDay(metDraft)} onClick={saveFirstMet}>
-              {t("common.save", { defaultValue: "保存" })}
+            <Button tone="default" disabled={busy} onClick={closeMet}>{t("common.cancel", { defaultValue: "取消" })}</Button>
+            <Button tone="primary" disabled={busy || !parseIsoDay(metDraft) || metDraft < "1970-01-01" || Boolean(state.today && metDraft > state.today) || !scopes.some(item => item.key === dialogScope)} onClick={saveFirstMet}>
+              {busy ? t("common.saving", { defaultValue: "保存中…" }) : t("common.save", { defaultValue: "保存" })}
             </Button>
           </div>
         }
       >
-        <div className="lwy-field">
+        <label className="lwy-field">
           <span>{t("dates.metLabel", { defaultValue: "你们相识的日子" })}</span>
-          <Input type="date" value={metDraft} disabled={busy} onChange={(value: string) => setMetDraft(value)} />
-        </div>
+          <input className="neko-input" type="date" value={metDraft} min="1970-01-01" max={state.today} disabled={busy}
+            onInput={(event: Event) => setMetDraft((event.target as HTMLInputElement).value)} />
+        </label>
         <p className="lwy-note">{t("dates.metNote", { defaultValue: "相识日决定「相识第 N 天」和周年纪念，不影响好感。" })}</p>
       </Modal>
 
@@ -1558,17 +1823,18 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         open={annOpen}
         size="sm"
         title={t("dates.addTitle", { defaultValue: "添加纪念日" })}
-        onClose={() => setAnnOpen(false)}
+        onClose={closeAnn}
+        closeOnEscape={!busy} closeOnBackdrop={!busy}
         footer={
           <div className="lwy-btns">
-            <Button tone="default" onClick={() => { setAnnOpen(false) }}>{t("common.cancel", { defaultValue: "取消" })}</Button>
+            <Button tone="default" disabled={busy} onClick={closeAnn}>{t("common.cancel", { defaultValue: "取消" })}</Button>
             <Button tone="primary" disabled={busy || !annTitle.trim() || !parseIsoDay(annDate)} onClick={addAnniversary}>
-              {t("dates.add", { defaultValue: "添加" })}
+              {busy ? t("common.saving", { defaultValue: "保存中…" }) : t("dates.add", { defaultValue: "添加" })}
             </Button>
           </div>
         }
       >
-        <div className="lwy-field">
+        <label className="lwy-field">
           <span>{t("dates.titleLabel", { defaultValue: "名称" })}</span>
           <Input
             value={annTitle}
@@ -1576,11 +1842,11 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             placeholder={t("dates.titlePlaceholder", { defaultValue: "例如：我的生日" })}
             onChange={(value: string) => setAnnTitle(value.slice(0, limits.title_chars || 20))}
           />
-        </div>
-        <div className="lwy-field">
+        </label>
+        <label className="lwy-field">
           <span>{t("dates.dateLabel", { defaultValue: "日期" })}</span>
           <Input type="date" value={annDate} disabled={busy} onChange={(value: string) => setAnnDate(value)} />
-        </div>
+        </label>
         <p className="lwy-note">{t("dates.yearIgnored", { defaultValue: "每年重复，只看月和日。" })}</p>
       </Modal>
     </div>

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,6 +80,14 @@ def judge():
     return _load("_judge")
 
 
-@pytest.fixture(scope="session")
-def host():
-    return _load("_host")
+@pytest.fixture
+def module_clock():
+    """Keep fake clocks inside the tested modules, away from other threads."""
+    return SimpleNamespace(time=time.time, monotonic=time.monotonic)
+
+
+@pytest.fixture
+def host(monkeypatch, module_clock):
+    module = _load("_host")
+    monkeypatch.setattr(module, "time", module_clock)
+    return module

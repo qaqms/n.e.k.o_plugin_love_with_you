@@ -22,7 +22,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def runtime(monkeypatch):
+def runtime(monkeypatch, module_clock):
     sdk = ModuleType("plugin.sdk.plugin")
 
     class Base:
@@ -66,6 +66,8 @@ def runtime(monkeypatch):
     monkeypatch.setitem(sys.modules, package_name, module)
     try:
         spec.loader.exec_module(module)
+        for target in (module, module.engine, module.host):
+            monkeypatch.setattr(target, "time", module_clock)
         yield module
     finally:
         for name in tuple(sys.modules):
@@ -116,6 +118,13 @@ def prepare_gift(plugin):
 def income_turn(plugin, runtime, timestamp, text, character="YUI"):
     plugin._on_message(runtime.conv.Message(timestamp, "user", character, text))
     plugin._on_message(runtime.conv.Message(timestamp + 1, "reply", character, "received"))
+
+
+def test_runtime_fake_clock_is_shared_only_by_the_tested_modules(runtime, monkeypatch):
+    real_time = sys.modules["time"].time
+    monkeypatch.setattr(runtime.time, "time", lambda: 123.0)
+    assert runtime.time.time() == runtime.engine.time.time() == runtime.host.time.time() == 123.0
+    assert sys.modules["time"].time is real_time
 
 
 def test_income_works_without_model_or_auto_score_and_survives_replay(plugin, runtime, monkeypatch):

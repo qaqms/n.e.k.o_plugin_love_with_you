@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 NOW = datetime(2026, 11, 9, 12).timestamp()
+
+
+def test_history_fake_clock_leaves_stdlib_time_untouched(host, monkeypatch):
+    real_time, real_monotonic = time.time, time.monotonic
+    monkeypatch.setattr(host.time, "time", lambda: NOW)
+    monkeypatch.setattr(host.time, "monotonic", lambda: 7.0)
+    assert host.time.time() == NOW and host.time.monotonic() == 7.0
+    assert time.time is real_time and time.monotonic is real_monotonic
 
 
 def message(day, *, kind="human", source=None):

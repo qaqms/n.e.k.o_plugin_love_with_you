@@ -10,7 +10,7 @@ all host characters. Users choose Fixed, Random or Off under Settings.
     {
       "id": "unique-stable-id",
       "name": "Display name",
-      "collection": "Collection name",
+      "collection": "Game name",
       "file": "unique-stable-id/display.webp",
       "thumbnail": "unique-stable-id/thumb.webp"
     }
@@ -33,11 +33,29 @@ Preferences are saved in the SDK-assigned data directory as `portraits.json`,
 separately from relationship data. `pool_ids: null` means all current and
 future images; an empty list means no random candidates.
 
-The current test collection contains 18 images prepared from the user-supplied
-`千恋万花_立绘` folder, including its costume subdirectory. The optional
+The bundled library contains 64 images in 8 game categories: 18 from the
+user-supplied `千恋万花_立绘` folder and 46 retained from `精选立绘_Key与Qruppo`.
+All `ぬきたし (Qruppo)` images and selected swimsuit/underwear variants from
+`天使☆嚣嚣_RE-BOOT` are excluded by `tools/portrait_exclusions.json`.
+Existing IDs are preserved when changing categories. The optional
 `source_file` field records the original relative filename. Original PNGs
 remain outside this plugin. This provenance does not assign a license to the
 artwork; the plugin's source-code license does not cover these images.
+
+## Custom Imports
+
+The panel accepts batches of up to 24 PNG, JPEG or WebP images, with a 32 MiB
+and 40 megapixel limit per source image. It trims transparent margins and
+creates bounded WebP display images and thumbnails before confirmation.
+The runtime validates the WebP container, frame dimensions and byte limits.
+Original files are not stored. Runtime imports require no Pillow dependency.
+
+User images live in `custom_portraits/` under the SDK data directory, outside
+the plugin package. Metadata is stored with display preferences in the atomic
+`portraits.json` file. Content-derived IDs make retries and identical imports
+idempotent, while preserving any existing custom names and categories.
+Users can rename, move or delete imported images. Bundled images are read-only.
+Deleting an import also removes its fixed selection and random pool membership.
 
 ## Placement
 

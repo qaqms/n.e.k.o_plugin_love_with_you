@@ -49,6 +49,11 @@ def portraits():
 
 
 @pytest.fixture(scope="session")
+def shop():
+    return _load("_shop")
+
+
+@pytest.fixture(scope="session")
 def cal():
     return _load("_calendar")
 
@@ -71,3 +76,8 @@ def prompts():
 @pytest.fixture(scope="session")
 def judge():
     return _load("_judge")
+
+
+@pytest.fixture(scope="session")
+def host():
+    return _load("_host")

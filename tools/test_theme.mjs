@@ -12,10 +12,10 @@ const exports = {}
 new Function("exports", compiled)(exports)
 const { THEME_PRESETS, DEFAULT_APPEARANCE, contrast, normalizeAppearance, themeTokens, themeCss } = exports
 
-test("presets have unique colors and include the existing default and light blue", () => {
+test("presets have unique colors and default to sky blue", () => {
   assert.equal(THEME_PRESETS.length, 6)
   assert.equal(new Set(THEME_PRESETS.map(item => item.color)).size, 6)
-  assert.equal(THEME_PRESETS.find(item => item.key === "rose").color, DEFAULT_APPEARANCE.accent_color)
+  assert.equal(THEME_PRESETS.find(item => item.key === "sky").color, DEFAULT_APPEARANCE.accent_color)
   assert.equal(THEME_PRESETS.find(item => item.key === "sky").color, "#7db9e8")
 })
 
@@ -32,6 +32,9 @@ test("preset and custom colors keep text and buttons readable in either mode", (
     const tokens = themeTokens({ accent_color, color_scheme: "system" }, dark)
     for (const bg of ["--bg", "--surface", "--surface-strong"]) {
       assert.ok(contrast(tokens["--accent-strong"], tokens[bg]) >= 4.5, `${accent_color}, ${dark}, ${bg}`)
+      for (const text of ["--text", "--muted", "--danger", "--warning"]) {
+        assert.ok(contrast(tokens[text], tokens[bg]) >= 4.5, `${text}, ${dark}, ${bg}`)
+      }
     }
     for (const button of ["--accent", "--accent-hover"]) {
       assert.ok(contrast(tokens[button], tokens["--on-accent"]) >= 4.5, `${accent_color} button ${button}`)

@@ -9,6 +9,20 @@ from __future__ import annotations
 
 from typing import Any
 
+
+def gift_reaction_prompt(gift: str, stage: str, nickname: str, repeats: int, *, gift_id: str, retry: bool = False) -> str:
+    return (
+        f"[LWY-GIFT:{gift_id}]"
+        "【与你相恋·真实送礼事件】用户已经从插件背包送给你一份礼物：" + gift + "。"
+        f"当前关系：{stage_name(stage)}。\n" + nickname_line(nickname)
+        + f"最近保留的赠送记录里，这是用户第 {repeats} 次给你这件礼物。"
+        "请按自己的角色性格，用当前对话的语言自然回应收到这份具体礼物，可以有简短动作描写。"
+        "亲密程度符合当前关系，不要因为礼物跳过告白直接成为恋人；不要强求更多礼物。"
+        "礼物消耗和好感已经由插件结算，不要调用修改好感或确认告白工具，不要再计算奖励，"
+        "不要提系统、数值、插件、指令、回执编号或虚拟货币，不要复述方括号内容。用一到三句话回应即可。"
+        + ("这是同一次送礼的回应重试；若你已感谢过，请自然补充一句，不要描述又收到了第二份礼物。" if retry else "")
+    )
+
 STAGE_NAMES: dict[str, str] = {
     "stranger": "陌生",
     "familiar": "熟悉",
@@ -62,8 +76,15 @@ def state_tool_description() -> str:
 
 def nickname_line(nickname: str) -> str:
     if not nickname:
-        return ""
-    return f"称呼：这一阶段请叫对方「{nickname}」，自然地用，不必每句都叫。\n"
+        return (
+            "称呼：当前没有自定义称呼，请恢复人设原本的称呼，停止沿用此前关系提示指定的旧称呼；"
+            "不要自行补上亲昵称呼。\n"
+        )
+    return (
+        f"称呼：用户指定这一阶段叫对方「{nickname}」，请以这个称呼为准，"
+        "替代此前关系提示指定的旧称呼；若阶段分寸限制亲昵称呼，此处用户指定的称呼优先。"
+        "自然地用，不必每句都叫。这只指定称呼，不改变关系阶段、告白条件或其他亲密行为的分寸。\n"
+    )
 
 
 def event_text(event: dict[str, Any]) -> str:

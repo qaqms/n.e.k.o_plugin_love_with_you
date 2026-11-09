@@ -1,6 +1,6 @@
 export type Appearance = { accent_color: string; color_scheme: "system" | "light" | "dark" }
 
-export const DEFAULT_APPEARANCE: Appearance = { accent_color: "#c74768", color_scheme: "system" }
+export const DEFAULT_APPEARANCE: Appearance = { accent_color: "#7db9e8", color_scheme: "system" }
 export const THEME_PRESETS = [
   { key: "rose", color: "#c74768", label: "樱粉" },
   { key: "sky", color: "#7db9e8", label: "晴空蓝" },
@@ -62,10 +62,13 @@ export function themeTokens(input: Appearance, dark: boolean): Record<string, st
     "--accent": accent, "--accent-strong": text, "--accent-hover": hover,
     "--accent-soft": `rgba(${rgb(color).join(",")},${dark ? ".14" : ".1"})`,
     "--accent-line": text, "--on-accent": onAccent,
+    "--control-hover": `rgba(${rgb(color).join(",")},${dark ? ".12" : ".07"})`,
+    "--control-press": `rgba(${rgb(color).join(",")},${dark ? ".24" : ".17"})`,
     "--primary": accent, "--bg": bg, "--surface": surface, "--surface-strong": dark ? "#25282f" : "#ffffff",
     "--text": dark ? "#f0f0f3" : "#272930", "--muted": dark ? "#b2b5c0" : "#636773",
     "--border": dark ? "#3b3e47" : "#e1e2e7",
     "--gain": dark ? "#86d4b4" : "#23735b", "--loss": dark ? "#a6bdf2" : "#4767a0",
+    "--danger": dark ? "#ff99a4" : "#b23545", "--warning": dark ? "#e9c67b" : "#8a5b14",
     "color-scheme": dark ? "dark" : "light",
   }
 }

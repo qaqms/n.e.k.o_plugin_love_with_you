@@ -21,7 +21,10 @@ function fixture() {
   const items = catalog.items.map(item => ({ ...item, available: true, version: item.id }))
   const base = {
     affection: 67, stage: "ambiguous", stage_index: 3, next_stage: "lover", points_to_next: 13,
-    gained_today: 4, lost_today: 1, met_day: 132, first_met: "2026-06-29",
+    gained_today: 4, gained_chat: 4, gained_gift: 0, gift_room: 4, gain_revision: 0,
+    lost_today: 1, met_day: 132, first_met: "2026-06-29",
+    plugin_first_met: "2026-06-29", plugin_first_met_legacy: false, host_first_met: null,
+    custom_first_met: "2026-06-29", first_met_source: "custom",
     nicknames: { familiar: "朋友", fond: "小可爱" }, nickname: "小可爱",
     milestones: { familiar: "2026-07-03", fond: "2026-08-19", ambiguous: "2026-10-12" },
     trend: { start: new Date(Date.now() - 364 * 86400000).toISOString().slice(0, 10),
@@ -44,10 +47,26 @@ function fixture() {
           next_stage: "fond", points_to_next: 17, is_current: false, nicknames: { familiar: "搭档" } },
       ],
       stages: ["stranger", "familiar", "fond", "ambiguous", "lover"].map((key, n) => ({ key, min: n * 20 })),
-      limits: { per_call: 3, daily_gain: 15, daily_loss: 30, nickname_chars: 12, title_chars: 20, anniversaries: 20 },
+      limits: { per_call: 3, daily_gain: 8, daily_chat: 4, daily_loss: 4, nickname_chars: 12, title_chars: 20, anniversaries: 20 },
       anniversaries: [{ id: "snow", title: "一起看初雪", month: 11, day: 12 }],
       settings: { auto_score: true, require_confession: true, proactive_confession: false, decay: false },
-      appearance: { accent_color: "#c74768", color_scheme: "system" },
+      appearance: { accent_color: "#7db9e8", color_scheme: "system" },
+      known_characters: ["YUI", "茉子"],
+      shop: {
+        coins: 100, revision: 0, daily_coins: 30, can_claim: false, gift_remaining: 4, gift_daily_cap: 4, inventory_limit: 99,
+        income_total: 20, can_gesture: true, bus_ok: true, income_error: "",
+        income: {count:3, earned:20, paid:2, steps:[{turns:1,coins:10},{turns:3,coins:10},{turns:8,coins:10}],
+          weekly_days:2, weekly_goal:4, weekly_coins:40, weekly_paid:false, legacy_claimed:false, clock_error:false},
+        ledger: [],
+        catalog: [
+          { id: "tea", price: 20, gain: 1, icon: "Coffee", quantity: 0 },
+          { id: "cake", price: 40, gain: 2, icon: "CakeSlice", quantity: 0 },
+          { id: "chocolate", price: 40, gain: 2, icon: "Candy", quantity: 0 },
+          { id: "flowers", price: 60, gain: 3, icon: "Flower2", quantity: 0 },
+          { id: "book", price: 60, gain: 3, icon: "BookOpen", quantity: 0 },
+          { id: "plush", price: 80, gain: 4, icon: "Gift", quantity: 0 },
+        ], history: [],
+      },
       auto_status: { bus_ok: true, seen: 12, scored: 10, failed: 0, last_ts: now - 180, last_delta: 2, mode: "rules", model_status: "unbound" },
       portraits: { count: items.length, ids: items.map(item => item.id), pool_count: items.length,
         collections: [...new Set(items.map(item => item.collection))], revision: "preview", catalog_error: false,
@@ -56,7 +75,7 @@ function fixture() {
   }
 }
 
-function document(sourcePath) {
+function document(sourcePath, search = "") {
   const source = readFileSync(sourcePath, "utf8")
   const dependencies = readdirSync(join(pluginRoot, "ui"))
     .filter(name => name !== "panel.tsx" && /\.(tsx?|jsx?)$/.test(name))
@@ -77,33 +96,49 @@ ${escape(readFileSync(join(hostedRoot, "ui-kit/runtime.js"), "utf8"))}
 {
 ${escape(compiled)}
 const fixture = ${escape(JSON.stringify(data))};
-const query = new URLSearchParams(location.search);
+const query = new URLSearchParams(${escape(JSON.stringify(search))});
 window.__NEKO_PAYLOAD.locale = query.get("locale") || "zh-CN";
 document.documentElement.lang = window.__NEKO_PAYLOAD.locale;
 let state = structuredClone(fixture.state);
-const savedAppearance = sessionStorage.getItem("lwy:preview-appearance");
+let savedAppearance = null;
+try { savedAppearance = sessionStorage.getItem("lwy:preview-appearance"); } catch {}
 if (savedAppearance) state.appearance = JSON.parse(savedAppearance);
 if (query.get("empty")) state.scopes = [];
 if (query.get("art") === "off") state.portraits.settings.mode = "off";
 const uiTest = window.__uiTest = {
-  calls: [], failAction: "", failRefresh: false, delay: 0,
+  calls: [], failAction: "", failMessage: "Preview save failed", failRefresh: false, delay: 0, refreshDelay: 0,
+  failAfterAction: "", reaction: "submitted",
+  historyDate: "2026-03-04",
   update(next) { Object.assign(state, next); repaint(); },
   snapshot() { return structuredClone(state); },
 };
+const shopReceipts = new Map();
+function refreshPortraits() {
+  state.portraits.ids = fixture.items.map(item => item.id);
+  state.portraits.count = fixture.items.length;
+  state.portraits.collections = [...new Set(fixture.items.map(item => item.collection))].sort();
+  state.portraits.revision += "x";
+}
 const previewApi = {
   async refresh() {
+    if (uiTest.refreshDelay) await new Promise(resolve => setTimeout(resolve, uiTest.refreshDelay));
     if (uiTest.failRefresh) throw new Error("Preview refresh unavailable");
     repaint();
   },
   async call(action, args = {}) {
     uiTest.calls.push({action, args: structuredClone(args)});
     if (uiTest.delay) await new Promise(resolve => setTimeout(resolve, uiTest.delay));
-    if (uiTest.failAction === action) throw new Error("Preview save failed");
+    if (uiTest.failAction === action) throw new Error(uiTest.failMessage);
     const current = state.scopes.find(item => item.key === args.scope);
+    if (action === "preview_first_met" && current) return {
+      scope:args.scope, date:uiTest.historyDate, previous_date:current.first_met,
+      character:current.label || state.current_character, source:"host_recent_history", scanned_roles:state.per_character ? 1 : 2,
+    };
     if (action === "choose_portrait") return fixture.items.find(item => item.id === state.portraits.settings.selected_id) || {available:false};
     if (action === "get_portrait") {
       const item = fixture.items.find(item => item.id === args.item_id);
       if (!item) return {available:false};
+      if (item.custom) return {available:true,version:item.version,data_url:args.thumbnail ? item.thumbnail_url : item.data_url};
       const response = await fetch("/image/" + item.id + (args.thumbnail ? "/thumb" : "/display"));
       if (!response.ok) throw new Error("Preview image failed");
       return {available:true,version:item.version,data_url: await response.text()};
@@ -115,19 +150,113 @@ const previewApi = {
       const page = Math.max(0, Math.min(args.page || 0, pages - 1));
       return {items:items.slice(page*12,page*12+12),page,pages,total:items.length};
     }
-    if (action === "set_nicknames" && current) current.nicknames = args.nicknames;
+    if (action === "import_portrait") {
+      const existing = fixture.items.find(item => item.data_url === args.data_url);
+      if (existing) return {item:existing,duplicate:true};
+      const item = {...args,id:"user-preview-"+fixture.items.length,version:"import-"+fixture.items.length,custom:true,available:true};
+      fixture.items.push(item);
+      refreshPortraits();
+      if (uiTest.failAfterAction === action) throw new Error("Preview response lost");
+      return {item,duplicate:false};
+    }
+    if (action === "edit_portrait") {
+      const item = fixture.items.find(item => item.id === args.item_id && item.custom);
+      if (!item) throw new Error("portrait_custom_only");
+      Object.assign(item,{name:args.name,collection:args.collection});
+      refreshPortraits();
+      return {item};
+    }
+    if (action === "delete_portrait") {
+      fixture.items = fixture.items.filter(item => item.id !== args.item_id || !item.custom);
+      if (state.portraits.settings.selected_id === args.item_id) state.portraits.settings.selected_id = fixture.items[0]?.id || "";
+      if (state.portraits.settings.pool_ids) state.portraits.settings.pool_ids = state.portraits.settings.pool_ids.filter(id => id !== args.item_id);
+      refreshPortraits();
+      return state.portraits;
+    }
+    if (action === "set_nicknames" && current) {
+      const names = {...current.nicknames};
+      const clean = value => Array.from(value.replace(/[\\x00-\\x1f\\x7f]/g, " ").replace(/\\s+/g, " ").trim()).slice(0, 12).join("");
+      if (args.expected_nicknames) {
+        for (const key of Object.keys(args.nicknames)) {
+          if (![clean(args.expected_nicknames[key]), clean(args.nicknames[key])].includes(names[key] || "")) throw new Error("nickname_conflict");
+        }
+      }
+      const updated = args.expected_nicknames ? names : {};
+      for (const [key, value] of Object.entries(args.nicknames)) {
+        const normalized = clean(value);
+        if (normalized) updated[key] = normalized;
+        else delete updated[key];
+      }
+      current.nicknames = updated;
+      if (uiTest.failAfterAction === action) throw new Error("Preview response lost");
+      return {scope:args.scope, result:{...updated}};
+    }
     if (action === "set_affection" && current) current.affection = args.value;
     if (action === "reset_affection" && current) current.affection = 0;
-    if (action === "set_first_met" && current) current.first_met = args.date;
+    if (action === "set_first_met" && current) {
+      if (args.expected_date && ![args.expected_date, args.date].includes(current.first_met)) throw new Error("first_met_conflict");
+      if (args.source === "plugin" && args.date !== current.plugin_first_met) throw new Error("first_met_conflict");
+      current.first_met = args.date;
+      current.first_met_source = args.source || "custom";
+      if (args.source === "host") current.host_first_met = args.date;
+      if (!args.source || args.source === "custom") current.custom_first_met = args.date;
+      if (uiTest.failAfterAction === action) throw new Error("Preview response lost");
+    }
     if (action === "set_settings") Object.assign(state.settings, args);
     if (action === "set_appearance") {
       state.appearance = {...args};
-      sessionStorage.setItem("lwy:preview-appearance", JSON.stringify(args));
+      try { sessionStorage.setItem("lwy:preview-appearance", JSON.stringify(args)); } catch {}
     }
     if (action === "set_per_character") state.per_character = args.enabled;
     if (action === "set_portraits") Object.assign(state.portraits.settings, args);
     if (action === "remove_anniversary") state.anniversaries = state.anniversaries.filter(item => item.id !== args.id);
     if (action === "add_anniversary") state.anniversaries.push({...args,id:String(Date.now())});
+    if (["claim_shop_coins", "buy_shop_item", "send_shop_gift"].includes(action)) {
+      if (shopReceipts.has(args.request_id)) return structuredClone(shopReceipts.get(args.request_id));
+      if (args.revision !== state.shop.revision) throw new Error("shop_stale");
+      const product = state.shop.catalog.find(item => item.id === args.item_id);
+      let result;
+      if (action === "claim_shop_coins") {
+        throw new Error("shop_income_automatic");
+      } else if (action === "buy_shop_item") {
+        if (!product) throw new Error("shop_item_not_found");
+        if (product.price > state.shop.coins) throw new Error("shop_insufficient_coins");
+        product.quantity += 1;
+        state.shop.coins -= product.price;
+        state.shop.ledger.unshift({id:args.request_id, source:"purchase", amount:-product.price,
+          balance:state.shop.coins, ts:Date.now()/1000, item_id:product.id, day:state.today});
+        result = {item_id:product.id, quantity:product.quantity, coins:state.shop.coins};
+      } else {
+        if (!product?.quantity) throw new Error("shop_no_stock");
+        const scope = state.per_character ? state.scopes.find(item => item.label === args.character) : state.scopes[0];
+        const applied = args.gesture ? 0 : Math.min(product.gain, state.shop.gift_remaining, 100-scope.affection,
+          scope.gift_room ?? state.limits.daily_gain-scope.gained_today);
+        if (args.relationship_revision !== scope.gain_revision || args.expected_gain !== applied) throw new Error("shop_gain_changed");
+        if (args.gesture ? !state.shop.can_gesture : applied <= 0) throw new Error(args.gesture ? "shop_gesture_limit" : "shop_no_affection_room");
+        product.quantity -= 1;
+        scope.affection += applied;
+        scope.gained_today += applied;
+        scope.gift_room = Math.max(0, scope.gift_room-applied);
+        scope.gain_revision += 1;
+        state.shop.gift_remaining -= applied;
+        if (args.gesture) state.shop.can_gesture = false;
+        const gift = {id:args.request_id, item_id:product.id, character:args.character, applied, ts:Date.now()/1000,
+          reaction:uiTest.reaction, attempts:1, requested_at:Date.now()/1000, can_retry:uiTest.reaction === "unavailable"};
+        state.shop.history.unshift(gift);
+        scope.history.unshift({ts:gift.ts, delta:applied, value:scope.affection, source:"gift", reason:"gift:"+product.id});
+        result = {...gift, gift_id:gift.id};
+      }
+      state.shop.revision += 1;
+      shopReceipts.set(args.request_id, structuredClone(result));
+      if (uiTest.failAfterAction === action) throw new Error("Preview response lost");
+      return result;
+    }
+    if (action === "retry_gift_reaction") {
+      const gift = state.shop.history.find(item => item.id === args.gift_id);
+      if (!gift) throw new Error("shop_gift_not_found");
+      gift.reaction = uiTest.reaction; gift.can_retry = false;
+      return {reaction:gift.reaction};
+    }
     return {ok:true};
   },
 };
@@ -135,7 +264,7 @@ function repaint() {
   window.NekoUiKit.render(window.NekoUiKit.h(__Panel, {
     ...window.__NEKO_PAYLOAD, state:structuredClone(state), api:previewApi,
     t:window.NekoUiKit.t, useLocalState:(key, initial) => window.NekoUiKit.useLocalState(key,
-      key === "lwy:section" && query.get("page") === "settings" ? "settings" : initial),
+      key === "lwy:section" && ["settings", "shop"].includes(query.get("page")) ? query.get("page") : initial),
   }), document.getElementById("root"));
 }
 repaint();
@@ -146,7 +275,8 @@ repaint();
 export async function startPreview(port = 0, sourcePath = join(pluginRoot, "ui/panel.tsx")) {
   const server = createServer((req, res) => {
     try {
-      const path = new URL(req.url, "http://localhost").pathname
+      const requestUrl = new URL(req.url, "http://localhost")
+      const path = requestUrl.pathname
       if (path.startsWith("/image/")) {
         const [, , id, variant] = path.split("/")
         const item = fixture().items.find(entry => entry.id === id)
@@ -154,7 +284,7 @@ export async function startPreview(port = 0, sourcePath = join(pluginRoot, "ui/p
         const image = readFileSync(join(pluginRoot, "assets/portraits", variant === "thumb" ? item.thumbnail : item.file))
         res.writeHead(200, { "Content-Type": "text/plain" }).end(`data:image/webp;base64,${image.toString("base64")}`)
       } else {
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(document(sourcePath))
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(document(sourcePath, requestUrl.search))
       }
     } catch (error) { res.writeHead(500).end(String(error.stack || error)) }
   })

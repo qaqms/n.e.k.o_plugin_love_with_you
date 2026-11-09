@@ -6,7 +6,7 @@ import re
 import threading
 from typing import Any
 
-DEFAULTS = {"accent_color": "#c74768", "color_scheme": "system"}
+DEFAULTS = {"accent_color": "#7db9e8", "color_scheme": "system"}
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}\Z")
 _SCHEMES = ("system", "light", "dark")
 

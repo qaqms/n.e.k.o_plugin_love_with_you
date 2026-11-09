@@ -187,6 +187,23 @@ def test_relationship_context_text(prompts):
 # ------------------------------------------------------------ offline judge
 
 
+def test_nickname_prompts_revoke_old_names_and_resolve_stage_priority(prompts):
+    for text in (
+        prompts.relationship_context("stranger", ""),
+        prompts.update_tool_description("stranger", ""),
+        prompts.gift_reaction_prompt("tea", "stranger", "", 1, gift_id="gift_000000001"),
+    ):
+        assert "恢复人设原本的称呼" in text
+        assert "停止沿用" in text
+    for text in (
+        prompts.relationship_context("stranger", "亲爱的"),
+        prompts.update_tool_description("stranger", "亲爱的"),
+        prompts.gift_reaction_prompt("tea", "stranger", "亲爱的", 1, gift_id="gift_000000001"),
+    ):
+        assert "用户指定的称呼优先" in text
+        assert "不改变关系阶段、告白条件" in text
+
+
 def test_rule_verdict_scores_warm_and_hurtful_words(scoring):
     assert scoring.rule_verdict("摸摸头", "嗯").delta == 1
     assert scoring.rule_verdict("我喜欢你，抱抱", "").delta == 3  # capped at AUTO_MAX_DELTA

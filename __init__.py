@@ -8,6 +8,7 @@ Architecture (see DESIGN.md):
 * ``_scoring``   prompt + verdict parsing + offline keyword judge (unit tested)
 * ``_judge``     model judging through the official plugin model gateway
 * ``_storage``   atomic JSON state file in the plugin data dir
+* ``_shop``      virtual currency, inventory and gift transaction rules
 * ``_host``      read-only loopback queries to main_server
 * ``_prompts``   model-facing text (relationship context, tool descriptions)
 
@@ -27,6 +28,7 @@ import inspect
 import queue
 import threading
 import time
+from collections import deque
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -56,6 +58,7 @@ from . import _judge as judge
 from . import _portraits as portraits
 from . import _prompts as prompts
 from . import _scoring as scoring
+from . import _shop as shop
 from ._storage import StateFile
 
 _STATE_FILE = "state.json"
@@ -134,6 +137,7 @@ class LoveWithYouPlugin(NekoPluginBase):
         super().__init__(ctx)
         self._lock = threading.RLock()
         self._state: dict[str, Any] = engine.new_state()
+        self._state["shop"] = shop.new_state()
         self._state_file: StateFile | None = None
         self._ready = False
         self._host_online = False
@@ -150,7 +154,14 @@ class LoveWithYouPlugin(NekoPluginBase):
         self._last_decay_day: str | None = None
         # Conversation bus -> exchanges -> scoring worker.
         self._cursor: conv.BusCursor | None = None
+        self._recent_tracker = conv.RecentHistoryTracker(time.time())
+        self._conversation_sources: dict[str, str] = {}
+        self._bus_read_error = ""
+        self._history_warned = 0.0
         self._tracker = conv.ExchangeTracker()
+        self._income_tracker = conv.ExchangeTracker()
+        self._income_pending: deque[dict[str, Any]] = deque()
+        self._income_error = ""
         self._latest_message_ts: dict[str, float] = {}
         # Dialogue text stays in memory, never in the persisted relationship.
         self._pending_answers: dict[str, list[conv.Message]] = {}
@@ -178,11 +189,13 @@ class LoveWithYouPlugin(NekoPluginBase):
             # "model" | "rules" for the latest exchange; None before the first.
             "mode": None,
             "model_status": "",
+            "conversation_sources": {},
         }
         self._bus_warned = 0.0
         self._score_warned = 0.0
         # character -> {key, turns, transition, retry_at}: what we last told it.
         self._context: dict[str, dict[str, Any]] = {}
+        self._gift_turns: dict[str, tuple[str, str]] = {}
 
     # ------------------------------------------------------------ lifecycle
 
@@ -193,8 +206,23 @@ class LoveWithYouPlugin(NekoPluginBase):
                 return Err(SdkError("scoring_worker_already_running"))
         self._state_file = StateFile(self.data_path(_STATE_FILE))
         raw, warning = await asyncio.to_thread(self._state_file.load)
-        if warning:
-            self.logger.warning("与你相恋: {}", warning)
+        if warning or (raw is None and any(self._state_file.path.parent.glob("state.corrupt-*"))):
+            self.logger.warning("与你相恋: {}", warning or "restore the quarantined relationship state before startup")
+            self._ready = False
+            return Err(SdkError("state_recovery_required"))
+        if raw is not None and (
+            not isinstance(raw, dict) or not isinstance(raw.get("shared"), dict)
+            or ("shop" in raw and not isinstance(raw["shop"], dict))
+        ):
+            self._ready = False
+            return Err(SdkError("state_recovery_required"))
+        if isinstance(raw, dict) and raw.get("shop", {}).get("economy_version") != shop.ECONOMY_VERSION:
+            backup = Path(self.data_path("state.pre-economy-v2.json"))
+            if not backup.exists():
+                try:
+                    await asyncio.to_thread(StateFile(backup).save, raw)
+                except OSError:
+                    return Err(SdkError("economy_backup_failed"))
         self._portraits = await asyncio.to_thread(
             portraits.PortraitLibrary,
             self.plugin_dir / "assets" / "portraits",
@@ -209,6 +237,14 @@ class LoveWithYouPlugin(NekoPluginBase):
             self.logger.warning("与你相恋: {}", self._appearance.warning)
         with self._lock:
             self._state = engine.normalize_state(raw)
+            self._state["shop"] = shop.normalize(self._state.get("shop"))
+            self._gift_turns.clear()
+            self._income_tracker.reset()
+            self._income_pending.clear()
+            self._income_error = ""
+            for gift in self._state["shop"]["history"]:
+                if gift["reaction"] == "pending":
+                    gift["reaction"] = "unknown"
             self._invalidate_scoring_locked()
             recovered = False
             recovery_now = time.time()
@@ -217,10 +253,12 @@ class LoveWithYouPlugin(NekoPluginBase):
                 if state["status"] == "dispatching":
                     recovered = self._expire_proactive_locked(state, recovery_now) or recovered
             if recovered or raw != self._state:
-                self._try_save_locked()
+                self._save_locked()
             self._ready = True
         # Only messages from now on are scored; history was never scored live.
         self._cursor = conv.BusCursor(time.time())
+        self._recent_tracker = conv.RecentHistoryTracker(self._cursor.since)
+        self._conversation_sources.clear()
         self._start_worker()
         # Only local work here: startup blocks the command loop, and
         # main_server may not be up yet. The timer handles the rest.
@@ -246,7 +284,11 @@ class LoveWithYouPlugin(NekoPluginBase):
             await self._verify_tools()
         self._daily_decay()
         self._expire_proactive_confessions()
-        await self._poll_conversations()
+        with self._lock:
+            self._flush_income_locked()
+        bus_ok = await self._poll_conversations()
+        history_ok = await self._poll_recent_conversations()
+        self._note_bus(bus_ok or history_ok, "" if bus_ok or history_ok else self._bus_read_error)
         self._flush_context()
         # Also picks up day rollover: today's anniversaries live in the description.
         self._reconcile_tools()
@@ -375,7 +417,7 @@ class LoveWithYouPlugin(NekoPluginBase):
                     delivery_seen=False,
                 )
 
-    def _scope_record_locked(self, scope: Any) -> dict[str, Any]:
+    def _scope_record_locked(self, scope: Any, *, create: bool = True) -> dict[str, Any]:
         """Validate a scope coming from the panel. Caller holds ``self._lock``."""
         if not isinstance(scope, str) or not scope:
             raise engine.EngineError("scope_required")
@@ -390,7 +432,9 @@ class LoveWithYouPlugin(NekoPluginBase):
             known = set(self._state["known_characters"]) | {self._state["current_character"]}
             if name not in known and name not in self._state["characters"]:
                 raise engine.EngineError("unknown_scope")
-        record = engine.get_record(self._state, scope)
+        record = engine.get_record(self._state, scope, create=create)
+        if record is None and not create and scope.startswith(engine.CHAR_SCOPE_PREFIX):
+            return engine.new_record()
         if record is None:
             raise engine.EngineError("unknown_scope")
         return record
@@ -737,41 +781,93 @@ class LoveWithYouPlugin(NekoPluginBase):
 
     # ------------------------------------------------------------ conversation bus
 
-    async def _poll_conversations(self) -> None:
+    async def _poll_conversations(self) -> bool:
         """Read new user messages and replies from the host's conversation bus."""
         cursor = self._cursor
         if cursor is None:
-            return
+            return False
         bus = getattr(self.ctx, "bus", None)
         conversations = getattr(bus, "conversations", None)
         getter = getattr(conversations, "get", None)
         if not callable(getter):
-            self._note_bus(False, "bus_unavailable")
-            return
+            self._bus_read_error = "bus_unavailable"
+            return False
         try:
             result = getter(max_count=_BUS_POLL_LIMIT, timeout=2.0)
             if inspect.isawaitable(result):
                 result = await result
         except Exception as exc:
-            self._note_bus(False, f"read_{type(exc).__name__}")
-            return
+            self._bus_read_error = f"read_{type(exc).__name__}"
+            return False
         if type(result).__name__ == "Err":
-            self._note_bus(False, "read_error")
-            return
+            self._bus_read_error = "read_error"
+            return False
         if type(result).__name__ == "Ok":
             result = getattr(result, "value", None)
         try:
             records = list(result) if isinstance(result, Iterable) and not isinstance(result, (str, bytes)) else []
         except TypeError:
             records = []
-        self._note_bus(True, "")
+        self._bus_read_error = ""
         messages: list[conv.Message] = []
         for record in records:
+            instruction = conv.parse_gift_instruction(record)
+            if instruction:
+                self._observe_gift_instruction(instruction)
             message = conv.parse_proactive_record(record) or conv.parse_record(record)
             if message:
                 messages.append(message)
         for message in cursor.fresh(messages):
+            if message.role in ("user", "reply"):
+                selected = self._conversation_sources.get(message.lanlan)
+                if selected == "host_recent_history":
+                    continue
+                if message.role == "user" and selected is None:
+                    self._select_conversation_source(message.lanlan, "conversations")
             self._on_message(message)
+        return True
+
+    def _select_conversation_source(self, character: str, source: str) -> None:
+        # Keep one source per character for this session: a delayed bus delivery
+        # must not score a turn already observed through the history API.
+        with self._lock:
+            self._conversation_sources[character] = source
+            self._auto["conversation_sources"] = dict(self._conversation_sources)
+        self.logger.info("与你相恋: conversation source character={} source={}", character, source)
+
+    async def _poll_recent_conversations(self) -> bool:
+        with self._lock:
+            names = list(dict.fromkeys([
+                *self._state.get("known_characters", []), self._state.get("current_character"),
+            ]))
+        names = [name for name in names if name and self._conversation_sources.get(name) != "conversations"][:64]
+        if not names:
+            return False
+        semaphore = asyncio.Semaphore(4)
+
+        async def read(name: str) -> list[Any] | None:
+            async with semaphore:
+                try:
+                    return await asyncio.to_thread(host.fetch_recent_chat, name)
+                except host.HistoryError:
+                    return None
+
+        snapshots = await asyncio.gather(*(read(name) for name in names))
+        readable = False
+        for name, rows in zip(names, snapshots):
+            if rows is None:
+                continue
+            readable = True
+            with self._lock:
+                messages = self._recent_tracker.feed(name, rows, time.time())
+            if messages and name not in self._conversation_sources:
+                self._select_conversation_source(name, "host_recent_history")
+            for message in messages:
+                self._on_message(message)
+        if not readable and time.monotonic() - self._history_warned >= _WARN_THROTTLE_SECONDS:
+            self._history_warned = time.monotonic()
+            self.logger.warning("与你相恋: recent chat compatibility read unavailable")
+        return readable
 
     def _note_bus(self, ok: bool, error: str) -> None:
         with self._lock:
@@ -792,8 +888,17 @@ class LoveWithYouPlugin(NekoPluginBase):
             if not self._ready or self._stopping.is_set():
                 return
             if message.role == conv.PROACTIVE_REPLY_TURN:
+                if self._on_gift_reply_locked(message):
+                    return
                 stage_change = self._on_proactive_reply_locked(message)
             else:
+                income_exchange = self._income_tracker.feed(message)
+                if income_exchange is not None and income_exchange.income_event is not None:
+                    if len(self._income_pending) < 128:
+                        self._income_pending.append(income_exchange.income_event)
+                    else:
+                        self._income_error = "queue_full"
+                    self._flush_income_locked()
                 self._latest_message_ts[message.lanlan] = max(
                     message.said_at, self._latest_message_ts.get(message.lanlan, 0)
                 )
@@ -808,14 +913,33 @@ class LoveWithYouPlugin(NekoPluginBase):
                         active = engine.mark_active(record)
                         if active or created:
                             self._try_save_locked()
-                    stage_change = self._handle_proactive_response_locked(message)
+                    if not message.metadata.get("skip_score"):
+                        stage_change = self._handle_proactive_response_locked(message)
                 elif message.role == "reply":
                     self._note_intervening_reply_locked(message)
-                exchange = self._tracker.feed(message)
+                exchange = None if message.metadata.get("skip_score") else self._tracker.feed(message)
                 if exchange is not None:
                     self._enqueue(exchange)
         if stage_change:
             self._notify_stage_change(stage_change[0], stage_change[1], stage_change[2])
+
+    def _flush_income_locked(self) -> None:
+        """The queue contains fingerprints only; failed saves retry next tick."""
+        while self._income_pending:
+            try:
+                with self._state_transaction_locked():
+                    economy = self._state["shop"]
+                    revision = economy["revision"]
+                    credited = shop.accrue(economy, self._income_pending[0], time.time())
+                    if economy["revision"] != revision:
+                        self._save_locked()
+                if credited:
+                    self.logger.info("与你相恋: interaction income credited={} balance={}", credited, economy["coins"])
+            except SdkError:
+                self._income_error = "save_failed"
+                return
+            self._income_pending.popleft()
+        self._income_error = ""
 
     def _on_proactive_reply_locked(self, message: conv.Message) -> tuple[str, str, str] | None:
         """Mark that the host delivered a proactive reply for this character."""
@@ -1042,6 +1166,7 @@ class LoveWithYouPlugin(NekoPluginBase):
             scope[len(engine.CHAR_SCOPE_PREFIX):] if scope and scope.startswith(engine.CHAR_SCOPE_PREFIX) else None
         )
         self._tracker.reset(character)
+        self._recent_tracker.invalidate_scoring(character)
         if scope is None:
             self._pending_answers.clear()
         else:
@@ -1387,6 +1512,7 @@ class LoveWithYouPlugin(NekoPluginBase):
             "limits": {
                 "per_call": engine.MAX_DELTA_PER_CALL,
                 "daily_gain": engine.DAILY_GAIN_CAP,
+                "daily_chat": engine.DAILY_CHAT_CAP,
                 "daily_loss": engine.DAILY_LOSS_CAP,
                 "nickname_chars": engine.NICKNAME_MAX_CHARS,
                 "title_chars": engine.ANNIVERSARY_TITLE_MAX_CHARS,
@@ -1395,7 +1521,215 @@ class LoveWithYouPlugin(NekoPluginBase):
             "decoration": await asyncio.to_thread(self._decoration_meta),
             "portraits": await asyncio.to_thread(self._portraits.summary) if self._portraits else None,
             "appearance": self._appearance.summary() if self._appearance else dict(appearance.DEFAULTS),
+            "shop": dict(shop.view(state["shop"], engine.today_str(), time.time()),
+                         bus_ok=auto_status["bus_ok"], income_error=self._income_error),
         }
+
+    # ------------------------------------------------------------ gifts
+
+    def _shop_transaction(self, action: str, request_id: Any, revision: Any,
+                          item_id: Any = "", character: Any = "", *, expected_gain: Any = None,
+                          relationship_revision: Any = None, gesture: Any = False) -> dict[str, Any]:
+        signature = [action, item_id, character]
+        if action == "gift" and (expected_gain is not None or relationship_revision is not None or gesture is not False):
+            signature.extend([expected_gain, relationship_revision, gesture])
+        with self._lock, self._state_transaction_locked():
+            if not self._ready or self._stopping.is_set():
+                raise shop.ShopError("shop_not_ready")
+            economy = self._state["shop"]
+            previous = shop.replay(economy, request_id, revision, signature)
+            if previous is not None:
+                return previous
+            now, today = time.time(), engine.today_str()
+            if action == "claim":
+                result = shop.claim(economy, today)
+            elif action == "buy":
+                result = shop.buy(economy, item_id, now, request_id)
+            else:
+                product = shop.item(item_id)
+                known = set(self._state["known_characters"])
+                known.add(self._state["current_character"])
+                if not isinstance(character, str) or not character or character not in known:
+                    raise shop.ShopError("shop_unknown_character")
+                if economy["inventory"].get(item_id, 0) <= 0:
+                    raise shop.ShopError("shop_no_stock")
+                room = shop.gift_room(economy, today)
+                if not gesture and room <= 0:
+                    raise shop.ShopError("shop_daily_limit")
+                scope = engine.scope_key_for(self._state, character)
+                record = engine.get_record(self._state, scope)
+                if record is None:
+                    raise shop.ShopError("shop_unknown_character")
+                if type(gesture) is not bool or type(expected_gain) is not int or type(relationship_revision) is not int:
+                    raise shop.ShopError("shop_invalid_request")
+                actual = 0 if gesture else min(product["gain"], room, engine.gain_room(record, "gift", now),
+                                               100 - record["affection"])
+                if relationship_revision != record.get("gain_revision", 0) or expected_gain != actual:
+                    raise shop.ShopError("shop_gain_changed")
+                if gesture and not shop.gesture_room(economy, today):
+                    raise shop.ShopError("shop_gesture_limit")
+                if not gesture and actual <= 0:
+                    raise shop.ShopError("shop_no_affection_room")
+                if gesture:
+                    result = {"applied": 0, "affection": record["affection"], "stage": record["stage"],
+                              "previous_stage": record["stage"], "stage_changed": False}
+                else:
+                    result = engine.apply_model_delta(
+                        record, actual, f"gift:{item_id}", gate=self._gate(), cooldown=0, source="gift",
+                    )
+                engine.mark_active(record)
+                gift = shop.record_gift(economy, request_id, item_id, character, result["applied"], now, today,
+                                        gesture=gesture)
+                result.update(gift_id=gift["id"], item_id=item_id, character=character, scope=scope)
+            shop.commit(economy, request_id, revision, signature, result)
+            self._save_locked()
+            if action == "gift":
+                self._invalidate_scoring_locked(result["scope"])
+                if result["stage_changed"]:
+                    self._notify_stage_change(result["scope"], result["previous_stage"], result["stage"])
+            return result
+
+    @ui.action(label=tr("shop.claim", default="领取今日心意币"), refresh_context=False)
+    @plugin_entry(id="claim_shop_coins", name=tr("shop.claim", default="领取今日心意币"),
+                  input_schema={"type": "object", "properties": {
+                      "request_id": {"type": "string"}, "revision": {"type": "integer"},
+                  }, "required": ["request_id", "revision"]})
+    async def claim_shop_coins(self, request_id: Any = None, revision: Any = None, **_: Any):
+        try:
+            return Ok(self._shop_transaction("claim", request_id, revision))
+        except shop.ShopError as exc:
+            return Err(SdkError(str(exc)))
+
+    @ui.action(label=tr("shop.buy", default="购买"), refresh_context=False)
+    @plugin_entry(id="buy_shop_item", name=tr("shop.buy", default="购买"),
+                  input_schema={"type": "object", "properties": {
+                      "request_id": {"type": "string"}, "revision": {"type": "integer"},
+                      "item_id": {"type": "string"},
+                  }, "required": ["request_id", "revision", "item_id"]})
+    async def buy_shop_item(self, request_id: Any = None, revision: Any = None, item_id: Any = None, **_: Any):
+        try:
+            return Ok(self._shop_transaction("buy", request_id, revision, item_id))
+        except shop.ShopError as exc:
+            return Err(SdkError(str(exc)))
+
+    @ui.action(label=tr("shop.send", default="送给她"), refresh_context=False)
+    @plugin_entry(id="send_shop_gift", name=tr("shop.send", default="送给她"),
+                  input_schema={"type": "object", "properties": {
+                      "request_id": {"type": "string"}, "revision": {"type": "integer"},
+                      "item_id": {"type": "string"}, "character": {"type": "string"},
+                      "expected_gain": {"type": "integer"}, "relationship_revision": {"type": "integer"},
+                      "gesture": {"type": "boolean"},
+                  }, "required": ["request_id", "revision", "item_id", "character"]})
+    async def send_shop_gift(self, request_id: Any = None, revision: Any = None, item_id: Any = None,
+                             character: Any = None, expected_gain: Any = None, relationship_revision: Any = None,
+                             gesture: Any = False, **_: Any):
+        try:
+            result = self._shop_transaction("gift", request_id, revision, item_id, character,
+                                            expected_gain=expected_gain, relationship_revision=relationship_revision,
+                                            gesture=gesture)
+            try:
+                self._dispatch_gift_reaction(result["gift_id"])
+            except (SdkError, shop.ShopError):
+                # Gift settlement is already durable; a failed response attempt is separate.
+                return Ok({**result, "reaction": "unknown"})
+            with self._lock:
+                try:
+                    result["reaction"] = shop.find_gift(self._state["shop"], result["gift_id"])["reaction"]
+                except shop.ShopError:
+                    result["reaction"] = "unknown"
+            return Ok(result)
+        except shop.ShopError as exc:
+            return Err(SdkError(str(exc)))
+
+    def _dispatch_gift_reaction(self, gift_id: str, *, retry: bool = False) -> None:
+        with self._lock:
+            if not self._ready or self._stopping.is_set():
+                raise shop.ShopError("shop_not_ready")
+            try:
+                gift = shop.find_gift(self._state["shop"], gift_id)
+            except shop.ShopError:
+                if retry:
+                    raise
+                return
+            now = time.time()
+            if not retry and gift["reaction"] != "pending":
+                return
+            if retry and (
+                gift["reaction"] == "received" or gift["attempts"] >= shop.REACTION_ATTEMPTS
+                or now - gift["requested_at"] < shop.REACTION_COOLDOWN
+                or (gift["reaction"] in {"pending", "submitted", "unknown"}
+                    and now - gift["requested_at"] < shop.REACTION_TIMEOUT)
+            ):
+                raise shop.ShopError("shop_reaction_wait")
+            with self._state_transaction_locked():
+                gift.update(reaction="unknown", attempts=gift["attempts"] + 1, requested_at=now)
+                # Persist the attempt before sending: a crash must not resend it automatically.
+                self._save_locked()
+            character = gift["character"]
+            scope = engine.scope_key_for(self._state, character)
+            record = engine.get_record(self._state, scope, create=False) or engine.new_record()
+            product = shop.ITEMS[gift["item_id"]]
+            repeats = sum(entry["item_id"] == product["id"] and entry["character"] == character
+                          for entry in self._state["shop"]["history"])
+            prompt = prompts.gift_reaction_prompt(
+                product["name"], record["stage"], engine.effective_nickname(record, record["stage"]), repeats,
+                gift_id=gift_id, retry=retry,
+            )
+            try:
+                receipt = self.push_message(
+                    source=self.plugin_id, visibility=[], ai_behavior="respond", target_lanlan=character,
+                    parts=[{"type": "text", "text": prompt}],
+                    coalesce_key=f"{self.plugin_id}:gift:{gift_id}",
+                    metadata={"event_type": "gift_received", "gift_id": gift_id},
+                )
+                gift["reaction"] = "submitted" if isinstance(receipt, dict) and receipt.get("submitted") is True else "unavailable"
+            except Exception as exc:
+                gift["reaction"] = "unknown"
+                self.logger.warning("与你相恋: gift reaction submission unconfirmed: {}", type(exc).__name__)
+            self._try_save_locked()
+
+    @ui.action(label=tr("shop.retryReaction", default="重新请求回应"), refresh_context=False)
+    @plugin_entry(id="retry_gift_reaction", name=tr("shop.retryReaction", default="重新请求回应"),
+                  input_schema={"type": "object", "properties": {"gift_id": {"type": "string"}}, "required": ["gift_id"]})
+    async def retry_gift_reaction(self, gift_id: Any = None, **_: Any):
+        try:
+            self._dispatch_gift_reaction(gift_id, retry=True)
+            with self._lock:
+                return Ok({"reaction": shop.find_gift(self._state["shop"], gift_id)["reaction"]})
+        except shop.ShopError as exc:
+            return Err(SdkError(str(exc)))
+
+    def _observe_gift_instruction(self, instruction: tuple[str, str, str, float]) -> None:
+        turn_id, character, gift_id, ts = instruction
+        with self._lock:
+            for gift in self._state["shop"]["history"]:
+                if gift["id"] == gift_id and gift["character"] == character and ts >= gift["requested_at"]:
+                    self._gift_turns[turn_id] = (gift_id, character)
+                    while len(self._gift_turns) > shop.HISTORY_LIMIT:
+                        self._gift_turns.pop(next(iter(self._gift_turns)))
+                    break
+
+    def _on_gift_reply_locked(self, message: conv.Message) -> bool:
+        turn_id = message.metadata.get("conversation_id")
+        correlated = self._gift_turns.get(turn_id) if isinstance(turn_id, str) else None
+        explicit = (
+            message.metadata.get("event_type") == "gift_received"
+            and message.metadata.get("plugin_id") == self.plugin_id
+        )
+        if not correlated and not explicit:
+            return False
+        key = message.metadata.get("coalesce_key")
+        for gift in self._state["shop"]["history"]:
+            if (
+                (correlated == (gift["id"], gift["character"]) or (explicit and key == f"{self.plugin_id}:gift:{gift['id']}"))
+                and gift["character"] == message.lanlan and message.said_at >= gift["ts"]
+            ):
+                if gift["reaction"] != "received":
+                    gift["reaction"] = "received"
+                    self._note_intervening_reply_locked(message)
+                    self._try_save_locked()
+                return True
+        return False
 
     @ui.action(label=tr("actions.setAppearance.label", default="保存外观"), refresh_context=True)
     @plugin_entry(
@@ -1442,6 +1776,7 @@ class LoveWithYouPlugin(NekoPluginBase):
                 return Err(SdkError(exc.code))
             if result["changed"]:
                 self._cancel_proactive_locked()
+                self._state["shop"]["revision"] += 1
                 # The switch itself counts as activity, so decay never bites a
                 # record that was frozen while its mode was off.
                 for _scope, record in engine.active_records(self._state):
@@ -1530,12 +1865,21 @@ class LoveWithYouPlugin(NekoPluginBase):
             "properties": {
                 "scope": {"type": "string"},
                 "nicknames": {"type": "object", "additionalProperties": {"type": "string"}},
+                "expected_nicknames": {"type": "object", "additionalProperties": {"type": "string"}},
             },
             "required": ["scope", "nicknames"],
         },
     )
-    async def set_nicknames(self, scope: Any = None, nicknames: Any = None, **_: Any):
-        return self._edit_scope(scope, "set_nicknames", lambda record: engine.set_nicknames(record, nicknames))
+    async def set_nicknames(
+        self, scope: Any = None, nicknames: Any = None, expected_nicknames: Any = None, **_: Any,
+    ):
+        result = self._edit_scope(
+            scope, "set_nicknames",
+            lambda record: engine.set_nicknames(record, nicknames, expected=expected_nicknames),
+        )
+        if isinstance(result, Ok):
+            self._flush_context()
+        return result
 
     @ui.action(label=tr("actions.setFirstMet.label", default="修改相识日"), refresh_context=True)
     @plugin_entry(
@@ -1546,12 +1890,44 @@ class LoveWithYouPlugin(NekoPluginBase):
         ),
         input_schema={
             "type": "object",
-            "properties": {"scope": {"type": "string"}, "date": {"type": "string"}},
+            "properties": {
+                "scope": {"type": "string"}, "date": {"type": "string"}, "expected_date": {"type": "string"},
+                "source": {"type": "string", "enum": ["custom", "plugin", "host"]},
+            },
             "required": ["scope", "date"],
         },
     )
-    async def set_first_met(self, scope: Any = None, date: Any = None, **_: Any):
-        return self._edit_scope(scope, "set_first_met", lambda record: engine.set_first_met(record, date))
+    async def set_first_met(
+        self, scope: Any = None, date: Any = None, expected_date: Any = None, source: Any = "custom", **_: Any,
+    ):
+        return self._edit_scope(
+            scope, "set_first_met", lambda record: engine.set_first_met(record, date, expected=expected_date, source=source),
+        )
+
+    @ui.action(label=tr("dates.importMet", default="从宿主历史导入"), refresh_context=False)
+    @plugin_entry(
+        id="preview_first_met", name=tr("dates.importMet", default="从宿主历史导入"),
+        description=tr("dates.importDescription", default="查询宿主保留的聊天日期，预览后确认导入。"),
+        timeout=12,
+        input_schema={"type": "object", "properties": {"scope": {"type": "string"}}, "required": ["scope"]},
+    )
+    async def preview_first_met(self, scope: Any = None, **_: Any):
+        try:
+            with self._lock:
+                record = self._scope_record_locked(scope, create=False)
+                original = record["first_met"]
+                per_character = self._state["per_character"]
+                character = str(scope)[len(engine.CHAR_SCOPE_PREFIX):] if per_character else None
+            result = await asyncio.to_thread(host.fetch_first_met, character)
+            with self._lock:
+                record = self._scope_record_locked(scope, create=False)
+                if self._state["per_character"] != per_character or record["first_met"] != original:
+                    raise engine.EngineError("first_met_conflict")
+            return Ok({**result, "scope": scope, "previous_date": original})
+        except engine.EngineError as exc:
+            return Err(SdkError(exc.code))
+        except host.HistoryError as exc:
+            return Err(SdkError(str(exc)))
 
     @ui.action(label=tr("actions.addAnniversary.label", default="添加纪念日"), refresh_context=True)
     @plugin_entry(
@@ -1737,6 +2113,40 @@ class LoveWithYouPlugin(NekoPluginBase):
     )
     async def set_portraits(self, mode: Any = None, selected_id: Any = "", pool_ids: Any = None, **_: Any):
         return await self._portrait_call("update", mode, selected_id, pool_ids)
+
+    @ui.action(label=tr("art.import", default="导入立绘"), refresh_context=False)
+    @plugin_entry(
+        id="import_portrait", name=tr("art.import", default="导入立绘"),
+        description=tr("entries.importPortrait.description", default="将用户确认的立绘保存到插件数据目录。"),
+        input_schema={"type": "object", "properties": {
+            "name": {"type": "string"}, "collection": {"type": "string"},
+            "data_url": {"type": "string"}, "thumbnail_url": {"type": "string"},
+        }, "required": ["name", "collection", "data_url", "thumbnail_url"]},
+    )
+    async def import_portrait(
+        self, name: Any = None, collection: Any = None, data_url: Any = None, thumbnail_url: Any = None, **_: Any,
+    ):
+        return await self._portrait_call("import_image", name, collection, data_url, thumbnail_url)
+
+    @ui.action(label=tr("art.edit", default="编辑立绘"), refresh_context=True)
+    @plugin_entry(
+        id="edit_portrait", name=tr("art.edit", default="编辑立绘"),
+        description=tr("entries.editPortrait.description", default="修改自定义立绘的名称和游戏分类。"),
+        input_schema={"type": "object", "properties": {
+            "item_id": {"type": "string"}, "name": {"type": "string"}, "collection": {"type": "string"},
+        }, "required": ["item_id", "name", "collection"]},
+    )
+    async def edit_portrait(self, item_id: Any = None, name: Any = None, collection: Any = None, **_: Any):
+        return await self._portrait_call("edit_custom", item_id, name, collection)
+
+    @ui.action(label=tr("art.delete", default="删除立绘"), refresh_context=True)
+    @plugin_entry(
+        id="delete_portrait", name=tr("art.delete", default="删除立绘"),
+        description=tr("entries.deletePortrait.description", default="删除自定义立绘并移出随机范围。"),
+        input_schema={"type": "object", "properties": {"item_id": {"type": "string"}}, "required": ["item_id"]},
+    )
+    async def delete_portrait(self, item_id: Any = None, **_: Any):
+        return await self._portrait_call("delete_custom", item_id)
 
     @ui.action(label=tr("actions.syncCharacters.label", default="刷新角色"), refresh_context=True)
     @plugin_entry(

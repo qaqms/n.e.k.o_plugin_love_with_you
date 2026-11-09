@@ -22,7 +22,17 @@ if (diagnostics.length) {
 const localeFiles = readdirSync(join(pluginRoot, "i18n")).filter(name => name.endsWith(".json"))
 const en = JSON.parse(readFileSync(join(pluginRoot, "i18n/en.json"), "utf8"))
 const requiredKeys = ["common.affection", "common.saving", "common.unsaved", "common.discard",
+  ...Object.keys(en).filter(key => key.startsWith("art.")),
+  "error.portrait_invalid_image", "error.portrait_source_too_large", "error.portrait_library_full", "error.portrait_custom_only",
+  "error.nickname_conflict", "error.invalid_first_met_source", "dates.dateChoice", "dates.pluginDate",
+  "dates.savedHostDate", "dates.customDate", "dates.noSavedHostDate", "dates.legacyDate", "dates.legacyDateNote",
+  ...Object.keys(en).filter(key => key.startsWith("dates.history") || ["dates.importMet", "dates.importDescription",
+    "dates.confirmImport", "dates.currentMet", "error.first_met_conflict"].includes(key) || key.startsWith("error.host_history_")),
+  ...Object.keys(en).filter(key => key.startsWith("shop.") || key.startsWith("error.shop_") || key === "nav.shop" || key === "source.gift"),
   "common.refresh", "dates.removeNamed", "trend.summary", "alert.refreshFailed",
+  "common.dismiss", "common.noChanges", "theme.previewing", "adjust.change", "settings.sections",
+  "overview.recent", "overview.allHistory", "rules.autoBrief", "rules.details", "rules.proactiveRequires", "rules.proactiveBrief",
+  ...Object.keys(en).filter(key => key.startsWith("feedback.")),
   ...Object.keys(en).filter(key => key.startsWith("theme.") || key.startsWith("error.appearance_") ||
     key === "actions.setAppearance.label" || key === "entries.setAppearance.description")]
 let partialLocales = 0

@@ -52,9 +52,11 @@ def test_large_drop_skips_multiple_stages(engine):
 def test_delta_is_clamped_per_call(engine):
     record = _record(engine, 50)
     result = engine.apply_model_delta(record, 9, "很温柔", now=DAY)
-    assert result["applied"] == 5
-    assert result["limited_by"] == "per_call"
-    assert record["affection"] == 55
+    assert result["applied"] == 4
+    assert result["limited_by"] == "daily_gain"
+    assert record["affection"] == 54
+    loss = engine.apply_model_delta(record, -99, "hurt", now=DAY + 1)
+    assert loss["applied"] == -2 and loss["limited_by"] == "per_call"
 
 
 GAP = 150  # past MODEL_COOLDOWN_SECONDS, same local day
@@ -63,9 +65,9 @@ GAP = 150  # past MODEL_COOLDOWN_SECONDS, same local day
 def test_daily_gain_cap(engine):
     record = _record(engine, 10)
     applied = [engine.apply_model_delta(record, 5, "好", now=DAY + i * GAP)["applied"] for i in range(4)]
-    assert applied == [5, 5, 5, 0]
-    assert record["affection"] == 25
-    assert record["gained_today"] == 15
+    assert applied == [4, 0, 0, 0]
+    assert record["affection"] == 14
+    assert record["gained_today"] == 4
 
 
 def test_daily_cap_resets_next_day(engine):
@@ -73,15 +75,18 @@ def test_daily_cap_resets_next_day(engine):
     for i in range(3):
         engine.apply_model_delta(record, 5, "好", now=DAY + i * GAP)
     result = engine.apply_model_delta(record, 5, "好", now=DAY + 86_400)
-    assert result["applied"] == 5
+    assert result["applied"] == 4
 
 
 def test_losses_can_demote(engine):
     record = _record(engine, 80, "lover")
     applied = [engine.apply_model_delta(record, -5, "冷淡", now=DAY + i * GAP)["applied"] for i in range(3)]
     # First loss of the day is halved; the margin keeps "lover" down to 75.
-    assert applied == [-2, -5, -5]
-    assert record["affection"] == 68
+    assert applied == [-2, -2, 0]
+    assert record["affection"] == 76
+    assert record["stage"] == "lover"
+    engine.apply_model_delta(record, -5, "cold", now=DAY + 86_400)
+    assert record["affection"] == 74
     assert record["stage"] == "ambiguous"
 
 
@@ -218,6 +223,9 @@ def test_normalize_keeps_stage_inside_margin(engine):
 def test_new_record_has_relationship_fields(engine):
     record = engine.new_record(now=DAY)
     assert record["first_met"] == engine.today_str(DAY)
+    assert record["plugin_first_met"] == record["first_met"]
+    assert record["first_met_source"] == "plugin" and record["host_first_met"] is None
+    assert record["plugin_first_met_legacy"] is False
     assert record["milestones"] == {} and record["nicknames"] == {}
 
 
@@ -259,6 +267,79 @@ def test_set_nicknames_cleans_and_validates(engine):
         engine.set_nicknames(record, ["not", "a", "dict"])
 
 
+def test_nickname_patch_preserves_other_stages_and_clears_only_selected(engine):
+    record = _record(engine, 65)
+    engine.set_nicknames(record, {"familiar": "friend", "lover": "dear"})
+    result = engine.set_nicknames(record, {"fond": "  close   friend  "}, expected={"fond": ""})
+    assert result == {"familiar": "friend", "fond": "close friend", "lover": "dear"}
+    engine.set_nicknames(record, {"fond": ""}, expected={"fond": "close friend"})
+    assert engine.effective_nickname(record, "ambiguous") == "friend"
+    assert record["nicknames"] == {"familiar": "friend", "lover": "dear"}
+
+
+def test_nickname_patch_rejects_conflict_without_partial_changes(engine):
+    record = _record(engine, 65)
+    engine.set_nicknames(record, {"familiar": "new value"})
+    with pytest.raises(engine.EngineError, match="nickname_conflict"):
+        engine.set_nicknames(
+            record, {"stranger": "new", "familiar": "mine"},
+            expected={"stranger": "", "familiar": "old value"},
+        )
+    assert record["nicknames"] == {"familiar": "new value"}
+
+
+def test_nickname_patch_can_retry_an_already_committed_edit(engine):
+    record = _record(engine, 65)
+    for _ in range(2):
+        result = engine.set_nicknames(record, {"fond": "friend"}, expected={"fond": ""})
+        assert result == {"fond": "friend"}
+    for _ in range(2):
+        result = engine.set_nicknames(record, {"fond": ""}, expected={"fond": "friend"})
+        assert result == {}
+
+
+@pytest.mark.parametrize("values,expected", [
+    ({"fond": 123}, None),
+    ({"fond": "friend"}, []),
+    ({"fond": "friend"}, {}),
+    ({"fond": "friend"}, {"fond": 123}),
+])
+def test_nickname_patch_validates_values_and_original_fields(engine, values, expected):
+    record = _record(engine, 0)
+    with pytest.raises(engine.EngineError) as info:
+        engine.set_nicknames(record, values, expected=expected)
+    assert info.value.code == "invalid_nicknames"
+    assert record["nicknames"] == {}
+
+
+def test_mode_switches_preserve_shared_and_each_existing_character_nicknames(engine):
+    state = _state_with(engine, 40)
+    engine.set_nicknames(state["shared"], {"familiar": "shared"})
+    engine.set_per_character(state, True, "A")
+    assert state["characters"]["A"]["nicknames"] == {"familiar": "shared"}
+    engine.set_nicknames(state["characters"]["A"], {"lover": "A-only"})
+    engine.set_per_character(state, False, "A")
+    assert state["shared"]["nicknames"] == {"familiar": "shared"}
+    engine.set_per_character(state, True, "B")
+    engine.set_nicknames(state["characters"]["B"], {"lover": "B-only"})
+    engine.set_per_character(state, False, "B")
+    engine.set_per_character(state, True, "A")
+    assert state["characters"]["A"]["nicknames"] == {"lover": "A-only"}
+    assert state["characters"]["B"]["nicknames"] == {"lover": "B-only"}
+
+
+def test_mode_switch_preserves_deliberately_empty_nicknames(engine):
+    state = _state_with(engine, 40)
+    engine.set_per_character(state, True, "A")
+    engine.set_nicknames(state["characters"]["A"], {"lover": "A-only"})
+    engine.set_per_character(state, False, "A")
+    assert state["shared"]["nicknames"] == {}
+    engine.set_nicknames(state["characters"]["A"], {})
+    engine.set_nicknames(state["shared"], {"lover": "shared"})
+    engine.set_per_character(state, True, "A")
+    assert state["characters"]["A"]["nicknames"] == {}
+
+
 def test_set_first_met_validation(engine):
     record = _record(engine, 0)
     assert engine.set_first_met(record, "2025-02-14", now=DAY) == "2025-02-14"
@@ -271,6 +352,108 @@ def test_set_first_met_validation(engine):
             engine.set_first_met(record, value, now=DAY)
         assert info.value.code == code
     assert record["first_met"] == "2025-02-14"
+
+
+def test_first_met_import_rejects_concurrent_change_and_allows_retry(engine):
+    record = engine.new_record()
+    original = record["first_met"]
+    engine.set_first_met(record, "2026-01-02", expected=original)
+    assert record["first_met"] == "2026-01-02"
+    engine.set_first_met(record, "2026-01-02", expected=original)
+    engine.set_first_met(record, "2026-02-03")
+    with pytest.raises(engine.EngineError, match="first_met_conflict"):
+        engine.set_first_met(record, "2026-01-02", expected=original)
+    assert record["first_met"] == "2026-02-03"
+
+
+def test_first_met_choices_survive_import_custom_edits_restore_and_reload(engine):
+    record = engine.new_record(now=DAY)
+    original = record["first_met"]
+    engine.set_first_met(record, "2025-01-02", now=DAY, source="host")
+    record = engine.normalize_record(record, now=DAY + 86400)
+    assert record["plugin_first_met"] == original
+    assert record["host_first_met"] == "2025-01-02" and record["first_met_source"] == "host"
+    engine.set_first_met(record, "2025-02-03", now=DAY)
+    engine.set_first_met(record, original, now=DAY, source="plugin", expected="2025-02-03")
+    engine.set_first_met(record, original, now=DAY, source="plugin", expected="2025-02-03")
+    assert record["host_first_met"] == "2025-01-02"
+    engine.set_first_met(record, record["host_first_met"], now=DAY, source="host", expected=original)
+    view = engine.record_view(engine.normalize_record(record, now=DAY))
+    assert view["first_met"] == view["host_first_met"] == "2025-01-02"
+    assert view["plugin_first_met"] == original and view["first_met_source"] == "host"
+    assert view["plugin_first_met_legacy"] is False
+    assert view["custom_first_met"] == "2025-02-03"
+    engine.set_first_met(record, view["custom_first_met"], now=DAY)
+    assert record["first_met"] == "2025-02-03" and record["host_first_met"] == "2025-01-02"
+
+
+def test_legacy_date_is_preserved_as_an_honest_restore_point(engine):
+    record = engine.normalize_record({
+        "first_met": "2025-02-03", "daily": {"2025-01-02": 10}, "updated_at": DAY,
+    }, now=DAY)
+    assert record["first_met"] == record["plugin_first_met"] == "2025-02-03"
+    assert record["plugin_first_met_legacy"] is True
+    engine.set_first_met(record, "2025-01-01", now=DAY, source="host")
+    restored = engine.normalize_record(record, now=DAY + 86400)
+    assert restored["plugin_first_met"] == "2025-02-03" and restored["plugin_first_met_legacy"] is True
+    engine.set_first_met(restored, "2025-02-03", now=DAY, source="plugin")
+    assert restored["first_met"] == "2025-02-03" and restored["host_first_met"] == "2025-01-01"
+
+
+def test_same_day_host_import_is_still_saved_as_a_reusable_choice(engine):
+    record = engine.new_record(now=DAY)
+    original = record["first_met"]
+    engine.set_first_met(record, original, now=DAY, source="host", expected=original)
+    assert record["host_first_met"] == original and record["first_met_source"] == "host"
+    engine.set_first_met(record, original, now=DAY, source="plugin")
+    assert record["host_first_met"] == original and record["first_met_source"] == "plugin"
+
+
+@pytest.mark.parametrize("source", [None, "", "invalid", [], {}, 1])
+def test_first_met_rejects_invalid_source_without_changing_choices(engine, source):
+    record = engine.new_record(now=DAY)
+    before = dict(record)
+    with pytest.raises(engine.EngineError, match="invalid_first_met_source"):
+        engine.set_first_met(record, "2025-01-02", now=DAY, source=source)
+    assert record == before
+
+
+def test_restore_rejects_forged_plugin_date_and_concurrent_edits(engine):
+    record = engine.new_record(now=DAY)
+    original = record["first_met"]
+    engine.set_first_met(record, "2025-01-02", now=DAY, source="host")
+    before = dict(record)
+    with pytest.raises(engine.EngineError, match="first_met_conflict"):
+        engine.set_first_met(record, "2025-02-03", now=DAY, source="plugin")
+    assert record == before
+    engine.set_first_met(record, "2025-02-03", now=DAY)
+    with pytest.raises(engine.EngineError, match="first_met_conflict"):
+        engine.set_first_met(record, original, now=DAY, source="plugin", expected="2025-01-02")
+    assert record["first_met"] == "2025-02-03"
+    assert record["plugin_first_met"] == original and record["host_first_met"] == "2025-01-02"
+
+
+def test_normalize_first_met_drops_invalid_cache_and_inconsistent_source(engine):
+    record = engine.normalize_record({
+        "first_met": "2025-02-03", "host_first_met": "bad", "first_met_source": "host",
+    }, now=DAY)
+    assert record["first_met"] == "2025-02-03" and record["host_first_met"] is None
+    assert record["first_met_source"] == "custom"
+
+
+def test_date_choices_stay_with_existing_shared_and_independent_relationships(engine):
+    state = engine.new_state()
+    engine.set_first_met(state["shared"], "2025-01-02", source="host")
+    engine.set_per_character(state, True, "YUI")
+    independent = state["characters"]["YUI"]
+    assert independent["host_first_met"] == "2025-01-02"
+    engine.set_first_met(independent, "2025-03-04", source="host")
+    engine.set_per_character(state, False, "YUI")
+    assert state["shared"]["host_first_met"] == state["shared"]["first_met"] == "2025-01-02"
+    engine.set_first_met(state["shared"], state["shared"]["plugin_first_met"], source="plugin")
+    engine.set_per_character(state, True, "YUI")
+    assert state["characters"]["YUI"]["host_first_met"] == state["characters"]["YUI"]["first_met"] == "2025-03-04"
+    assert state["shared"]["first_met_source"] == "plugin"
 
 
 def test_anniversary_add_remove_and_limits(engine):

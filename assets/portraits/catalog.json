@@ -1,11 +1,10 @@
 {
   "version": 1,
-  "title": "千恋万花",
   "items": [
     {
       "id": "sb-f600666675a9",
       "name": "丛雨 cos01",
-      "collection": "丛雨",
+      "collection": "千恋万花",
       "file": "sb-f600666675a9/display.webp",
       "thumbnail": "sb-f600666675a9/thumb.webp",
       "source_file": "00_高清母版_4x/丛雨_cos01.png"
@@ -13,7 +12,7 @@
     {
       "id": "sb-57ca9ddc8fa0",
       "name": "丛雨 cos02",
-      "collection": "丛雨",
+      "collection": "千恋万花",
       "file": "sb-57ca9ddc8fa0/display.webp",
       "thumbnail": "sb-57ca9ddc8fa0/thumb.webp",
       "source_file": "00_高清母版_4x/丛雨_cos02.png"
@@ -21,7 +20,7 @@
     {
       "id": "sb-d3339db01cc1",
       "name": "常陸茉子 cos01",
-      "collection": "常陸茉子",
+      "collection": "千恋万花",
       "file": "sb-d3339db01cc1/display.webp",
       "thumbnail": "sb-d3339db01cc1/thumb.webp",
       "source_file": "00_高清母版_4x/常陸茉子_cos01.png"
@@ -29,7 +28,7 @@
     {
       "id": "sb-8e208b8be9de",
       "name": "常陸茉子 cos02",
-      "collection": "常陸茉子",
+      "collection": "千恋万花",
       "file": "sb-8e208b8be9de/display.webp",
       "thumbnail": "sb-8e208b8be9de/thumb.webp",
       "source_file": "00_高清母版_4x/常陸茉子_cos02.png"
@@ -37,7 +36,7 @@
     {
       "id": "sb-24619fb42d92",
       "name": "常陸茉子 cos03",
-      "collection": "常陸茉子",
+      "collection": "千恋万花",
       "file": "sb-24619fb42d92/display.webp",
       "thumbnail": "sb-24619fb42d92/thumb.webp",
       "source_file": "00_高清母版_4x/常陸茉子_cos03.png"
@@ -45,7 +44,7 @@
     {
       "id": "sb-7cc2e20bd195",
       "name": "朝武芳乃 cos01",
-      "collection": "朝武芳乃",
+      "collection": "千恋万花",
       "file": "sb-7cc2e20bd195/display.webp",
       "thumbnail": "sb-7cc2e20bd195/thumb.webp",
       "source_file": "00_高清母版_4x/朝武芳乃_cos01.png"
@@ -53,7 +52,7 @@
     {
       "id": "sb-29b767d445ae",
       "name": "朝武芳乃 cos02",
-      "collection": "朝武芳乃",
+      "collection": "千恋万花",
       "file": "sb-29b767d445ae/display.webp",
       "thumbnail": "sb-29b767d445ae/thumb.webp",
       "source_file": "00_高清母版_4x/朝武芳乃_cos02.png"
@@ -61,7 +60,7 @@
     {
       "id": "sb-425d814301d7",
       "name": "朝武芳乃 cos03",
-      "collection": "朝武芳乃",
+      "collection": "千恋万花",
       "file": "sb-425d814301d7/display.webp",
       "thumbnail": "sb-425d814301d7/thumb.webp",
       "source_file": "00_高清母版_4x/朝武芳乃_cos03.png"
@@ -69,7 +68,7 @@
     {
       "id": "sb-09ee678da21c",
       "name": "蕾娜 cos01",
-      "collection": "蕾娜",
+      "collection": "千恋万花",
       "file": "sb-09ee678da21c/display.webp",
       "thumbnail": "sb-09ee678da21c/thumb.webp",
       "source_file": "00_高清母版_4x/蕾娜_cos01.png"
@@ -77,7 +76,7 @@
     {
       "id": "sb-3bb5a3eebb22",
       "name": "蕾娜 cos02",
-      "collection": "蕾娜",
+      "collection": "千恋万花",
       "file": "sb-3bb5a3eebb22/display.webp",
       "thumbnail": "sb-3bb5a3eebb22/thumb.webp",
       "source_file": "00_高清母版_4x/蕾娜_cos02.png"
@@ -85,7 +84,7 @@
     {
       "id": "sb-d3b0ebe0e880",
       "name": "蕾娜 cos03",
-      "collection": "蕾娜",
+      "collection": "千恋万花",
       "file": "sb-d3b0ebe0e880/display.webp",
       "thumbnail": "sb-d3b0ebe0e880/thumb.webp",
       "source_file": "00_高清母版_4x/蕾娜_cos03.png"
@@ -93,7 +92,7 @@
     {
       "id": "sb-133d11c12d51",
       "name": "朝武芳乃 巫女服",
-      "collection": "朝武芳乃",
+      "collection": "千恋万花",
       "file": "sb-133d11c12d51/display.webp",
       "thumbnail": "sb-133d11c12d51/thumb.webp",
       "source_file": "01_朝武芳乃_巫女服.png"
@@ -101,7 +100,7 @@
     {
       "id": "sb-d19a1e7f3dac",
       "name": "常陸茉子 忍者服",
-      "collection": "常陸茉子",
+      "collection": "千恋万花",
       "file": "sb-d19a1e7f3dac/display.webp",
       "thumbnail": "sb-d19a1e7f3dac/thumb.webp",
       "source_file": "02_常陸茉子_忍者服.png"
@@ -109,7 +108,7 @@
     {
       "id": "sb-39295983af40",
       "name": "丛雨 刀服",
-      "collection": "丛雨",
+      "collection": "千恋万花",
       "file": "sb-39295983af40/display.webp",
       "thumbnail": "sb-39295983af40/thumb.webp",
       "source_file": "03_丛雨_刀服.png"
@@ -117,7 +116,7 @@
     {
       "id": "sb-a56941eadd73",
       "name": "蕾娜 女神服",
-      "collection": "蕾娜",
+      "collection": "千恋万花",
       "file": "sb-a56941eadd73/display.webp",
       "thumbnail": "sb-a56941eadd73/thumb.webp",
       "source_file": "04_蕾娜_女神服.png"
@@ -125,7 +124,7 @@
     {
       "id": "sb-c5bb7eebdd51",
       "name": "鞍馬小春 店服",
-      "collection": "鞍馬小春",
+      "collection": "千恋万花",
       "file": "sb-c5bb7eebdd51/display.webp",
       "thumbnail": "sb-c5bb7eebdd51/thumb.webp",
       "source_file": "05_鞍馬小春_店服.png"
@@ -133,7 +132,7 @@
     {
       "id": "sb-7cead64eba2f",
       "name": "馬庭芦花 店服",
-      "collection": "馬庭芦花",
+      "collection": "千恋万花",
       "file": "sb-7cead64eba2f/display.webp",
       "thumbnail": "sb-7cead64eba2f/thumb.webp",
       "source_file": "06_馬庭芦花_店服.png"
@@ -141,10 +140,378 @@
     {
       "id": "sb-6d9439972cf6",
       "name": "鞍馬小春 制服 备用",
-      "collection": "鞍馬小春",
+      "collection": "千恋万花",
       "file": "sb-6d9439972cf6/display.webp",
       "thumbnail": "sb-6d9439972cf6/thumb.webp",
       "source_file": "07_鞍馬小春_制服_备用.png"
+    },
+    {
+      "id": "game-7eb9c478d4a9",
+      "name": "角色1",
+      "collection": "anemoi (Key)",
+      "file": "game-7eb9c478d4a9/display.webp",
+      "thumbnail": "game-7eb9c478d4a9/thumb.webp",
+      "source_file": "anemoi (Key)/角色1.png"
+    },
+    {
+      "id": "game-4d17c8bafafd",
+      "name": "角色12",
+      "collection": "anemoi (Key)",
+      "file": "game-4d17c8bafafd/display.webp",
+      "thumbnail": "game-4d17c8bafafd/thumb.webp",
+      "source_file": "anemoi (Key)/角色12.png"
+    },
+    {
+      "id": "game-b0a610fc3a11",
+      "name": "角色17",
+      "collection": "anemoi (Key)",
+      "file": "game-b0a610fc3a11/display.webp",
+      "thumbnail": "game-b0a610fc3a11/thumb.webp",
+      "source_file": "anemoi (Key)/角色17.png"
+    },
+    {
+      "id": "game-2fe82e3bb4ef",
+      "name": "角色2",
+      "collection": "anemoi (Key)",
+      "file": "game-2fe82e3bb4ef/display.webp",
+      "thumbnail": "game-2fe82e3bb4ef/thumb.webp",
+      "source_file": "anemoi (Key)/角色2.png"
+    },
+    {
+      "id": "game-2da3b760af20",
+      "name": "角色3",
+      "collection": "anemoi (Key)",
+      "file": "game-2da3b760af20/display.webp",
+      "thumbnail": "game-2da3b760af20/thumb.webp",
+      "source_file": "anemoi (Key)/角色3.png"
+    },
+    {
+      "id": "game-7792d351c815",
+      "name": "角色4",
+      "collection": "anemoi (Key)",
+      "file": "game-7792d351c815/display.webp",
+      "thumbnail": "game-7792d351c815/thumb.webp",
+      "source_file": "anemoi (Key)/角色4.png"
+    },
+    {
+      "id": "game-f98d1027f571",
+      "name": "角色5",
+      "collection": "anemoi (Key)",
+      "file": "game-f98d1027f571/display.webp",
+      "thumbnail": "game-f98d1027f571/thumb.webp",
+      "source_file": "anemoi (Key)/角色5.png"
+    },
+    {
+      "id": "game-75a315bd3956",
+      "name": "角色6",
+      "collection": "anemoi (Key)",
+      "file": "game-75a315bd3956/display.webp",
+      "thumbnail": "game-75a315bd3956/thumb.webp",
+      "source_file": "anemoi (Key)/角色6.png"
+    },
+    {
+      "id": "game-0b7a53a6cc94",
+      "name": "角色7",
+      "collection": "anemoi (Key)",
+      "file": "game-0b7a53a6cc94/display.webp",
+      "thumbnail": "game-0b7a53a6cc94/thumb.webp",
+      "source_file": "anemoi (Key)/角色7.png"
+    },
+    {
+      "id": "game-df02fae3f14d",
+      "name": "角色8",
+      "collection": "anemoi (Key)",
+      "file": "game-df02fae3f14d/display.webp",
+      "thumbnail": "game-df02fae3f14d/thumb.webp",
+      "source_file": "anemoi (Key)/角色8.png"
+    },
+    {
+      "id": "game-44360e9e9910",
+      "name": "角色9",
+      "collection": "anemoi (Key)",
+      "file": "game-44360e9e9910/display.webp",
+      "thumbnail": "game-44360e9e9910/thumb.webp",
+      "source_file": "anemoi (Key)/角色9.png"
+    },
+    {
+      "id": "game-d667e0b780e9",
+      "name": "三司あやせ",
+      "collection": "RIDDLE JOKER",
+      "file": "game-d667e0b780e9/display.webp",
+      "thumbnail": "game-d667e0b780e9/thumb.webp",
+      "source_file": "RIDDLE JOKER/01_三司あやせ.png"
+    },
+    {
+      "id": "game-32512f67b679",
+      "name": "在原七海",
+      "collection": "RIDDLE JOKER",
+      "file": "game-32512f67b679/display.webp",
+      "thumbnail": "game-32512f67b679/thumb.webp",
+      "source_file": "RIDDLE JOKER/02_在原七海.png"
+    },
+    {
+      "id": "game-331dd74a06a1",
+      "name": "二条院羽月",
+      "collection": "RIDDLE JOKER",
+      "file": "game-331dd74a06a1/display.webp",
+      "thumbnail": "game-331dd74a06a1/thumb.webp",
+      "source_file": "RIDDLE JOKER/03_二条院羽月.png"
+    },
+    {
+      "id": "game-ba923debd21e",
+      "name": "式部茉優",
+      "collection": "RIDDLE JOKER",
+      "file": "game-ba923debd21e/display.webp",
+      "thumbnail": "game-ba923debd21e/thumb.webp",
+      "source_file": "RIDDLE JOKER/04_式部茉優.png"
+    },
+    {
+      "id": "game-04819cd06107",
+      "name": "壬生千咲",
+      "collection": "RIDDLE JOKER",
+      "file": "game-04819cd06107/display.webp",
+      "thumbnail": "game-04819cd06107/thumb.webp",
+      "source_file": "RIDDLE JOKER/05_壬生千咲.png"
+    },
+    {
+      "id": "game-d714d4ea2c1b",
+      "name": "鳴瀬しろは",
+      "collection": "Summer Pockets (Key)",
+      "file": "game-d714d4ea2c1b/display.webp",
+      "thumbnail": "game-d714d4ea2c1b/thumb.webp",
+      "source_file": "Summer Pockets (Key)/01_鳴瀬しろは.png"
+    },
+    {
+      "id": "game-160b2f33d505",
+      "name": "空門蒼",
+      "collection": "Summer Pockets (Key)",
+      "file": "game-160b2f33d505/display.webp",
+      "thumbnail": "game-160b2f33d505/thumb.webp",
+      "source_file": "Summer Pockets (Key)/02_空門蒼.png"
+    },
+    {
+      "id": "game-c7f51ed0aa97",
+      "name": "久島鴎",
+      "collection": "Summer Pockets (Key)",
+      "file": "game-c7f51ed0aa97/display.webp",
+      "thumbnail": "game-c7f51ed0aa97/thumb.webp",
+      "source_file": "Summer Pockets (Key)/03_久島鴎.png"
+    },
+    {
+      "id": "game-1d7d92acdee7",
+      "name": "野村静久",
+      "collection": "Summer Pockets (Key)",
+      "file": "game-1d7d92acdee7/display.webp",
+      "thumbnail": "game-1d7d92acdee7/thumb.webp",
+      "source_file": "Summer Pockets (Key)/05_野村静久.png"
+    },
+    {
+      "id": "game-f94f0ec5c73d",
+      "name": "加藤",
+      "collection": "Summer Pockets (Key)",
+      "file": "game-f94f0ec5c73d/display.webp",
+      "thumbnail": "game-f94f0ec5c73d/thumb.webp",
+      "source_file": "Summer Pockets (Key)/08_加藤.png"
+    },
+    {
+      "id": "game-e1ea1911e63e",
+      "name": "京子",
+      "collection": "Summer Pockets (Key)",
+      "file": "game-e1ea1911e63e/display.webp",
+      "thumbnail": "game-e1ea1911e63e/thumb.webp",
+      "source_file": "Summer Pockets (Key)/10_京子.png"
+    },
+    {
+      "id": "game-7adc630f5f33",
+      "name": "野村",
+      "collection": "Summer Pockets (Key)",
+      "file": "game-7adc630f5f33/display.webp",
+      "thumbnail": "game-7adc630f5f33/thumb.webp",
+      "source_file": "Summer Pockets (Key)/11_野村.png"
+    },
+    {
+      "id": "game-fca5adcb21c4",
+      "name": "ウェンダース",
+      "collection": "Summer Pockets (Key)",
+      "file": "game-fca5adcb21c4/display.webp",
+      "thumbnail": "game-fca5adcb21c4/thumb.webp",
+      "source_file": "Summer Pockets (Key)/13_ウェンダース.png"
+    },
+    {
+      "id": "game-e463a873166b",
+      "name": "白雪乃愛 A",
+      "collection": "天使☆嚣嚣_RE-BOOT",
+      "file": "game-e463a873166b/display.webp",
+      "thumbnail": "game-e463a873166b/thumb.webp",
+      "source_file": "天使☆嚣嚣_RE-BOOT/01_白雪乃愛_A.png"
+    },
+    {
+      "id": "game-8eb1a2be1d2c",
+      "name": "白雪乃愛 B",
+      "collection": "天使☆嚣嚣_RE-BOOT",
+      "file": "game-8eb1a2be1d2c/display.webp",
+      "thumbnail": "game-8eb1a2be1d2c/thumb.webp",
+      "source_file": "天使☆嚣嚣_RE-BOOT/01_白雪乃愛_B.png"
+    },
+    {
+      "id": "game-6c7869edcc43",
+      "name": "谷風天音 A",
+      "collection": "天使☆嚣嚣_RE-BOOT",
+      "file": "game-6c7869edcc43/display.webp",
+      "thumbnail": "game-6c7869edcc43/thumb.webp",
+      "source_file": "天使☆嚣嚣_RE-BOOT/02_谷風天音_A.png"
+    },
+    {
+      "id": "game-82ef03bacf54",
+      "name": "小雲雀来海 A",
+      "collection": "天使☆嚣嚣_RE-BOOT",
+      "file": "game-82ef03bacf54/display.webp",
+      "thumbnail": "game-82ef03bacf54/thumb.webp",
+      "source_file": "天使☆嚣嚣_RE-BOOT/03_小雲雀来海_A.png"
+    },
+    {
+      "id": "game-6dbc4c9211ef",
+      "name": "星河かぐ耶 A",
+      "collection": "天使☆嚣嚣_RE-BOOT",
+      "file": "game-6dbc4c9211ef/display.webp",
+      "thumbnail": "game-6dbc4c9211ef/thumb.webp",
+      "source_file": "天使☆嚣嚣_RE-BOOT/04_星河かぐ耶_A.png"
+    },
+    {
+      "id": "game-c73c3c4bf778",
+      "name": "星河かぐ耶 B",
+      "collection": "天使☆嚣嚣_RE-BOOT",
+      "file": "game-c73c3c4bf778/display.webp",
+      "thumbnail": "game-c73c3c4bf778/thumb.webp",
+      "source_file": "天使☆嚣嚣_RE-BOOT/04_星河かぐ耶_B.png"
+    },
+    {
+      "id": "game-95471c32b863",
+      "name": "高楯オリエ A",
+      "collection": "天使☆嚣嚣_RE-BOOT",
+      "file": "game-95471c32b863/display.webp",
+      "thumbnail": "game-95471c32b863/thumb.webp",
+      "source_file": "天使☆嚣嚣_RE-BOOT/05_高楯オリエ_A.png"
+    },
+    {
+      "id": "game-7ed6dee32966",
+      "name": "高楯オリエ B",
+      "collection": "天使☆嚣嚣_RE-BOOT",
+      "file": "game-7ed6dee32966/display.webp",
+      "thumbnail": "game-7ed6dee32966/thumb.webp",
+      "source_file": "天使☆嚣嚣_RE-BOOT/05_高楯オリエ_B.png"
+    },
+    {
+      "id": "game-fa980009a896",
+      "name": "百里風実花 A",
+      "collection": "天使☆嚣嚣_RE-BOOT",
+      "file": "game-fa980009a896/display.webp",
+      "thumbnail": "game-fa980009a896/thumb.webp",
+      "source_file": "天使☆嚣嚣_RE-BOOT/06_百里風実花_A.png"
+    },
+    {
+      "id": "game-b62e72022684",
+      "name": "明月栞那",
+      "collection": "星光咖啡馆与死神之蝶",
+      "file": "game-b62e72022684/display.webp",
+      "thumbnail": "game-b62e72022684/thumb.webp",
+      "source_file": "星光咖啡馆与死神之蝶/01_明月栞那.png"
+    },
+    {
+      "id": "game-825d6801325c",
+      "name": "四季ナツメ",
+      "collection": "星光咖啡馆与死神之蝶",
+      "file": "game-825d6801325c/display.webp",
+      "thumbnail": "game-825d6801325c/thumb.webp",
+      "source_file": "星光咖啡馆与死神之蝶/02_四季ナツメ.png"
+    },
+    {
+      "id": "game-a3ab7210f268",
+      "name": "火打谷愛衣",
+      "collection": "星光咖啡馆与死神之蝶",
+      "file": "game-a3ab7210f268/display.webp",
+      "thumbnail": "game-a3ab7210f268/thumb.webp",
+      "source_file": "星光咖啡馆与死神之蝶/03_火打谷愛衣.png"
+    },
+    {
+      "id": "game-112b3e85aa23",
+      "name": "角色4 紫发水手",
+      "collection": "星光咖啡馆与死神之蝶",
+      "file": "game-112b3e85aa23/display.webp",
+      "thumbnail": "game-112b3e85aa23/thumb.webp",
+      "source_file": "星光咖啡馆与死神之蝶/04_角色4_紫发水手.png"
+    },
+    {
+      "id": "game-d9424a8084e1",
+      "name": "角色5 粉紫长发",
+      "collection": "星光咖啡馆与死神之蝶",
+      "file": "game-d9424a8084e1/display.webp",
+      "thumbnail": "game-d9424a8084e1/thumb.webp",
+      "source_file": "星光咖啡馆与死神之蝶/05_角色5_粉紫长发.png"
+    },
+    {
+      "id": "game-b32b1592620a",
+      "name": "倉科明日香",
+      "collection": "苍之彼方的四重奏（sprite）",
+      "file": "game-b32b1592620a/display.webp",
+      "thumbnail": "game-b32b1592620a/thumb.webp",
+      "source_file": "苍之彼方的四重奏（sprite）/01_倉科明日香.png"
+    },
+    {
+      "id": "game-412fc1dc6cc4",
+      "name": "鳶沢みさき",
+      "collection": "苍之彼方的四重奏（sprite）",
+      "file": "game-412fc1dc6cc4/display.webp",
+      "thumbnail": "game-412fc1dc6cc4/thumb.webp",
+      "source_file": "苍之彼方的四重奏（sprite）/02_鳶沢みさき.png"
+    },
+    {
+      "id": "game-b5511ad7f8b2",
+      "name": "有坂真白",
+      "collection": "苍之彼方的四重奏（sprite）",
+      "file": "game-b5511ad7f8b2/display.webp",
+      "thumbnail": "game-b5511ad7f8b2/thumb.webp",
+      "source_file": "苍之彼方的四重奏（sprite）/03_有坂真白.png"
+    },
+    {
+      "id": "game-7631eb51013e",
+      "name": "市ノ瀬莉佳",
+      "collection": "苍之彼方的四重奏（sprite）",
+      "file": "game-7631eb51013e/display.webp",
+      "thumbnail": "game-7631eb51013e/thumb.webp",
+      "source_file": "苍之彼方的四重奏（sprite）/04_市ノ瀬莉佳.png"
+    },
+    {
+      "id": "game-6cadd4b58bf4",
+      "name": "綾地寧々",
+      "collection": "魔女的夜宴",
+      "file": "game-6cadd4b58bf4/display.webp",
+      "thumbnail": "game-6cadd4b58bf4/thumb.webp",
+      "source_file": "魔女的夜宴/01_綾地寧々.png"
+    },
+    {
+      "id": "game-66638ffb802b",
+      "name": "因幡めぐる",
+      "collection": "魔女的夜宴",
+      "file": "game-66638ffb802b/display.webp",
+      "thumbnail": "game-66638ffb802b/thumb.webp",
+      "source_file": "魔女的夜宴/02_因幡めぐる.png"
+    },
+    {
+      "id": "game-90ccdfa74720",
+      "name": "仮屋和奏",
+      "collection": "魔女的夜宴",
+      "file": "game-90ccdfa74720/display.webp",
+      "thumbnail": "game-90ccdfa74720/thumb.webp",
+      "source_file": "魔女的夜宴/03_仮屋和奏.png"
+    },
+    {
+      "id": "game-cf14a0a52fe0",
+      "name": "若津崎紬",
+      "collection": "魔女的夜宴",
+      "file": "game-cf14a0a52fe0/display.webp",
+      "thumbnail": "game-cf14a0a52fe0/thumb.webp",
+      "source_file": "魔女的夜宴/04_若津崎紬.png"
     }
   ]
 }

@@ -16,8 +16,13 @@ import {
 } from "@neko/plugin-ui"
 import type { PluginSurfaceProps } from "@neko/plugin-ui"
 import { Icon } from "./icons"
+import { INTERACTION_STYLE, useInteractionFeedback } from "./interaction"
 import { DEFAULT_APPEARANCE, THEME_PRESETS, normalizeAppearance, themeCss } from "./theme"
 import type { Appearance } from "./theme"
+import { Shop, SHOP_ERRORS, SHOP_STYLE } from "./shop"
+import type { ShopState } from "./shop"
+import { PortraitImport, PORTRAIT_IMPORT_STYLE } from "./portrait-import"
+import { SCROLLBAR_STYLE, useQuietScrollbars } from "./scrollbars"
 
 type HistoryItem = { ts: number; delta: number; value: number; reason: string; source: string }
 
@@ -31,9 +36,13 @@ type CalEvent = {
 }
 
 type Anniversary = { id: string; title: string; month: number; day: number }
+type FirstMetImport = {
+  scope: string; date: string; previous_date: string
+  character: string; source: "host_recent_history"; scanned_roles: number
+}
 
 type ArtMeta = { available: boolean; version?: string; error?: string; file?: string }
-type Portrait = { id: string; name: string; collection: string; available: boolean; version: string }
+type Portrait = { id: string; name: string; collection: string; available: boolean; version: string; custom?: boolean }
 type PortraitPrefs = { mode: "fixed" | "random" | "off" | "legacy"; selected_id: string; pool_ids: string[] | null }
 type PortraitLibrary = {
   settings: PortraitPrefs; count: number; ids: string[]; pool_count: number; collections: string[]; revision: string; catalog_error: boolean
@@ -50,9 +59,20 @@ type Scope = {
   next_stage: string | null
   points_to_next: number
   gained_today: number
+  gained_chat?: number
+  gift_room?: number
+  chat_room?: number
+  gain_revision?: number
+  quota_blocked?: boolean
+  clock_error?: boolean
   lost_today: number
   history: HistoryItem[]
   first_met?: string
+  plugin_first_met?: string
+  plugin_first_met_legacy?: boolean
+  host_first_met?: string | null
+  custom_first_met?: string | null
+  first_met_source?: "plugin" | "host" | "custom"
   milestones?: Record<string, string>
   nicknames?: Record<string, string>
   nickname?: string
@@ -67,6 +87,7 @@ type Scope = {
 }
 
 type Dashboard = {
+  shop?: ShopState
   appearance?: Appearance
   per_character?: boolean
   current_character?: string | null
@@ -79,6 +100,7 @@ type Dashboard = {
   limits?: {
     per_call: number
     daily_gain: number
+    daily_chat?: number
     daily_loss: number
     nickname_chars?: number
     title_chars?: number
@@ -102,14 +124,16 @@ type Dashboard = {
   portraits?: PortraitLibrary | null
 }
 
-type Section = "heart" | "history" | "dates" | "nicknames" | "settings"
+type Section = "heart" | "history" | "dates" | "nicknames" | "shop" | "settings"
+type Feedback = { tone: "pending" | "success" | "warning" | "danger"; message: string; action: string }
 
-const SECTIONS: Section[] = ["heart", "history", "dates", "nicknames", "settings"]
-const SECTION_ICONS = { heart: "Heart", history: "History", dates: "CalendarDays", nicknames: "MessageCircle", settings: "Settings" } as const
+const SECTIONS: Section[] = ["heart", "shop", "history", "dates", "nicknames", "settings"]
+const SECTION_ICONS = { heart: "Heart", history: "History", dates: "CalendarDays", nicknames: "MessageCircle", shop: "ShoppingBag", settings: "Settings" } as const
 const TREND_RANGES = [30, 90, 365]
 
 // Backend error codes the panel can explain; anything else is shown verbatim.
 const ERROR_CODES = [
+  ...SHOP_ERRORS,
   "date_in_future",
   "date_too_old",
   "invalid_date",
@@ -117,6 +141,12 @@ const ERROR_CODES = [
   "too_many",
   "not_found",
   "invalid_nicknames",
+  "nickname_conflict",
+  "first_met_conflict",
+  "invalid_first_met_source",
+  "host_history_unavailable",
+  "host_history_incomplete",
+  "host_history_empty",
   "per_character_off",
   "shared_not_in_use",
   "unknown_scope",
@@ -127,6 +157,10 @@ const ERROR_CODES = [
   "portrait_too_large",
   "portrait_not_ready",
   "portrait_save_failed",
+  "portrait_invalid_image",
+  "portrait_source_too_large",
+  "portrait_library_full",
+  "portrait_custom_only",
   "appearance_invalid_settings",
   "appearance_not_ready",
   "appearance_save_failed",
@@ -138,13 +172,9 @@ const STYLE = `
 :root { font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif; }
 .neko-button { border: 1px solid var(--border); border-radius: 6px; padding: 7px 12px; background: transparent;
   color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.4; }
-.neko-button:not(:disabled):hover { transform: none; box-shadow: none; border-color: var(--accent-line); color: var(--accent-strong); }
 .neko-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; white-space: normal; }
 .neko-button[data-tone="primary"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.neko-button[data-tone="primary"]:not(:disabled):hover { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
-.neko-button[data-tone="danger"] { background: transparent; }
-.neko-button[data-tone="danger"]:not(:disabled):hover { background: rgba(245, 108, 108, 0.1); color: var(--danger);
-  border-color: rgba(245, 108, 108, 0.5); }
+.neko-button[data-tone="danger"] { background: transparent; color: var(--danger); }
 .neko-button:disabled { opacity: 0.45; cursor: not-allowed; }
 .neko-button:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .neko-input { border-radius: 6px; padding: 8px 12px; font-size: 14px; min-width: 0; max-width: 100%; box-sizing: border-box; }
@@ -159,11 +189,13 @@ const STYLE = `
 .neko-switch .neko-checkbox:checked::after { transform: translateX(14px); background: var(--on-accent); }
 .neko-switch .neko-checkbox:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .neko-switch .neko-checkbox:disabled { opacity: 0.5; cursor: not-allowed; }
-html, body { margin: 0; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
 .neko-select { min-width: 0; max-width: 100%; }
 .neko-modal { border-radius: 8px; max-height: calc(100dvh - 32px); display: flex; flex-direction: column; }
 .neko-modal-body { min-height: 0; }
 .neko-modal-header, .neko-modal-footer { flex: none; }
+.neko-modal-footer { flex-direction: column; align-items: stretch; border-top: 1px solid var(--border); padding-top: 14px; }
+.neko-modal-footer .lwy-btns { justify-content: flex-end; }
 .neko-modal .lwy-field input { width: 100%; }
 .neko-alert { border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
 .lwy-icon { display: inline-block; flex: none; width: 18px; height: 18px; background: currentColor;
@@ -171,26 +203,24 @@ html, body { margin: 0; }
 .lwy, .lwy * { box-sizing: border-box; letter-spacing: 0; }
 .lwy { --ink: var(--text); --hint: var(--muted); --line: var(--border); --card: var(--surface); --sidebar-width: 160px;
   display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); height: 100vh; height: 100dvh;
-  min-height: 0; color: var(--ink); background: var(--bg); overflow: hidden; }
+  min-height: 0; color: var(--ink); background: var(--bg); overflow: hidden; font-size: 14px; line-height: 1.65; }
 .lwy.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
 .lwy-sidebar { display: flex; flex-direction: column; gap: 24px; min-width: 0; min-height: 0;
-  padding: 24px 12px 16px; border-right: 1px solid var(--line); background: var(--card); overflow: auto; }
-.lwy-sidebar-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  padding: 24px 12px 16px; border-right: 1px solid var(--line); background: var(--card); overflow-x: hidden; overflow-y: auto; }
+.lwy-sidebar-head { display: flex; align-items: center; gap: 6px; min-width: 0; flex: none; }
 .lwy-brand { flex: 1; min-width: 0; margin: 0; font-size: 16px; line-height: 1.5; font-weight: 700; overflow-wrap: anywhere; }
 .lwy-sidebar-toggle { display: grid; place-items: center; flex: none; width: 32px; height: 32px;
   padding: 0; border: 1px solid var(--line); border-radius: 5px; color: var(--hint); background: transparent; cursor: pointer; }
-.lwy-sidebar-toggle:hover { color: var(--accent-strong); border-color: var(--accent-line); background: var(--accent-soft); }
-.lwy-sidebar-body { display: flex; flex: 1; flex-direction: column; gap: 24px; min-height: 0; }
+.lwy-sidebar-body { display: flex; flex: 1 0 auto; flex-direction: column; gap: 24px; min-width: 0; }
 .sidebar-collapsed .lwy-sidebar { padding: 24px 6px 16px; }
 .sidebar-collapsed .lwy-sidebar-head { justify-content: center; }
 .sidebar-collapsed .lwy-nav-label, .sidebar-collapsed .lwy-sidebar-foot { display: none; }
-.sidebar-collapsed .lwy-nav button { justify-content: center; padding: 10px; }
+.sidebar-collapsed .lwy-nav button { justify-content: center; padding: 10px 4px; }
 .lwy-brand-mark { display: none; color: var(--accent); height: 32px; align-items: center; justify-content: center; }
-.lwy-nav { display: grid; gap: 6px; }
+.lwy-nav { display: grid; gap: 6px; flex: none; min-width: 0; }
 .lwy-nav button { position: relative; display: flex; align-items: center; gap: 9px; min-height: 44px; width: 100%; border: 0; border-radius: 6px;
   padding: 10px; background: transparent; text-align: left; color: var(--hint); font: inherit; font-size: 13px;
   line-height: 1.5; cursor: pointer; overflow-wrap: anywhere; transition: color 160ms ease, background 160ms ease; }
-.lwy-nav button:hover { color: var(--ink); background: var(--accent-soft); }
 .lwy-nav button.on { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
 .lwy-nav button.on::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px;
   width: 3px; background: var(--accent-strong); border-radius: 2px; }
@@ -198,8 +228,9 @@ html, body { margin: 0; }
 .lwy-sidebar-foot { display: grid; gap: 6px; margin-top: auto; padding: 16px 6px 0;
   border-top: 1px solid var(--line); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .lwy-sidebar-foot strong { font-weight: 600; }
-.lwy-workspace { min-width: 0; min-height: 0; overflow: auto; padding: 28px 32px 36px;
+.lwy-workspace { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 28px 32px 96px;
   scrollbar-gutter: stable; }
+.lwy-workspace:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -3px; }
 .lwy-head { display: flex; justify-content: space-between; align-items: center; gap: 16px;
   flex-wrap: wrap; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
 .lwy-head-text { display: grid; gap: 5px; min-width: 0; }
@@ -209,16 +240,16 @@ html, body { margin: 0; }
 .lwy-scope select { max-width: 100%; width: 180px; min-height: 38px; padding: 6px 10px; border: 1px solid var(--line);
   border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; }
 .lwy-notices { display: grid; gap: 12px; margin-bottom: 20px; }
-.lwy-page-layout { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 28px; align-items: start;
-  max-width: 1100px; margin: 0 auto; }
-.lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(170px, 27%, 220px); }
+.lwy-page-layout { --art-width: clamp(72px, calc(26vw - 28px), 220px);
+  display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 28px; align-items: start;
+  max-width: 960px; margin: 0 auto; }
+.lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) var(--art-width); }
 .lwy-page-layout.is-overview { align-content: start; }
 .lwy-page-content { min-width: 0; }
 .lwy-page { min-width: 0; }
-.lwy-art { position: sticky; top: 0; display: flex; justify-content: flex-end; align-items: flex-start;
-  min-width: 0; height: 360px; max-height: calc(100dvh - 80px); margin-top: -8px; margin-right: -8px;
-  transform: translate(12px, -12px); pointer-events: none; }
-.lwy-art img { display: block; width: 92%; height: 100%; object-fit: contain; object-position: right top;
+.lwy-art { display: flex; justify-content: flex-end; align-items: flex-start;
+  min-width: 0; width: var(--art-width); height: clamp(124px, 40vw, 360px); pointer-events: none; }
+.lwy-art img { display: block; width: 100%; height: 100%; object-fit: contain; object-position: right top;
   filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.06)); animation: lwy-fade 300ms ease-out; }
 .lwy-sections { display: grid; min-width: 0; gap: 24px; }
 .lwy-card { min-width: 0; padding: 0 0 24px; border-bottom: 1px solid var(--line); }
@@ -260,7 +291,7 @@ html, body { margin: 0; }
 .lwy-d.up { color: var(--gain); } .lwy-d.down { color: var(--loss); } .lwy-d.zero { color: var(--hint); }
 .lwy-why { color: var(--ink); overflow-wrap: anywhere; line-height: 1.6; }
 .lwy-when { color: var(--hint); font-size: 12px; white-space: nowrap; }
-.lwy-empty { color: var(--hint); font-size: 13px; padding: 10px 0; margin: 0; }
+.lwy-empty { color: var(--hint); font-size: 14px; line-height: 1.8; padding: 16px 0; margin: 0; }
 .lwy-days { display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-end; }
 .lwy-days-item { display: grid; gap: 4px; }
 .lwy-days-num { font-size: 34px; font-weight: 700; line-height: 1; color: var(--accent-strong); font-variant-numeric: tabular-nums; }
@@ -276,19 +307,71 @@ html, body { margin: 0; }
 .lwy-cd { color: var(--accent-strong); font-weight: 600; font-size: 12px; font-variant-numeric: tabular-nums; }
 .lwy-x { display: grid; place-items: center; width: 36px; height: 36px; border: 0; background: transparent; color: var(--hint);
   cursor: pointer; padding: 6px; border-radius: 6px; }
-.lwy-x:hover { color: var(--accent-strong); background: var(--accent-soft); }
-.lwy-set { display: grid; gap: 18px; }
+.lwy-set { display: grid; gap: 20px; }
 .lwy-set-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.lwy-nick-grid { display: grid; grid-template-columns: minmax(56px, auto) minmax(0, 1fr); gap: 18px 16px; align-items: center; }
+.lwy-import-dates { display: grid; gap: 16px; margin: 20px 0; }
+.lwy-import-dates dt { color: var(--hint); font-size: 12px; margin-bottom: 5px; }
+.lwy-import-dates dd { margin: 0; overflow-wrap: anywhere; }
+.lwy-met-options { border: 0; padding: 0; margin: 0 0 20px; min-width: 0; }
+.lwy-met-options legend { font-size: 12px; color: var(--hint); margin-bottom: 10px; }
+.lwy-met-option { display: flex; align-items: center; gap: 10px; padding: 8px 0; cursor: pointer; }
+.lwy-met-option input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--accent-strong); }
+.lwy-met-option span { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.lwy-met-option small { color: var(--hint); font-size: 12px; }
+.lwy-met-option:has(input:disabled) { opacity: 0.55; cursor: default; }
+.lwy-met-options + .lwy-note { margin-bottom: 16px; }
+.lwy-nick-grid { display: grid; gap: 18px; }
+.lwy-nick-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) 38px; gap: 12px; align-items: center; }
+.lwy-nick-row .neko-input { width: 100%; }
 .lwy-nick-grid label { display: contents; }
 .lwy-nick-grid label span { font-size: 13px; color: var(--hint); overflow-wrap: anywhere; }
 .lwy-field { display: grid; gap: 6px; margin-bottom: 12px; font-size: 13px; color: var(--hint); }
-.lwy-note { color: var(--hint); font-size: 12px; line-height: 1.6; margin: 0; }
+.lwy-note { color: var(--hint); font-size: 13px; line-height: 1.8; margin: 0; max-width: 68ch; }
 .lwy-btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lwy-adjust-number .neko-input { font-size: 28px; font-weight: 700; text-align: center; color: var(--accent-strong); }
 .lwy-unsaved { color: var(--accent-strong); font-size: 12px; }
 .lwy-notice-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .lwy-notice-row .neko-alert { flex: 1 1 180px; }
+.lwy-feedback { display: flex; gap: 10px; align-items: center; min-width: 0; padding: 12px 14px;
+  border: 1px solid var(--border); border-left: 3px solid var(--accent-strong); border-radius: 6px;
+  background: var(--surface-strong); color: var(--text); font-size: 13px; line-height: 1.7; }
+.lwy-feedback-message { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.lwy-feedback[data-tone="success"] { border-left-color: var(--gain); }
+.lwy-feedback[data-tone="danger"] { border-left-color: var(--danger); }
+.lwy-feedback[data-tone="warning"] { border-left-color: var(--warning); }
+.lwy-feedback[data-tone="success"] > .lwy-icon { color: var(--gain); }
+.lwy-feedback-close { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px;
+  flex: none; min-height: 36px; padding: 4px 6px; cursor: pointer; }
+.lwy-feedback-close:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.lwy-feedback-dock { position: fixed; bottom: 16px; right: 24px; left: calc(var(--sidebar-width) + 24px);
+  width: max-content; max-width: min(560px, calc(100% - var(--sidebar-width) - 48px)); margin-left: auto; z-index: 60;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, .08); }
+.lwy-feedback-slot { display: contents; }
+.sidebar-collapsed .lwy-feedback-dock { left: 80px; max-width: min(560px, calc(100% - 104px)); }
+.lwy-spinning { display: inline-flex; animation: lwy-spin 1s linear infinite; flex: none; }
+.lwy-savebar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
+  padding: 16px 0 0; margin-top: 8px; border-top: 1px solid var(--line); }
+.lwy-save-state { color: var(--hint); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+.lwy-save-state.dirty { color: var(--accent-strong); }
+.lwy-settings-nav { display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 0 12px; border-bottom: 1px solid var(--line);
+  position: sticky; top: -1px; z-index: 4; background: var(--bg); }
+.lwy-settings-nav button { border: 0; border-radius: 5px; padding: 8px 12px; min-height: 40px;
+  background: var(--accent-soft); color: var(--accent-strong); font: inherit; font-size: 13px; cursor: pointer; }
+.lwy-settings-section { scroll-margin-top: 120px; }
+.lwy-rule { padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.lwy-rule:last-child { padding-bottom: 0; border-bottom: 0; }
+.lwy-rule .neko-switch { display: flex; flex-direction: row-reverse; justify-content: space-between; width: 100%; gap: 20px; font-weight: 600; }
+.lwy-details { color: var(--hint); font-size: 13px; }
+.lwy-details summary { cursor: pointer; width: fit-content; padding: 4px 0; color: var(--accent-strong); }
+.lwy-details summary:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.lwy-details .lwy-note { margin-top: 6px; }
+.lwy-recent { grid-column: 1 / -1; margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--line); min-width: 0; }
+.lwy-recent .lwy-card-head { margin-bottom: 6px; }
+.lwy-text-button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent;
+  color: var(--accent-strong); padding: 6px 0; min-height: 36px; font: inherit; font-size: 13px; cursor: pointer; }
+.lwy-counter { color: var(--hint); font-size: 11px; font-variant-numeric: tabular-nums; flex: none; }
+.lwy-adjust-preview { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; color: var(--accent-strong);
+  font-size: 14px; margin: 16px 0; }
 .lwy-portrait-preview { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .lwy-portrait-preview img { width: 52px; height: 72px; object-fit: contain; flex: none; }
 .lwy-portrait-preview span { overflow-wrap: anywhere; }
@@ -316,7 +399,7 @@ html, body { margin: 0; }
 .lwy-quote { margin: 14px 0 0; padding: 10px 12px; border-left: 2px solid var(--accent); border-radius: 0 4px 4px 0;
   background: var(--accent-soft); color: var(--ink); font-size: 13px; line-height: 1.6; }
 .lwy-rule { display: grid; gap: 6px; }
-.lwy-rule .lwy-note { padding-left: 44px; }
+.lwy-rule .lwy-note { padding-left: 0; padding-right: 48px; }
 .lwy-rule .lwy-status { color: var(--accent-strong); }
 .lwy-rule .lwy-status.warning { color: var(--text); border-left: 2px solid var(--warning); }
 .is-overview .lwy-card { padding-bottom: 0; }
@@ -364,6 +447,9 @@ html, body { margin: 0; }
 .lwy-gallery-tools, .lwy-gallery-pager { display: flex; align-items: center; justify-content: space-between;
   flex-wrap: wrap; gap: 10px; min-height: 32px; }
 .lwy-gallery-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.lwy-portrait-tile { display: grid; align-content: start; gap: 6px; min-width: 0; }
+.lwy-portrait-tile > .lwy-icon-button { justify-self: end; }
+.lwy-portrait-name small { display: block; color: var(--muted); font-weight: 400; }
 .lwy-portrait-choice { --thumb-height: 164px; display: grid; grid-template-rows: var(--thumb-height) auto; position: relative; min-width: 0;
   margin: 0; border: 1px solid var(--border); border-radius: 6px; padding: 8px;
   background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
@@ -389,26 +475,26 @@ html, body { margin: 0; }
 @media (max-width: 960px) {
   .lwy { --sidebar-width: 148px; }
   .lwy-sidebar { padding: 24px 12px 16px; }
-  .lwy-workspace { padding: 24px; }
+  .lwy-workspace { padding: 24px 24px 96px; }
   .lwy-page-layout { column-gap: 20px; }
-  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) clamp(150px, 28%, 200px); }
-  .lwy-art { height: 336px; }
 }
 @media (max-width: 899px) {
-  .lwy-workspace { padding: 20px; }
+  .lwy-workspace { padding: 20px 20px 120px; }
   .lwy-head { margin-bottom: 20px; padding-bottom: 20px; gap: 12px; }
   .lwy-title { font-size: 21px; }
-  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) 104px; align-content: start; column-gap: 14px; }
+  .lwy-sidebar-foot { padding: 12px 6px 0; }
+}
+@media (max-width: 480px) {
+  .lwy-page-layout.has-art { column-gap: 14px; }
   .lwy-page-layout.has-art .lwy-page-content { display: contents; }
   .has-art .lwy-head { grid-column: 1; grid-row: 1; align-self: start; margin-bottom: 20px;
     flex-direction: column; align-items: flex-start; }
-  .lwy-art { position: static; grid-column: 2; grid-row: 1; justify-self: end;
-    width: 104px; height: 144px; max-height: none; margin: -4px -4px 20px 0; transform: none; }
+  .lwy-art { grid-column: 2; grid-row: 1; justify-self: end; margin-bottom: 20px; }
   .lwy-page-layout.has-art .lwy-notices { grid-column: 1 / -1; grid-row: 2; }
   .lwy-page-layout.has-art .lwy-page { grid-column: 1 / -1; grid-row: 3; }
   .lwy-overview-footer { display: block; padding: 22px 0; }
   .has-art .lwy-overview-footer { grid-row: 4; }
-  .lwy-sidebar-foot { padding: 12px 6px 0; }
+  .has-art .lwy-recent { grid-row: 5; }
 }
 @media (max-width: 700px) {
   .lwy, .lwy.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
@@ -416,35 +502,47 @@ html, body { margin: 0; }
   .lwy-sidebar-head { justify-content: center; }
   .lwy-brand, .lwy-sidebar-toggle, .lwy-nav-label, .lwy-sidebar-foot { display: none; }
   .lwy-brand-mark { display: flex; }
-  .lwy-nav button { justify-content: center; padding: 10px; }
-  .lwy-workspace { padding: 20px 16px; }
+  .lwy-nav button { justify-content: center; padding: 10px 4px; }
+  .lwy-workspace { padding: 20px 16px 160px; }
+  .lwy .lwy-feedback-dock { left: 68px; right: 12px; max-width: calc(100% - 80px); bottom: 12px; }
 }
 @media (max-width: 480px) {
-  .lwy-workspace { padding: 18px 14px; }
+  .lwy-workspace { padding: 18px 14px 160px; }
   .lwy-summary { gap: 16px; }
   .lwy-summary-value { font-size: 16px; }
   .lwy-hero { gap: 16px; }
   .lwy-ring { width: 120px; height: 120px; }
   .lwy-num { font-size: 32px; }
   .lwy-stage-name { font-size: 22px; }
-  .lwy-rule .lwy-note { padding-left: 0; }
+  .lwy-rule .lwy-note { padding-left: 0; padding-right: 0; }
   .lwy-row { grid-template-columns: 30px minmax(0, 1fr); gap: 4px 8px; }
   .lwy-when { grid-column: 2; }
   .lwy-ev { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
   .lwy-ev-name { grid-column: 1 / -1; white-space: normal; overflow-wrap: anywhere; }
-  .lwy-nick-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .lwy-nick-grid .neko-input { margin-bottom: 8px; }
+  .lwy-nick-row { grid-template-columns: minmax(0, 1fr) 30px; gap: 8px; }
+  .lwy-nick-row label > span { grid-column: 1 / -1; }
   .lwy-scope { width: 100%; }
   .lwy-scope select { width: 100%; }
-  .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) 72px; column-gap: 10px; }
-  .lwy-art { width: 72px; height: 124px; }
+  .lwy-page-layout.has-art { column-gap: 10px; }
 }
 @media (max-width: 359px) {
   .lwy-summary { grid-template-columns: minmax(0, 1fr); }
 }
-@keyframes lwy-beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.25); } 30% { transform: scale(1); } }
+@media (max-height: 480px) {
+  .lwy .lwy-sidebar { gap: 12px; padding-top: 12px; padding-bottom: 12px; }
+  .lwy-sidebar-body { gap: 12px; }
+  .lwy-nav { gap: 4px; }
+  .lwy-nav button { min-height: 40px; padding-top: 7px; padding-bottom: 7px; }
+}
+@media (max-height: 360px) {
+  .lwy .lwy-sidebar { gap: 8px; padding-top: 8px; padding-bottom: 8px; }
+  .lwy-nav { gap: 2px; }
+  .lwy-nav button { min-height: 36px; padding-top: 5px; padding-bottom: 5px; }
+}
 @keyframes lwy-fade { from { opacity: 0; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .lwy-heart, .lwy-art img { animation: none; } }
+@keyframes lwy-beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.25); } 30% { transform: scale(1); } }
+@keyframes lwy-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .lwy-heart, .lwy-art img, .lwy-spinning { animation: none; } }
 `
 
 function unwrap(value: any, key: string): any {
@@ -520,11 +618,12 @@ function PortraitThumb(props: {
 }
 
 export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
+  useQuietScrollbars()
   const { t, api } = props
   const state = props.state || {}
   const scopes = Array.isArray(state.scopes) ? state.scopes : []
   const stages = Array.isArray(state.stages) && state.stages.length ? state.stages : []
-  const limits = state.limits || { per_call: 5, daily_gain: 15, daily_loss: 30 }
+  const limits = state.limits || { per_call: 5, daily_gain: 8, daily_chat: 4, daily_loss: 4 }
   const anniversaries = Array.isArray(state.anniversaries) ? state.anniversaries : []
   const maxAnniversaries = limits.anniversaries || 20
   const storedAppearance = normalizeAppearance(state.appearance)
@@ -533,12 +632,62 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const confirm = useConfirm()
 
   const [section, setSection] = props.useLocalState<Section>("lwy:section", "heart")
-  const [sidebarCollapsed, setSidebarCollapsed] = props.useLocalState<boolean>("lwy:sidebar-collapsed", false)
+  const [sidebarCollapsed, setSidebarCollapsed] = props.useLocalState<boolean>("lwy:sidebar-collapsed", true)
   const [selectedKey, setSelectedKey] = props.useLocalState<string>("lwy:scope", "")
   const [art, setArt] = useState<string>("")
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
-  const [actionError, setActionError] = useState("")
+  const feedbackTrigger = useRef<HTMLElement | null>(null)
+  const [feedback, setFeedback] = useState<Feedback | null>(null)
+  const beginPending = useInteractionFeedback()
+  useEffect(() => {
+    if (feedback?.tone !== "success") return
+    let remaining = Math.min(12000, Math.max(6000, Array.from(feedback.message).length * 70))
+    let started = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let exitTimer: ReturnType<typeof setTimeout> | undefined
+    let exiting: HTMLElement | null = null
+    const schedule = () => {
+      const panel = document.querySelector<HTMLElement>(".lwy-feedback")
+      const reading = panel?.contains(document.activeElement) ||
+        (document.documentElement.dataset.lwyPointer === "pointer" && panel?.matches(":hover"))
+      if (exitTimer !== undefined) {
+        if (!document.hidden && !reading) return
+        clearTimeout(exitTimer); exitTimer = undefined
+        exiting?.removeAttribute("data-lwy-dismissing")
+        remaining = 2000
+      }
+      if (timer !== undefined) { remaining -= Date.now() - started; clearTimeout(timer); timer = undefined }
+      if (document.hidden || reading) return
+      started = Date.now()
+      timer = setTimeout(() => {
+        timer = undefined
+        remaining = 0
+        const dismiss = () => setFeedback(current => current === feedback ? null : current)
+        exiting = document.querySelector<HTMLElement>(".lwy-feedback")
+        if (exiting && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          exiting.setAttribute("data-lwy-dismissing", "")
+          exitTimer = setTimeout(dismiss, 140)
+        } else dismiss()
+      }, Math.max(0, remaining))
+    }
+    document.addEventListener("pointerover", schedule)
+    document.addEventListener("pointerout", schedule)
+    document.addEventListener("focusin", schedule)
+    document.addEventListener("focusout", schedule)
+    document.addEventListener("visibilitychange", schedule)
+    schedule()
+    return () => {
+      clearTimeout(timer)
+      clearTimeout(exitTimer)
+      exiting?.removeAttribute("data-lwy-dismissing")
+      document.removeEventListener("pointerover", schedule)
+      document.removeEventListener("pointerout", schedule)
+      document.removeEventListener("focusin", schedule)
+      document.removeEventListener("focusout", schedule)
+      document.removeEventListener("visibilitychange", schedule)
+    }
+  }, [feedback])
   const [refreshError, setRefreshError] = useState(false)
   const [themeEdit, setThemeEdit] = useState<{ values: Appearance; base: Appearance } | null>(null)
   const liveAppearance = themeEdit?.values || storedAppearance
@@ -555,9 +704,16 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const [nickDrafts, setNickDrafts] = useState<Record<string, { values: Record<string, string>; base: Record<string, string> }>>({})
   const [metOpen, setMetOpen] = useState(false)
   const [metDraft, setMetDraft] = useState("")
+  const [metCustomDraft, setMetCustomDraft] = useState("")
+  const [metSource, setMetSource] = useState<"plugin" | "host" | "custom">("custom")
+  const [metPrevious, setMetPrevious] = useState("")
+  const [metOptions, setMetOptions] = useState({ plugin: "", legacy: false, host: "" })
+  const [metImportOpen, setMetImportOpen] = useState(false)
+  const [metImport, setMetImport] = useState<FirstMetImport | null>(null)
   const [annOpen, setAnnOpen] = useState(false)
   const [annTitle, setAnnTitle] = useState("")
   const [annDate, setAnnDate] = useState("")
+  const [shopDialog, setShopDialog] = useState(false)
   const [trendRange, setTrendRange] = props.useLocalState<number>("lwy:trend", 30)
   const artCache = useRef<Record<string, string>>({})
   const thumbCache = useRef<Record<string, string>>({})
@@ -577,13 +733,21 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const [galleryRetry, setGalleryRetry] = useState(0)
   const [chosenId, setChosenId] = useState("")
   const [poolDraft, setPoolDraft] = useState<string[] | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [customEdit, setCustomEdit] = useState<Portrait | null>(null)
+  const [customName, setCustomName] = useState("")
+  const [customGame, setCustomGame] = useState("")
+  const [deleteCustom, setDeleteCustom] = useState(false)
   // Stable callbacks keep the host modal from refocusing on every keystroke.
-  const closeGallery = useCallback(() => { if (!busyRef.current) setGallery("") }, [])
-  const closeEditing = useCallback(() => { if (!busyRef.current) setEditing(false) }, [])
-  const closeMet = useCallback(() => { if (!busyRef.current) setMetOpen(false) }, [])
-  const closeAnn = useCallback(() => { if (!busyRef.current) setAnnOpen(false) }, [])
+  const closeGallery = useCallback(() => { if (!busyRef.current) { setGallery(""); setCustomEdit(null); setFeedback(null) } }, [])
+  const closePortraitImport = useCallback(() => setImportOpen(false), [])
+  const closeEditing = useCallback(() => { if (!busyRef.current) { setEditing(false); setFeedback(null) } }, [])
+  const closeMet = useCallback(() => { if (!busyRef.current) { setMetOpen(false); setFeedback(null) } }, [])
+  const closeMetImport = useCallback(() => { if (!busyRef.current) { setMetImportOpen(false); setFeedback(null) } }, [])
+  const closeAnn = useCallback(() => { if (!busyRef.current) { setAnnOpen(false); setFeedback(null) } }, [])
   const workspaceRef = useRef<HTMLElement | null>(null)
-  const dialogOpen = Boolean(gallery || editing || metOpen || annOpen)
+  const dialogOpen = Boolean(gallery || importOpen || editing || metOpen || metImportOpen || annOpen || shopDialog)
+  const onShopDialog = useCallback((open: boolean) => setShopDialog(open), [])
   useEffect(() => {
     if (!dialogOpen) return
     const trigger = document.activeElement as HTMLElement | null
@@ -622,7 +786,36 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function errorText(error: any): string {
     const raw = String((error && error.message) || error || "")
     const code = [...ERROR_CODES].sort((a, b) => b.length - a.length).find((item) => raw.includes(item))
-    return code ? t(`error.${code}`, { defaultValue: raw }) : raw
+    return code ? t(`error.${code}`, { defaultValue: raw }) : t("feedback.failed", { defaultValue: "操作未完成，请稍后重试。" })
+  }
+
+  function renderFeedback(inDialog = false) {
+    if (!feedback) return null
+    return (
+      <div className={inDialog ? "lwy-feedback" : "lwy-feedback lwy-feedback-dock"} data-tone={feedback.tone}>
+        {feedback.tone === "pending"
+          ? <span className="lwy-spinning"><Icon name="RotateCw" /></span>
+          : feedback.tone === "success" ? <Icon name="Check" /> : null}
+        <span className="lwy-feedback-message" role={feedback.tone === "danger" ? "alert" : "status"}
+          aria-live={feedback.tone === "danger" ? "assertive" : "polite"} aria-atomic="true">{feedback.message}</span>
+        {!inDialog && refreshError && feedback.tone !== "pending" ? <button type="button" className="lwy-feedback-close"
+          onClick={refreshPanel}>{t("common.refresh", { defaultValue: "刷新" })}</button> : null}
+        {feedback.tone !== "pending" ? <button type="button" className="lwy-feedback-close"
+          onClick={() => {
+            setFeedback(null)
+            if (feedbackTrigger.current?.isConnected) feedbackTrigger.current.focus({ preventScroll: true })
+          }}>{t("common.dismiss", { defaultValue: "关闭提示" })}</button> : null}
+      </div>
+    )
+  }
+
+  function saveLabel(action: string, label = t("common.save", { defaultValue: "保存" })) {
+    const pending = busy && feedback?.action === action
+    return <><span className={pending ? "lwy-button-icon lwy-spinning" : "lwy-button-icon"}><Icon name={pending ? "RotateCw" : "Save"} /></span>
+      <span className="lwy-action-label">
+        <span aria-hidden={pending ? "true" : undefined}>{label}</span>
+        <span aria-hidden={pending ? undefined : "true"}>{t("common.saving", { defaultValue: "保存中…" })}</span>
+      </span></>
   }
 
   // Gallery choices are global; only explicit legacy mode follows relationship stages.
@@ -712,17 +905,45 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   }, [gallery, galleryPage, galleryCollection, gallerySearch, galleryRetry, library?.revision])
 
   function openGallery(purpose: "fixed" | "pool") {
+    setFeedback(null)
     setChosenId(portraitPrefs.selected_id)
     setPoolDraft(portraitPrefs.pool_ids === null ? null : [...portraitPrefs.pool_ids])
     setGalleryPage(0)
-    setGalleryCollection("")
+    setGalleryCollection(portrait?.collection || "")
     setGallerySearch("")
     setGalleryData(null)
+    setCustomEdit(null)
     setGallery(purpose)
   }
 
   async function savePortraitPrefs(next: PortraitPrefs) {
-    return run("set_portraits", next, t("toast.saved", { defaultValue: "已保存" }))
+    return run("set_portraits", next, t("feedback.artSaved", { defaultValue: "立绘设置已保存" }))
+  }
+
+  function editPortrait(item: Portrait) {
+    setCustomEdit(item); setCustomName(item.name); setCustomGame(item.collection); setDeleteCustom(false); setFeedback(null)
+  }
+
+  async function saveCustomPortrait(remove = false) {
+    if (!customEdit) return
+    const itemId = customEdit.id
+    let savedGame = customGame.trim()
+    const done = await run(remove ? "delete_portrait" : "edit_portrait", remove ? { item_id: itemId }
+      : { item_id: itemId, name: customName.trim(), collection: customGame.trim() },
+    (result: any) => {
+      if (!remove) savedGame = unwrap(result, "item").item?.collection || savedGame
+      return t(remove ? "art.deleted" : "art.edited")
+    })
+    if (done) {
+      setCustomEdit(null)
+      setGalleryRetry(value => value + 1)
+      setGalleryPage(0)
+      if (remove) {
+        if (chosenId === itemId) setChosenId("")
+        setPoolDraft(value => value === null ? null : value.filter(id => id !== itemId))
+        if (galleryCollection === customEdit.collection && galleryData?.total === 1) setGalleryCollection("")
+      } else setGalleryCollection(savedGame)
+    }
   }
 
   async function shufflePortrait() {
@@ -747,42 +968,77 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     if (!scope) return
     setNickDrafts(previous => {
       const entry = previous[scope.key]
-      if (entry && stages.some(item => (entry.values[item.key] || "").trim() !== (entry.base[item.key] || ""))) return previous
+      if (entry && stages.some(item => (entry.values[item.key] || "").trim() !== (entry.base[item.key] || ""))) {
+        const values = { ...entry.values }, base = { ...entry.base }
+        for (const item of stages) {
+          if ((values[item.key] || "").trim() === (base[item.key] || "")) {
+            values[item.key] = savedNicknames[item.key] || ""
+            base[item.key] = savedNicknames[item.key] || ""
+          }
+        }
+        return { ...previous, [scope.key]: { values, base } }
+      }
       return { ...previous, [scope.key]: { values: { ...savedNicknames }, base: { ...savedNicknames } } }
     })
   }, [savedNickKey])
 
   function editNickname(key: string, value: string) {
     if (!scope) return
+    setFeedback(null)
     setNickDrafts(previous => ({
       ...previous, [scope.key]: {
         base: previous[scope.key]?.base || { ...savedNicknames },
-        values: { ...(previous[scope.key]?.values || savedNicknames), [key]: value.slice(0, limits.nickname_chars || 12) },
+        values: { ...(previous[scope.key]?.values || savedNicknames), [key]: Array.from(value).slice(0, limits.nickname_chars || 12).join("") },
       },
     }))
   }
 
-  async function run(actionId: string, args: Record<string, unknown>, success: string) {
+  async function run(actionId: string, args: Record<string, unknown>, success: string | ((result: any) => string),
+    acknowledged?: () => void) {
     if (busyRef.current) return false
     busyRef.current = true
+    feedbackTrigger.current = document.activeElement as HTMLElement | null
+    const requestedCheck = actionId === "set_settings" ? Object.values(args).find(value => typeof value === "boolean")
+      : actionId === "set_per_character" ? args.enabled : undefined
+    const savedCheck = actionId === "set_settings" ? state.settings?.[Object.keys(args)[0]]
+      : actionId === "set_per_character" ? state.per_character : undefined
+    const endPending = beginPending(typeof requestedCheck === "boolean" ? requestedCheck : undefined, savedCheck)
+    let committed = false
     setBusy(true)
-    setActionError("")
+    const shopProgress: Record<string, string> = {
+      claim_shop_coins: "shop.claiming", buy_shop_item: "shop.buying",
+      send_shop_gift: "shop.sending", retry_gift_reaction: "shop.requesting",
+    }
+    setFeedback({ tone: "pending", action: actionId, message: shopProgress[actionId] ? t(shopProgress[actionId]) : actionId === "sync_characters"
+      ? t("feedback.refreshing", { defaultValue: "正在刷新…" }) : t("common.saving", { defaultValue: "保存中…" }) })
     try {
+      let message = typeof success === "string" ? success : ""
       try {
-        await api.call(actionId, args, { userInitiated: true })
+        const result = await api.call(actionId, args, { userInitiated: true })
+        committed = true
+        message = typeof success === "string" ? success : success(result)
+        acknowledged?.()
       } catch (error: any) {
-        setActionError(errorText(error))
-        toast.error(errorText(error))
+        // A recognized backend rejection did not execute this request.
+        if (SHOP_ERRORS.some(code => String(error?.message || error).includes(code))) acknowledged?.()
+        if (["shop_stale", "shop_no_affection_room", "shop_gain_changed", "nickname_conflict", "first_met_conflict"].some(code => String(error?.message || error).includes(code))) {
+          setRefreshError(true)
+        }
+        setFeedback({ tone: "danger", action: actionId, message: errorText(error) })
         return false
       }
-      toast.success(success)
+      setFeedback({ tone: "pending", action: actionId, message: t("feedback.savedRefreshing", { defaultValue: "操作已完成，正在更新面板…" }) })
       // A failed refresh must not turn an acknowledged save into a failed save.
+      let refreshed = true
       try {
         await api.refresh()
         setRefreshError(false)
-      } catch { setRefreshError(true) }
+      } catch { refreshed = false; setRefreshError(true) }
+      setFeedback({ tone: refreshed ? "success" : "warning", action: actionId,
+        message: refreshed ? message : `${message} · ${t("feedback.stale", { defaultValue: "显示数据尚未更新，请刷新。" })}` })
       return true
     } finally {
+      endPending(committed)
       busyRef.current = false
       setBusy(false)
     }
@@ -791,13 +1047,23 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   async function refreshPanel() {
     if (busyRef.current) return
     busyRef.current = true
+    feedbackTrigger.current = document.activeElement as HTMLElement | null
+    const endPending = beginPending()
     setBusy(true)
-    try { await api.refresh(); setRefreshError(false); setActionError("") }
-    catch { setRefreshError(true) }
-    finally { busyRef.current = false; setBusy(false) }
+    setFeedback({ tone: "pending", action: "refresh", message: t("feedback.refreshing", { defaultValue: "正在刷新…" }) })
+    try {
+      await api.refresh()
+      setRefreshError(false)
+      setFeedback({ tone: "success", action: "refresh", message: t("toast.synced", { defaultValue: "已刷新" }) })
+    } catch {
+      setRefreshError(true)
+      setFeedback({ tone: "danger", action: "refresh", message: t("alert.refreshFailed", { defaultValue: "暂时无法刷新面板，当前显示的可能是旧数据。请重试。" }) })
+    }
+    finally { endPending(); busyRef.current = false; setBusy(false) }
   }
 
   function editAppearance(next: Appearance) {
+    setFeedback(null)
     setColorInput(next.accent_color)
     setThemeEdit(previous => ({ values: next, base: previous?.base || storedAppearance }))
   }
@@ -805,12 +1071,13 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   async function saveAppearance() {
     if (colorInvalid) return
     const next = { ...liveAppearance }
-    if (await run("set_appearance", next, t("toast.saved", { defaultValue: "已保存" }))) {
+    if (await run("set_appearance", next, t("feedback.appearanceSaved", { defaultValue: "外观已保存，下次打开仍会保留" }))) {
       setThemeEdit({ values: next, base: next })
     }
   }
 
   async function togglePerCharacter(next: boolean) {
+    const source = document.activeElement
     const ok = await confirm({
       title: next ? t("perChar.onTitle", { defaultValue: "开启独立好感？" }) : t("perChar.offTitle", { defaultValue: "改回共用好感？" }),
       message: next
@@ -820,10 +1087,15 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
       cancelLabel: t("common.cancel", { defaultValue: "取消" }),
     })
     if (ok) await run("set_per_character", { enabled: next }, t("toast.saved", { defaultValue: "已保存" }))
+    else if (source instanceof HTMLInputElement && source.type === "checkbox") source.checked = Boolean(state.per_character)
   }
 
   async function toggleSetting(key: "require_confession" | "decay" | "auto_score" | "proactive_confession", next: boolean) {
     const rules = state.decay_rules || { grace_days: 3, per_day: 1 }
+    const source = document.activeElement
+    const restore = () => {
+      if (source instanceof HTMLInputElement && source.type === "checkbox") source.checked = Boolean(state.settings?.[key])
+    }
     if (key === "decay" && next) {
       const ok = await confirm({
         title: t("rules.decayOnTitle", { defaultValue: "开启好感变淡？" }),
@@ -835,7 +1107,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         confirmLabel: t("common.confirm", { defaultValue: "确定" }),
         cancelLabel: t("common.cancel", { defaultValue: "取消" }),
       })
-      if (!ok) return
+      if (!ok) { restore(); return }
     }
     if (key === "require_confession" && !next) {
       const ok = await confirm({
@@ -844,9 +1116,9 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         confirmLabel: t("common.confirm", { defaultValue: "确定" }),
         cancelLabel: t("common.cancel", { defaultValue: "取消" }),
       })
-      if (!ok) return
+      if (!ok) { restore(); return }
     }
-    await run("set_settings", { [key]: next }, t("toast.saved", { defaultValue: "已保存" }))
+    await run("set_settings", { [key]: next }, t("feedback.rulesSaved", { defaultValue: "关系规则已更新" }))
   }
 
   async function reset() {
@@ -863,7 +1135,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   async function saveDraft() {
     if (!dialogScope || draft === "" || !scopes.some(item => item.key === dialogScope)) return
-    if (await run("set_affection", { scope: dialogScope, value: draft }, t("toast.saved", { defaultValue: "已保存" }))) {
+    if (await run("set_affection", { scope: dialogScope, value: draft }, t("feedback.affectionSaved", { value: draft, defaultValue: "好感已调整为 {value}" }))) {
       setEditing(false)
     }
   }
@@ -871,17 +1143,86 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   async function saveNicknames() {
     if (!scope) return
     const payload: Record<string, string> = {}
-    for (const item of stages) payload[item.key] = (nickDraft[item.key] || "").trim()
-    const key = scope.key
-    if (await run("set_nicknames", { scope: key, nicknames: payload }, t("toast.saved", { defaultValue: "已保存" }))) {
-      setNickDrafts(previous => ({ ...previous, [key]: { values: { ...payload }, base: { ...payload } } }))
+    const expected: Record<string, string> = {}
+    for (const item of stages) {
+      const value = (nickDraft[item.key] || "").trim()
+      if (value !== (nickBase[item.key] || "")) {
+        payload[item.key] = value
+        expected[item.key] = nickBase[item.key] || ""
+      }
     }
+    const key = scope.key
+    await run("set_nicknames", { scope: key, nicknames: payload, expected_nicknames: expected }, result => {
+      const saved = unwrap(result, "scope").result
+      setNickDrafts(previous => ({ ...previous, [key]: { values: { ...saved }, base: { ...saved } } }))
+      return t("feedback.nicknamesSaved", { defaultValue: "称呼已保存" })
+    })
+  }
+
+  function openFirstMet(current: Scope) {
+    setFeedback(null)
+    setDialogScope(current.key)
+    setMetDraft(current.first_met || state.today || "")
+    setMetCustomDraft(current.custom_first_met || current.first_met || state.today || "")
+    setMetPrevious(current.first_met || state.today || "")
+    setMetSource(current.first_met_source || "custom")
+    setMetOptions({
+      plugin: current.plugin_first_met || current.first_met || "",
+      legacy: current.plugin_first_met_legacy === true,
+      host: current.host_first_met || "",
+    })
+    setMetOpen(true)
+  }
+
+  function chooseMetSource(source: "plugin" | "host" | "custom") {
+    setMetSource(source)
+    setFeedback(null)
+    setMetDraft(source === "custom" ? metCustomDraft : metOptions[source])
   }
 
   async function saveFirstMet() {
     if (!dialogScope || !scopes.some(item => item.key === dialogScope)) return
-    if (await run("set_first_met", { scope: dialogScope, date: metDraft }, t("toast.saved", { defaultValue: "已保存" }))) {
+    if (await run("set_first_met", {
+      scope: dialogScope, date: metDraft, expected_date: metPrevious, source: metSource,
+    }, t("feedback.firstMetSaved", { defaultValue: "相识日已更新" }))) {
       setMetOpen(false)
+    }
+  }
+
+  async function previewFirstMet(key: string) {
+    if (busyRef.current || !scopes.some(item => item.key === key)) return
+    busyRef.current = true
+    feedbackTrigger.current = document.activeElement as HTMLElement | null
+    const endPending = beginPending()
+    setDialogScope(key)
+    setMetImport(null)
+    setMetImportOpen(true)
+    setBusy(true)
+    setFeedback({ tone: "pending", action: "preview_first_met", message: t("dates.historySearching") })
+    try {
+      const result = unwrap(await api.call("preview_first_met", { scope: key },
+        { userInitiated: true, timeoutMs: 12000 }), "source")
+      if (result.scope !== key || result.source !== "host_recent_history" || !parseIsoDay(result.date) ||
+        result.date < "1970-01-01" || Boolean(state.today && result.date > state.today)) {
+        throw new Error("host_history_unavailable")
+      }
+      setMetImport(result as FirstMetImport)
+      setFeedback(null)
+    } catch (error: any) {
+      setFeedback({ tone: "danger", action: "preview_first_met", message: errorText(error) })
+    } finally {
+      endPending(false)
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  async function importFirstMet() {
+    if (!metImport || !scopes.some(item => item.key === metImport.scope)) return
+    if (await run("set_first_met", {
+      scope: metImport.scope, date: metImport.date, expected_date: metImport.previous_date, source: "host",
+    }, t("feedback.firstMetSaved", { defaultValue: "相识日已更新" }))) {
+      setMetImportOpen(false)
     }
   }
 
@@ -922,7 +1263,6 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   }
 
   const hasArt = activeSection === "heart" && portraitMode !== "off" && Boolean(art)
-  const percent = scope ? Math.max(0, Math.min(100, scope.affection)) : 0
   const settings = state.settings || { require_confession: true, decay: false, auto_score: true, proactive_confession: false }
   const decayRules = state.decay_rules || { grace_days: 3, per_day: 1 }
   const autoStatus = state.auto_status
@@ -961,7 +1301,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const loverSince = milestones.lover || ""
   const tooLarge = Array.isArray(decoration.too_large) ? decoration.too_large : []
   const sectionLabel = (key: Section) =>
-    key === "heart"
+    key === "shop" ? t("nav.shop", { defaultValue: "礼物商店" }) : key === "heart"
       ? t("nav.heart", { defaultValue: "关系概览" })
       : key === "history"
         ? t("nav.history", { defaultValue: "心动记录" })
@@ -972,8 +1312,21 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           : t("nav.settings", { defaultValue: "设置" })
 
   function changeSection(next: Section) {
+    if (!busyRef.current) setFeedback(null)
     setSection(next)
     workspaceRef.current?.scrollTo({ top: 0 })
+  }
+
+  function jumpToSettings(id: string) {
+    const heading = document.getElementById(id)
+    const workspace = workspaceRef.current
+    if (heading && workspace) {
+      const navigation = workspace.querySelector(".lwy-settings-nav")
+      workspace.scrollTo({ top: workspace.scrollTop + heading.getBoundingClientRect().top
+        - workspace.getBoundingClientRect().top - (navigation?.getBoundingClientRect().height || 0)
+        - parseFloat(getComputedStyle(workspace).paddingTop) - 16 })
+    }
+    heading?.focus({ preventScroll: true })
   }
 
   function loverDays(): number {
@@ -985,6 +1338,9 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   }
 
   function historyText(item: HistoryItem): string {
+    if (item.source === "gift" && item.reason.startsWith("gift:")) {
+      return t("shop.historyReason", { name: t(`shop.item.${item.reason.slice(5)}`) })
+    }
     const label = t(`source.${item.source}`, { defaultValue: item.source })
     if (item.source === "confession") return item.reason ? `${label}：${item.reason}` : label
     return item.reason || label
@@ -1060,7 +1416,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
       <div className="lwy-sections">
         <section className="lwy-card">
           <div className="lwy-hero">
-            <div className="lwy-ring" style={{ "--p": String(percent) }} role="meter"
+            <div className="lwy-ring" style={{ "--p": String(Math.max(0, Math.min(100, current.affection))) }} role="meter"
               aria-label={t("common.affection", { defaultValue: "好感度" })}
               aria-valuemin={0} aria-valuemax={100} aria-valuenow={current.affection}>
               <div className="lwy-ring-fill" />
@@ -1128,6 +1484,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   function renderOverviewDates(current: Scope) {
     return (
+      <>
       <section className="lwy-overview-footer" aria-label={sectionLabel("dates")}>
         <div className="lwy-summary">
           <div className="lwy-summary-item">
@@ -1141,6 +1498,26 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           </div>
         </div>
       </section>
+      <section className="lwy-recent">
+        <div className="lwy-card-head">
+          <h2 className="lwy-h">{t("overview.recent", { defaultValue: "最近的心动" })}</h2>
+          <button type="button" className="lwy-text-button" onClick={() => changeSection("history")}>
+            {t("overview.allHistory", { defaultValue: "查看全部" })}<Icon name="ChevronRight" />
+          </button>
+        </div>
+        {current.history.length ? (
+          <div className="lwy-row">
+            <span className={current.history[0].delta > 0 ? "lwy-d up" : current.history[0].delta < 0 ? "lwy-d down" : "lwy-d zero"}>
+              {current.history[0].source === "confession" ? "♥" : current.history[0].delta > 0 ? `+${current.history[0].delta}` : current.history[0].delta}
+            </span>
+            <span className="lwy-why">{historyText(current.history[0])}</span>
+            <time className="lwy-when" dateTime={new Date(current.history[0].ts * 1000).toISOString()}>
+              {relativeTime(current.history[0].ts)}
+            </time>
+          </div>
+        ) : <p className="lwy-empty">{t("history.empty", { defaultValue: "还没有记录。多和 TA 聊聊吧。" })}</p>}
+      </section>
+      </>
     )
   }
 
@@ -1179,10 +1556,15 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         <section className="lwy-card">
           <div className="lwy-card-head">
             <h2 className="lwy-h">{t("dates.ours", { defaultValue: "我们的日子" })}</h2>
-            <Button tone="default" disabled={busy} onClick={() => { setDialogScope(current.key); setMetDraft(current.first_met || state.today || ""); setMetOpen(true) }}>
+            <div className="lwy-btns">
+            <Button tone="default" disabled={busy} onClick={() => previewFirstMet(current.key)}>
+              <Icon name="History" />{t("dates.importMet")}
+            </Button>
+            <Button tone="default" disabled={busy} onClick={() => openFirstMet(current)}>
               <Icon name="Pencil" />
               {t("dates.editMet", { defaultValue: "修改相识日" })}
             </Button>
+            </div>
           </div>
           <div className="lwy-days">
             <div className="lwy-days-item">
@@ -1239,7 +1621,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             <Button
               tone="default"
               disabled={busy || anniversaries.length >= maxAnniversaries}
-              onClick={() => { setAnnTitle(""); setAnnDate(state.today || ""); setAnnOpen(true) }}
+              onClick={() => { setFeedback(null); setAnnTitle(""); setAnnDate(state.today || ""); setAnnOpen(true) }}
             >
               <Icon name="Plus" />
               {t("dates.add", { defaultValue: "添加" })}
@@ -1281,21 +1663,14 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         <section className="lwy-card">
           <div className="lwy-card-head">
             <h2 className="lwy-h">{t("nick.title", { defaultValue: "称呼" })}</h2>
-            <div className="lwy-btns">
-              {nickDirty ? <>
-                <span className="lwy-unsaved" role="status">{t("common.unsaved", { defaultValue: "尚未保存" })}</span>
-                <Button tone="default" disabled={busy} onClick={() => {
-                  if (scope) setNickDrafts(previous => ({ ...previous, [scope.key]: { values: { ...savedNicknames }, base: { ...savedNicknames } } }))
-                }}>{t("common.discard", { defaultValue: "撤销修改" })}</Button>
-              </> : null}
-              <Button tone="primary" disabled={busy || !nickDirty} onClick={saveNicknames}>
-                <Icon name="Save" />{busy ? t("common.saving", { defaultValue: "保存中…" }) : t("common.save", { defaultValue: "保存" })}
-              </Button>
-            </div>
           </div>
+          <p className="lwy-note" style={{ marginBottom: "20px" }}>
+            {t("nick.note", { defaultValue: "角色在这个阶段会这样叫你。留空的阶段沿用上一阶段的称呼。" })}
+          </p>
           <div className="lwy-nick-grid">
             {stages.map((item, index) => (
-              <label key={item.key}>
+              <div key={item.key} className="lwy-nick-row">
+                <label>
                 <span>{stageName(item.key)}</span>
                 <Input
                   value={nickDraft[item.key] || ""}
@@ -1303,12 +1678,23 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   placeholder={inheritedNickname(index) || t("nick.placeholder", { defaultValue: "沿用人设里的称呼" })}
                   onChange={(value: string) => editNickname(item.key, value)}
                 />
-              </label>
+                </label>
+                <span className="lwy-counter" aria-hidden="true">{Array.from(nickDraft[item.key] || "").length}/{limits.nickname_chars || 12}</span>
+              </div>
             ))}
           </div>
-          <p className="lwy-note" style={{ marginTop: "10px" }}>
-            {t("nick.note", { defaultValue: "角色在这个阶段会这样叫你。留空的阶段沿用上一阶段的称呼。" })}
-          </p>
+          <div className="lwy-savebar">
+            <span className={nickDirty ? "lwy-save-state dirty" : "lwy-save-state"} role="status">
+              {nickDirty ? t("common.unsaved", { defaultValue: "尚未保存" }) : t("common.noChanges", { defaultValue: "没有未保存的修改" })}
+            </span>
+            <div className="lwy-btns">
+              {nickDirty ? <Button tone="default" disabled={busy} onClick={() => {
+                setFeedback(null)
+                if (scope) setNickDrafts(previous => ({ ...previous, [scope.key]: { values: { ...savedNicknames }, base: { ...savedNicknames } } }))
+              }}>{t("common.discard", { defaultValue: "撤销修改" })}</Button> : null}
+              <Button tone="primary" disabled={busy || !nickDirty} onClick={saveNicknames}>{saveLabel("set_nicknames")}</Button>
+            </div>
+          </div>
         </section>
       </div>
     )
@@ -1317,20 +1703,17 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function renderSettings(current: Scope | undefined) {
     return (
       <div className="lwy-sections">
+        <nav className="lwy-settings-nav" aria-label={t("settings.sections", { defaultValue: "设置分区" })}>
+          {[
+            ["lwy-appearance-heading", t("theme.title", { defaultValue: "外观" })],
+            ...(library ? [["lwy-art-heading", t("art.title", { defaultValue: "立绘" })]] : []),
+            ["lwy-rules-heading", t("rules.title", { defaultValue: "关系规则" })],
+            ["lwy-characters-heading", t("settings.title", { defaultValue: "角色与好感" })],
+          ].map(([id, label]) => <button type="button" key={id} onClick={() => jumpToSettings(id)}>{label}</button>)}
+        </nav>
         <section className="lwy-card lwy-appearance">
           <div className="lwy-card-head">
-            <h2 className="lwy-h">{t("theme.title", { defaultValue: "外观" })}</h2>
-            <div className="lwy-btns">
-              {themeDirty || colorInvalid ? <>
-                <span className="lwy-unsaved" role="status">{t("common.unsaved", { defaultValue: "尚未保存" })}</span>
-                <Button tone="default" disabled={busy} onClick={() => {
-                  setThemeEdit(null); setColorInput(storedAppearance.accent_color)
-                }}>{t("common.discard", { defaultValue: "撤销修改" })}</Button>
-              </> : null}
-              <Button tone="primary" disabled={busy || !themeDirty || colorInvalid} onClick={saveAppearance}>
-                <Icon name="Save" />{busy ? t("common.saving", { defaultValue: "保存中…" }) : t("common.save", { defaultValue: "保存" })}
-              </Button>
-            </div>
+            <h2 id="lwy-appearance-heading" tabIndex={-1} className="lwy-h lwy-settings-section">{t("theme.title", { defaultValue: "外观" })}</h2>
           </div>
           <div className="lwy-palette" role="group" aria-label={t("theme.palette", { defaultValue: "主题配色" })}>
             {THEME_PRESETS.map(item => (
@@ -1357,7 +1740,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   <span className="lwy-sr-only">{t("theme.hex", { defaultValue: "色号" })}</span>
                   <Input value={colorInput} disabled={busy} invalid={colorInvalid}
                     onChange={(value: string) => {
-                      setColorInput(value)
+                      setFeedback(null); setColorInput(value)
                       if (value.length === 7 && /^#[0-9a-f]{6}$/i.test(value)) editAppearance({ ...liveAppearance, accent_color: value.toLowerCase() })
                     }} />
                 </label>
@@ -1385,10 +1768,21 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               <Icon name="RotateCw" />{t("theme.restore", { defaultValue: "恢复默认" })}
             </Button>
           </div>
+          <div className="lwy-savebar">
+            <span className={themeDirty || colorInvalid ? "lwy-save-state dirty" : "lwy-save-state"} role="status">
+              {themeDirty || colorInvalid ? t("theme.previewing", { defaultValue: "正在预览，尚未保存" }) : t("common.noChanges", { defaultValue: "没有未保存的修改" })}
+            </span>
+            <div className="lwy-btns">
+              {themeDirty || colorInvalid ? <Button tone="default" disabled={busy} onClick={() => {
+                setFeedback(null); setThemeEdit(null); setColorInput(storedAppearance.accent_color)
+              }}>{t("common.discard", { defaultValue: "撤销修改" })}</Button> : null}
+              <Button tone="primary" disabled={busy || !themeDirty || colorInvalid} onClick={saveAppearance}>{saveLabel("set_appearance")}</Button>
+            </div>
+          </div>
         </section>
         {library ? (
           <section className="lwy-card lwy-portrait-settings">
-            <h2 className="lwy-h">{t("art.title", { defaultValue: "立绘" })}</h2>
+            <h2 id="lwy-art-heading" tabIndex={-1} className="lwy-h lwy-settings-section">{t("art.title", { defaultValue: "立绘" })}</h2>
             <div className="lwy-segmented" role="group" aria-label={t("art.mode", { defaultValue: "立绘模式" })}>
               {(["fixed", "random", "off"] as const).map(mode => (
                 <button type="button" key={mode} aria-pressed={portraitMode === mode ? "true" : "false"}
@@ -1407,11 +1801,18 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                 </button>
               ) : null}
             </div>
+            <div className="lwy-btns">
+              <Button tone="default" disabled={busy} onClick={() => { setFeedback(null); setImportOpen(true) }}>
+                <Icon name="Plus" />{t("art.import", { defaultValue: "导入立绘" })}
+              </Button>
+              {portraitMode === "off" || portraitMode === "legacy" ? <Button disabled={busy || !library.count}
+                onClick={() => openGallery("fixed")}>{t("art.browse", { defaultValue: "选择立绘" })}</Button> : null}
+            </div>
             {portraitMode === "fixed" || portraitMode === "random" ? (
               <div className="lwy-set-row">
                 <div className="lwy-portrait-preview">
                   {art ? <img src={art} alt="" onError={handleArtError} /> : null}
-                  <span className="lwy-hint">{portrait?.name || t("art.none", { defaultValue: "未选择立绘" })}</span>
+                  <span className="lwy-hint">{artLoading || artChoosing ? t("art.loading", { defaultValue: "加载中…" }) : portrait?.name || t("art.none", { defaultValue: "未选择立绘" })}</span>
                 </div>
                 <div className="lwy-btns">
                   <Button tone="default" disabled={busy || !library.count} onClick={() => openGallery("fixed")}>
@@ -1447,7 +1848,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           </section>
         ) : null}
         <section className="lwy-card lwy-set">
-          <h2 className="lwy-h">{t("rules.title", { defaultValue: "关系规则" })}</h2>
+          <h2 id="lwy-rules-heading" tabIndex={-1} className="lwy-h lwy-settings-section">{t("rules.title", { defaultValue: "关系规则" })}</h2>
           <div className="lwy-rule">
             <Switch
               checked={settings.auto_score !== false}
@@ -1457,12 +1858,18 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             />
             <p className="lwy-note">
               {settings.auto_score !== false
-                ? t("rules.autoScoreNote", {
-                    defaultValue:
-                      "每轮对话结束后判断这一轮让好感变了多少。默认用本地关键词判断；想判断得更准，可以在 N.E.K.O 的「Plugin API」页给本插件的「好感判断」绑定一个模型。只保存一句理由，不保存聊天内容。",
-                  })
+                ? t("rules.autoBrief", { defaultValue: "聊天结束后自动记录好感变化，只保存一句理由。" })
                 : t("rules.autoScoreOffNote", { defaultValue: "关闭后由角色自己调用工具调整好感，很多模型几乎不会调用。" })}
             </p>
+            {settings.auto_score !== false ? <details className="lwy-details">
+              <summary>{t("rules.details", { defaultValue: "详细规则" })}</summary>
+              <p className="lwy-note">
+              {t("rules.autoScoreNote", {
+                    defaultValue:
+                      "每轮对话结束后判断这一轮让好感变了多少。默认用本地关键词判断；想判断得更准，可以在 N.E.K.O 的「Plugin API」页给本插件的「好感判断」绑定一个模型。只保存一句理由，不保存聊天内容。",
+                  })}
+              </p>
+            </details> : null}
             {settings.auto_score !== false && autoStatusText() ? <p
               className={autoStatus?.bus_ok === false || autoStatus?.last_error ? "lwy-note lwy-status warning" : "lwy-note lwy-status"}
               role="status">{autoStatusText()}</p> : null}
@@ -1486,10 +1893,18 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               onChange={(value: boolean) => toggleSetting("proactive_confession", value)}
             />
             <p className="lwy-note">
+              {!settings.require_confession || settings.auto_score === false
+                ? t("rules.proactiveRequires", { defaultValue: "先开启「自动判断好感」和「成为恋人需要告白」。" })
+                : t("rules.proactiveBrief", { defaultValue: "好感足够后，猫娘可以主动表达心意，等你明确答应。" })}
+            </p>
+            <details className="lwy-details">
+              <summary>{t("rules.details", { defaultValue: "详细规则" })}</summary>
+              <p className="lwy-note">
               {t("rules.proactiveConfessionNote", {
                 defaultValue: "需开启自动判断好感和告白门槛。好感达到 80 后，猫娘可在正常聊天后主动告白，等你明确答应；拒绝或犹豫后冷却 24 小时，30 分钟未确认则冷却 6 小时，每份关系最多尝试 3 次。默认关闭。",
               })}
-            </p>
+              </p>
+            </details>
           </div>
           <div className="lwy-rule">
             <Switch
@@ -1509,7 +1924,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         </section>
 
         <section className="lwy-card lwy-set">
-          <h2 className="lwy-h">{t("settings.title", { defaultValue: "角色与好感" })}</h2>
+          <h2 id="lwy-characters-heading" tabIndex={-1} className="lwy-h lwy-settings-section">{t("settings.title", { defaultValue: "角色与好感" })}</h2>
           <div className="lwy-set-row">
             <Switch
               checked={Boolean(state.per_character)}
@@ -1533,7 +1948,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   : t("settings.editingShared", { defaultValue: "正在管理：共用好感" })}
               </span>
               <div className="lwy-btns">
-                <Button tone="default" disabled={busy} onClick={() => { setDialogScope(current.key); setDraft(current.affection); setEditing(true) }}>
+                <Button tone="default" disabled={busy} onClick={() => { setFeedback(null); setDialogScope(current.key); setDraft(current.affection); setEditing(true) }}>
                   <Icon name="Pencil" />
                   {t("settings.adjust", { defaultValue: "调整" })}
                 </Button>
@@ -1550,7 +1965,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   return (
     <div className={sidebarCollapsed ? "lwy sidebar-collapsed" : "lwy"}>
-      <style>{STYLE + themeCss(liveAppearance)}</style>
+      <style>{STYLE + SHOP_STYLE + PORTRAIT_IMPORT_STYLE + INTERACTION_STYLE + SCROLLBAR_STYLE + themeCss(liveAppearance)}</style>
 
       <aside className="lwy-sidebar">
         <div className="lwy-sidebar-head">
@@ -1601,19 +2016,19 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         </div>
       </aside>
 
-      <main className="lwy-workspace" ref={workspaceRef} aria-busy={busy ? "true" : "false"}>
+      <main className="lwy-workspace" tabIndex={0} aria-label={sectionLabel(activeSection)} ref={workspaceRef}>
         <div className={["lwy-page-layout", hasArt ? "has-art" : "", activeSection === "heart" && scope ? "is-overview" : ""].join(" ")}>
           <div className="lwy-page-content">
-            <header className="lwy-head">
+            <header key="page-heading" className="lwy-head">
               <div className="lwy-head-text">
                 <h1 id="lwy-page-title" className="lwy-title">{sectionLabel(activeSection)}</h1>
                 <span className="lwy-sub">
-                  {scope?.label
+                  {activeSection === "shop" ? t("shop.subtitle") : scope?.label
                     ? t("settings.editingName", { name: scope.label, defaultValue: "正在管理：{name}" })
                     : t("settings.editingShared", { defaultValue: "正在管理：共用好感" })}
                 </span>
               </div>
-              {scopes.length > 1 ? (
+              {scopes.length > 1 && activeSection !== "shop" ? (
                 <label className="lwy-scope">
                   <span className="lwy-sub">{t("scope.select", { defaultValue: "选择角色" })}</span>
                   <Select
@@ -1623,15 +2038,20 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                       value: item.key,
                       label: `${item.label || t("scope.shared", { defaultValue: "共用" })}${item.is_current ? ` · ${t("scope.current", { defaultValue: "当前角色" })}` : ""}`,
                     }))}
-                    onChange={(value: string) => setSelectedKey(value)}
+                    onChange={(value: string) => { setFeedback(null); setSelectedKey(value) }}
                   />
                 </label>
               ) : null}
             </header>
 
-            {state.host_online === false || tooLarge.length || refreshError || actionError ? (
-              <div className="lwy-notices">
-                {actionError ? <div role="alert"><Alert tone="danger" message={actionError} /></div> : null}
+            {state.host_online === false || tooLarge.length || refreshError || (activeSection === "heart" && artError) ? (
+              <div key="page-notices" className="lwy-notices">
+                {activeSection === "heart" && artError ? <div className="lwy-notice-row" role="status">
+                  <Alert tone="warning" message={t("art.imageError", { defaultValue: "图片加载失败，请重试。" })} />
+                  <Button tone="default" disabled={artLoading || artChoosing} onClick={() => { setArtRetry(artRetry + 1) }}>
+                    <Icon name="RotateCw" />{t("art.retry", { defaultValue: "重试" })}
+                  </Button>
+                </div> : null}
                 {refreshError ? (
                   <div className="lwy-notice-row" role="status">
                     <Alert tone="warning" message={t("alert.refreshFailed", { defaultValue: "暂时无法刷新面板，当前显示的可能是旧数据。请重试。" })} />
@@ -1649,9 +2069,16 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               </div>
             ) : null}
 
-            <article id="lwy-page" className="lwy-page" aria-labelledby="lwy-page-title">
+            <article key="page-body" id="lwy-page" className="lwy-page" aria-labelledby="lwy-page-title">
               {activeSection === "settings" ? (
                 renderSettings(scope)
+              ) : activeSection === "shop" ? (
+                <Shop data={state.shop} characters={state.known_characters || []} current={state.current_character}
+                  perCharacter={Boolean(state.per_character)} scopes={scopes} dailyGain={limits.daily_gain}
+                  dailyChat={limits.daily_chat ?? 4}
+                  api={api} t={t} useLocalState={props.useLocalState} busy={busy} stale={refreshError}
+                  run={run} refresh={refreshPanel} dialog={onShopDialog} feedback={() => renderFeedback(true)}
+                  beginEdit={() => { setFeedback(null) }} />
               ) : !scope ? (
                 <section className="lwy-card">
                   <p className="lwy-empty">{t("empty.noCharacters", { defaultValue: "还没有读到角色，稍等片刻或点击设置里的刷新。" })}</p>
@@ -1678,13 +2105,28 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           {activeSection === "heart" && scope ? renderOverviewDates(scope) : null}
         </div>
       </main>
+      {/* Keep this slot mounted so the host preserves page nodes and focus. */}
+      <div className="lwy-feedback-slot">{!dialogOpen ? renderFeedback() : null}</div>
 
-      <Modal open={Boolean(gallery)} size="lg" className="lwy-gallery-modal"
+      {importOpen ? <PortraitImport api={api} t={t} collections={library?.collections || []}
+        initialCollection={galleryCollection} onClose={closePortraitImport} errorText={errorText}
+        onChanged={() => setGalleryRetry(value => value + 1)} /> : null}
+      <Modal open={Boolean(gallery) && !importOpen} size="lg" className="lwy-gallery-modal"
         closeOnEscape={!busy} closeOnBackdrop={!busy}
-        title={gallery === "pool" ? t("art.editPool", { defaultValue: "选择随机范围" }) : t("art.browse", { defaultValue: "选择立绘" })}
+        title={customEdit ? t("art.edit") : gallery === "pool" ? t("art.editPool", { defaultValue: "选择随机范围" }) : t("art.browse", { defaultValue: "选择立绘" })}
         onClose={closeGallery}
         footer={
-          <div className="lwy-btns">
+          <>
+          {renderFeedback(true)}
+          {customEdit ? <div className="lwy-btns">
+            <Button tone="default" disabled={busy} onClick={() => { setCustomEdit(null); setFeedback(null) }}>{t("art.back")}</Button>
+            <Button tone="danger" disabled={busy} onClick={() => {
+              if (deleteCustom) void saveCustomPortrait(true)
+              else setDeleteCustom(true)
+            }}><Icon name="Trash2" />{t(deleteCustom ? "art.confirmDelete" : "art.delete")}</Button>
+            <Button tone="primary" disabled={busy || !customName.trim() || !customGame.trim()}
+              onClick={() => saveCustomPortrait()}>{saveLabel("edit_portrait")}</Button>
+          </div> : <div className="lwy-btns">
             <Button tone="default" disabled={busy} onClick={closeGallery}>{t("common.cancel", { defaultValue: "取消" })}</Button>
             <Button tone="primary" disabled={busy || (gallery === "fixed" && !chosenId)}
               onClick={async () => {
@@ -1693,23 +2135,39 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   : { ...portraitPrefs, pool_ids: poolDraft }
                 if (await savePortraitPrefs(next)) setGallery("")
               }}>
-              <Icon name="Check" />
-              {busy ? t("common.saving", { defaultValue: "保存中…" }) : gallery === "fixed" ? t("art.useImage", { defaultValue: "使用此立绘" }) : t("common.save", { defaultValue: "保存" })}
+              {saveLabel("set_portraits", gallery === "fixed" ? t("art.useImage", { defaultValue: "使用此立绘" }) : t("common.save", { defaultValue: "保存" }))}
             </Button>
-          </div>
+          </div>}
+          </>
         }>
-        <div className="lwy-gallery">
+        {customEdit ? <div className="lwy-custom-editor">
+          <PortraitThumb item={customEdit} api={api} cache={thumbCache.current}
+            loading={t("art.loading")} failed={t("art.imageError")} />
+          <label className="lwy-field"><span>{t("art.imageName")}</span>
+            <Input value={customName} disabled={busy} onChange={(value: string) => setCustomName(Array.from(value).slice(0, 120).join(""))} /></label>
+          <label className="lwy-field"><span>{t("art.collection")}</span>
+            <Input value={customGame} disabled={busy} onChange={(value: string) => setCustomGame(Array.from(value).slice(0, 80).join(""))} /></label>
+          {deleteCustom ? <Alert tone="warning" message={t("art.deleteWarning", { name: customEdit.name })} /> : null}
+        </div> : <div className="lwy-gallery">
+          <div className="lwy-gallery-tools">
+            <span className="lwy-note">{t("art.libraryCount", { n: library?.count || 0, games: library?.collections.length || 0 })}</span>
+            <Button tone="default" disabled={busy} onClick={() => { setFeedback(null); setImportOpen(true) }}>
+              <Icon name="Plus" />{t("art.import")}</Button>
+          </div>
           <div className="lwy-gallery-filters">
             <label>
-              <span>{t("art.collection", { defaultValue: "图集" })}</span>
-              <Select value={galleryCollection} disabled={busy} options={[
-                { value: "", label: t("art.allCollections", { defaultValue: "全部图集" }) },
+              <span>{t("art.collection", { defaultValue: "游戏" })}</span>
+              <select className="neko-select" value={galleryCollection} disabled={busy} aria-label={t("art.collection")}
+                onChange={(event: Event) => { setGalleryCollection((event.target as HTMLSelectElement).value); setGalleryPage(0) }}>
+                {[
+                { value: "", label: t("art.allCollections", { defaultValue: "全部游戏" }) },
                 ...(library?.collections || []).map(name => ({ value: name, label: name })),
-              ]} onChange={(value: string) => { setGalleryCollection(value); setGalleryPage(0) }} />
+                ].map(option => <option key={option.value} value={option.value} selected={option.value === galleryCollection}>{option.label}</option>)}
+              </select>
             </label>
             <label>
               <span>{t("art.search", { defaultValue: "搜索" })}</span>
-              <Input value={gallerySearch} disabled={busy} placeholder={t("art.searchPlaceholder", { defaultValue: "名称或图集" })}
+              <Input value={gallerySearch} disabled={busy} placeholder={t("art.searchPlaceholder", { defaultValue: "名称或游戏" })}
                 onChange={(value: string) => { setGallerySearch(value.slice(0, 120)); setGalleryPage(0) }} />
             </label>
           </div>
@@ -1735,20 +2193,25 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                 const content = <PortraitThumb item={item} api={api} cache={thumbCache.current}
                   loading={t("art.loading", { defaultValue: "加载中…" })}
                   failed={t("art.imageError", { defaultValue: "图片加载失败，请重试。" })} />
-                return gallery === "pool" ? (
+                const choice = gallery === "pool" ? (
                   <label key={item.id} className={selected ? "lwy-portrait-choice chosen" : "lwy-portrait-choice"}>
                     <input type="checkbox" checked={selected} disabled={busy} onChange={() => {
                       const ids = poolDraft === null ? library?.ids || [] : poolDraft
                       setPoolDraft(selected ? ids.filter(id => id !== item.id) : [...ids, item.id])
                     }} />
-                    {content}<span className="lwy-portrait-name">{item.name}</span>
+                    {content}<span className="lwy-portrait-name">{item.name}<small>{item.collection}</small></span>
                   </label>
                 ) : (
                   <button type="button" key={item.id} disabled={busy} aria-pressed={selected ? "true" : "false"}
                     className={selected ? "lwy-portrait-choice chosen" : "lwy-portrait-choice"} onClick={() => setChosenId(item.id)}>
-                    {content}<span className="lwy-portrait-name">{item.name}</span>
+                    {content}<span className="lwy-portrait-name">{item.name}<small>{item.collection}</small></span>
                   </button>
                 )
+                return <div className="lwy-portrait-tile" key={item.id}>{choice}
+                  {item.custom ? <button type="button" className="lwy-icon-button" disabled={busy}
+                    title={t("art.editNamed", { name: item.name })} aria-label={t("art.editNamed", { name: item.name })}
+                    onClick={() => editPortrait(item)}><Icon name="Pencil" /></button> : null}
+                </div>
               })}
             </div>}
           {galleryData && !galleryLoading && !galleryError ? (
@@ -1765,7 +2228,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               </div>
             </div>
           ) : null}
-        </div>
+        </div>}
       </Modal>
 
       <Modal
@@ -1775,12 +2238,15 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         onClose={closeEditing}
         closeOnEscape={!busy} closeOnBackdrop={!busy}
         footer={
+          <>
+          {renderFeedback(true)}
           <div className="lwy-btns">
             <Button tone="default" disabled={busy} onClick={closeEditing}>{t("common.cancel", { defaultValue: "取消" })}</Button>
             <Button tone="primary" disabled={busy || draft === "" || !scopes.some(item => item.key === dialogScope)} onClick={saveDraft}>
-              {busy ? t("common.saving", { defaultValue: "保存中…" }) : t("common.save", { defaultValue: "保存" })}
+              {saveLabel("set_affection")}
             </Button>
           </div>
+          </>
         }
       >
         <label className="lwy-field lwy-adjust-number">
@@ -1793,6 +2259,15 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           <Slider value={draft === "" ? 0 : draft} min={0} max={100} step={1} disabled={busy}
             showValue={false} onChange={(value: number) => setDraft(value)} />
         </label>
+        {draft !== "" ? <div className="lwy-adjust-preview">
+          <span>{scopes.find(item => item.key === dialogScope)?.affection ?? 0}</span>
+          <Icon name="ChevronRight" />
+          <strong>{draft}</strong>
+          <span className="lwy-note">
+            {t("adjust.change", { delta: Number(draft) - (scopes.find(item => item.key === dialogScope)?.affection || 0),
+              defaultValue: "变化 {delta} 点" })}
+          </span>
+        </div> : null}
         <p className="lwy-note">{t("adjust.note", { defaultValue: "手动调整不受每日上限限制，阶段会直接按新数值计算。" })}</p>
       </Modal>
 
@@ -1803,20 +2278,85 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         onClose={closeMet}
         closeOnEscape={!busy} closeOnBackdrop={!busy}
         footer={
+          <>
+          {renderFeedback(true)}
           <div className="lwy-btns">
             <Button tone="default" disabled={busy} onClick={closeMet}>{t("common.cancel", { defaultValue: "取消" })}</Button>
             <Button tone="primary" disabled={busy || !parseIsoDay(metDraft) || metDraft < "1970-01-01" || Boolean(state.today && metDraft > state.today) || !scopes.some(item => item.key === dialogScope)} onClick={saveFirstMet}>
-              {busy ? t("common.saving", { defaultValue: "保存中…" }) : t("common.save", { defaultValue: "保存" })}
+              {saveLabel("set_first_met")}
             </Button>
           </div>
+          </>
         }
       >
+        <p className="lwy-sub">{scopes.find(item => item.key === dialogScope)?.label ||
+          t("scope.shared", { defaultValue: "共用" })}</p>
+        <fieldset className="lwy-met-options" disabled={busy}>
+          <legend>{t("dates.dateChoice")}</legend>
+          <label className="lwy-met-option">
+            <input type="radio" name="lwy-met-source" value="plugin" checked={metSource === "plugin"}
+              disabled={!metOptions.plugin || busy} onChange={() => chooseMetSource("plugin")} />
+            <span>{t(metOptions.legacy ? "dates.legacyDate" : "dates.pluginDate")}
+              <small>{isoLabel(metOptions.plugin)}</small></span>
+          </label>
+          <label className="lwy-met-option">
+            <input type="radio" name="lwy-met-source" value="host" checked={metSource === "host"}
+              disabled={!metOptions.host || busy} onChange={() => chooseMetSource("host")} />
+            <span>{t("dates.savedHostDate")}
+              <small>{metOptions.host ? isoLabel(metOptions.host) : t("dates.noSavedHostDate")}</small></span>
+          </label>
+          <label className="lwy-met-option">
+            <input type="radio" name="lwy-met-source" value="custom" checked={metSource === "custom"}
+              onChange={() => chooseMetSource("custom")} />
+            <span>{t("dates.customDate")}</span>
+          </label>
+        </fieldset>
+        {metOptions.legacy ? <p className="lwy-note">{t("dates.legacyDateNote")}</p> : null}
         <label className="lwy-field">
           <span>{t("dates.metLabel", { defaultValue: "你们相识的日子" })}</span>
-          <input className="neko-input" type="date" value={metDraft} min="1970-01-01" max={state.today} disabled={busy}
-            onInput={(event: Event) => setMetDraft((event.target as HTMLInputElement).value)} />
+          <input className="neko-input" type="date" value={metDraft} min="1970-01-01" max={state.today} disabled={busy || metSource !== "custom"}
+            onInput={(event: Event) => {
+              const value = (event.target as HTMLInputElement).value
+              setMetDraft(value)
+              setMetCustomDraft(value)
+            }} />
         </label>
         <p className="lwy-note">{t("dates.metNote", { defaultValue: "相识日决定「相识第 N 天」和周年纪念，不影响好感。" })}</p>
+        {metDraft && (!parseIsoDay(metDraft) || metDraft < "1970-01-01" || Boolean(state.today && metDraft > state.today)) ? (
+          <p className="lwy-field-error" role="alert">{metDraft < "1970-01-01"
+            ? t("error.date_too_old", { defaultValue: "日期太早了" })
+            : state.today && metDraft > state.today ? t("error.date_in_future", { defaultValue: "日期不能晚于今天" })
+              : t("error.invalid_date", { defaultValue: "日期无效" })}</p>
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={metImportOpen}
+        size="sm"
+        title={t("dates.importMet")}
+        onClose={closeMetImport}
+        closeOnEscape={!busy} closeOnBackdrop={!busy}
+        footer={<>
+          {renderFeedback(true)}
+          <div className="lwy-btns">
+            <Button tone="default" disabled={busy} onClick={closeMetImport}>{t("common.cancel", { defaultValue: "取消" })}</Button>
+            <Button tone="default" disabled={busy || !scopes.some(item => item.key === dialogScope)}
+              onClick={() => previewFirstMet(dialogScope)}><Icon name="RotateCw" />{t("dates.historyRetry")}</Button>
+            <Button tone="primary" disabled={busy || !metImport ||
+              !scopes.some(item => item.key === metImport.scope)} onClick={importFirstMet}>
+              {saveLabel("set_first_met", t("dates.confirmImport"))}
+            </Button>
+          </div>
+        </>}
+      >
+        <p className="lwy-sub">{scopes.find(item => item.key === dialogScope)?.label ||
+          t("scope.shared", { defaultValue: "共用" })}</p>
+        {metImport ? <dl className="lwy-import-dates">
+          <div><dt>{t("dates.currentMet")}</dt><dd>{isoLabel(metImport.previous_date)}</dd></div>
+          <div><dt>{t("dates.historyMet")}</dt><dd><strong>{isoLabel(metImport.date)}</strong></dd></div>
+          <div><dt>{t("dates.historySource")}</dt><dd>{t("dates.historySourceValue", { name: metImport.character })}</dd></div>
+        </dl> : null}
+        <p className="lwy-note">{t("dates.historyNote")}</p>
       </Modal>
 
       <Modal
@@ -1826,12 +2366,15 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         onClose={closeAnn}
         closeOnEscape={!busy} closeOnBackdrop={!busy}
         footer={
+          <>
+          {renderFeedback(true)}
           <div className="lwy-btns">
             <Button tone="default" disabled={busy} onClick={closeAnn}>{t("common.cancel", { defaultValue: "取消" })}</Button>
             <Button tone="primary" disabled={busy || !annTitle.trim() || !parseIsoDay(annDate)} onClick={addAnniversary}>
-              {busy ? t("common.saving", { defaultValue: "保存中…" }) : t("dates.add", { defaultValue: "添加" })}
+              {saveLabel("add_anniversary", t("dates.add", { defaultValue: "添加" }))}
             </Button>
           </div>
+          </>
         }
       >
         <label className="lwy-field">
@@ -1840,7 +2383,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             value={annTitle}
             disabled={busy}
             placeholder={t("dates.titlePlaceholder", { defaultValue: "例如：我的生日" })}
-            onChange={(value: string) => setAnnTitle(value.slice(0, limits.title_chars || 20))}
+            onChange={(value: string) => setAnnTitle(Array.from(value).slice(0, limits.title_chars || 20).join(""))}
           />
         </label>
         <label className="lwy-field">

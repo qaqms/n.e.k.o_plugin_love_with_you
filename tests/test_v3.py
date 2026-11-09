@@ -30,7 +30,7 @@ def test_same_direction_within_cooldown_is_ignored(engine):
     second = engine.apply_model_delta(record, 3, "还是温柔", now=DAY + 30)
     assert second["applied"] == 0 and second["limited_by"] == "cooldown"
     assert record["affection"] == 53 and len(record["history"]) == 1
-    assert engine.apply_model_delta(record, 3, "又一次", now=DAY + GAP)["applied"] == 3
+    assert engine.apply_model_delta(record, 3, "又一次", now=DAY + GAP)["applied"] == 1
 
 
 def test_opposite_direction_is_not_blocked(engine):
@@ -51,7 +51,7 @@ def test_capped_call_does_not_restart_cooldown(engine):
 def test_cooldown_can_be_disabled(engine):
     record = _record(engine, 10)
     applied = [engine.apply_model_delta(record, 2, "好", now=DAY, cooldown=0)["applied"] for _ in range(3)]
-    assert applied == [2, 2, 2]
+    assert applied == [2, 2, 0]
 
 
 # ------------------------------------------------------------ first-loss grace
@@ -68,7 +68,7 @@ def test_first_loss_of_day_is_halved(engine, delta, first):
 def test_grace_resets_next_day(engine):
     record = _record(engine, 50)
     engine.apply_model_delta(record, -5, "冷淡", now=DAY)
-    assert engine.apply_model_delta(record, -5, "冷淡", now=DAY + GAP)["applied"] == -5
+    assert engine.apply_model_delta(record, -5, "冷淡", now=DAY + GAP)["applied"] == -2
     assert engine.apply_model_delta(record, -5, "冷淡", now=DAY + ONE_DAY)["applied"] == -2
 
 
@@ -78,7 +78,7 @@ def test_grace_resets_next_day(engine):
 def test_gate_holds_at_ambiguous(engine):
     record = _record(engine, 78, "ambiguous")
     result = engine.apply_model_delta(record, 5, "心动", now=DAY, gate=True)
-    assert record["affection"] == 83 and result["stage"] == "ambiguous"
+    assert record["affection"] == 82 and result["stage"] == "ambiguous"
     assert engine.awaiting_confession(record, True) is True
     assert "lover" not in record["milestones"]
     view = engine.record_view(record, gate=True)
@@ -235,8 +235,8 @@ def test_daily_points_follow_changes(engine):
     engine.apply_model_delta(record, 5, "好", now=DAY)
     engine.apply_model_delta(record, 5, "好", now=DAY + 2 * ONE_DAY)
     assert record["daily"] == {
-        engine.today_str(DAY): 15,
-        engine.today_str(DAY + 2 * ONE_DAY): 20,
+        engine.today_str(DAY): 14,
+        engine.today_str(DAY + 2 * ONE_DAY): 18,
     }
 
 

@@ -8,12 +8,12 @@ import pytest
 def test_defaults_are_read_only_until_user_saves(appearance, storage, tmp_path):
     path = tmp_path / "appearance.json"
     prefs = appearance.AppearancePrefs(storage.StateFile(path))
-    assert prefs.summary() == {"accent_color": "#c74768", "color_scheme": "system"}
+    assert prefs.summary() == {"accent_color": "#7db9e8", "color_scheme": "system"}
     assert prefs.warning is None
     assert not path.exists()
     summary = prefs.summary()
     summary["accent_color"] = "#000000"
-    assert prefs.summary()["accent_color"] == "#c74768"
+    assert prefs.summary()["accent_color"] == "#7db9e8"
 
 
 def test_saved_preferences_survive_recreation(appearance, storage, tmp_path):

@@ -47,8 +47,9 @@ LOVER_THRESHOLD = STAGE_LOWER["lover"]
 DEMOTION_MARGIN = 5
 
 MAX_DELTA_PER_CALL = 5
-DAILY_GAIN_CAP = 15
-DAILY_LOSS_CAP = 30
+DAILY_CHAT_CAP = 4
+DAILY_GAIN_CAP = 8
+DAILY_LOSS_CAP = 4
 HISTORY_LIMIT = 50
 REASON_MAX_CHARS = 80
 NICKNAME_MAX_CHARS = 12
@@ -253,11 +254,22 @@ def new_record(affection: int = 0, now: float | None = None) -> dict[str, Any]:
         "stage": stage,
         "day": day,
         "gained_today": 0,
+        "gained_chat": 0,
+        "gained_gift": 0,
+        "gain_revision": 0,
+        "quota_version": 1,
+        "quota_blocked_day": "",
         "lost_today": 0,
         "history": [],
         "updated_at": time.time() if now is None else now,
         # Day the relationship started; user-editable.
         "first_met": day,
+        # Keep both choices when switching the active anniversary date.
+        "plugin_first_met": day,
+        "plugin_first_met_legacy": False,
+        "host_first_met": None,
+        "custom_first_met": None,
+        "first_met_source": "plugin",
         # stage key -> date it was first reached. Only stages above "stranger".
         "milestones": {},
         # stage key -> what the character calls the user at that stage.
@@ -301,9 +313,10 @@ def normalize_record(raw: Any, now: float | None = None) -> dict[str, Any]:
         # A stored stage above the raw one survives only inside the demotion margin.
         record["stage"] = resolve_stage(stage, record["affection"])
     day = raw.get("day")
-    if isinstance(day, str):
+    if isinstance(day, str) and _parse_day(day):
         record["day"] = day
-    for key, cap in (("gained_today", DAILY_GAIN_CAP), ("lost_today", DAILY_LOSS_CAP)):
+    for key, cap in (("gained_today", 15), ("lost_today", 30),
+                     ("gained_chat", DAILY_CHAT_CAP), ("gained_gift", 4), ("gain_revision", 1_000_000_000)):
         try:
             record[key] = max(0, min(cap, int(raw.get(key, 0))))
         except (TypeError, ValueError):
@@ -316,6 +329,10 @@ def normalize_record(raw: Any, now: float | None = None) -> dict[str, Any]:
         record["updated_at"] = float(updated_at)
     _normalize_relationship(record, raw)
     _normalize_v3(record, raw)
+    if raw.get("quota_version") != 1 and record["gained_today"]:
+        record["quota_blocked_day"] = record["day"]
+    elif isinstance(raw.get("quota_blocked_day"), str) and _parse_day(raw["quota_blocked_day"]):
+        record["quota_blocked_day"] = raw["quota_blocked_day"]
     return record
 
 
@@ -328,6 +345,22 @@ def _normalize_relationship(record: dict[str, Any], raw: dict[str, Any]) -> None
         stamps = [item.get("ts") for item in record["history"] if isinstance(item.get("ts"), (int, float))]
         if stamps:
             record["first_met"] = today_str(min(stamps))
+    original = _parse_day(raw.get("plugin_first_met"))
+    record["plugin_first_met"] = original.isoformat() if original else record["first_met"]
+    record["plugin_first_met_legacy"] = raw.get("plugin_first_met_legacy") is True if original else True
+    host_day = _parse_day(raw.get("host_first_met"))
+    record["host_first_met"] = host_day.isoformat() if host_day and host_day >= EARLIEST_DATE else None
+    source = raw.get("first_met_source")
+    record["first_met_source"] = (
+        "plugin" if source == "plugin" and record["first_met"] == record["plugin_first_met"]
+        else "host" if source == "host" and record["first_met"] == record["host_first_met"]
+        else "custom"
+    )
+    custom_day = _parse_day(raw.get("custom_first_met"))
+    record["custom_first_met"] = (
+        record["first_met"] if record["first_met_source"] == "custom"
+        else custom_day.isoformat() if custom_day and custom_day >= EARLIEST_DATE else None
+    )
     milestones = raw.get("milestones")
     if isinstance(milestones, dict):
         record["milestones"] = {
@@ -413,10 +446,23 @@ def _touch_daily(record: dict[str, Any], ts: float) -> None:
 
 def _roll_day(record: dict[str, Any], now: float | None) -> None:
     day = today_str(now)
-    if record.get("day") != day:
+    if record.get("day", "") < day:
         record["day"] = day
         record["gained_today"] = 0
         record["lost_today"] = 0
+        record["gained_chat"] = 0
+        record["gained_gift"] = 0
+        record["quota_blocked_day"] = ""
+        record["gain_revision"] = int(record.get("gain_revision", 0)) + 1
+
+
+def gain_room(record: dict[str, Any], source: str, now: float | None = None) -> int:
+    day = today_str(now)
+    if record.get("day", "") > day or record.get("quota_blocked_day", "") >= day:
+        return 0
+    total = int(record.get("gained_today", 0)) if record.get("day") == day else 0
+    used = int(record.get("gained_chat", 0)) if record.get("day") == day else 0
+    return max(0, min(DAILY_GAIN_CAP - total, DAILY_CHAT_CAP - used if source != "gift" else 4))
 
 
 def _append_history(record: dict[str, Any], entry: dict[str, Any]) -> None:
@@ -501,7 +547,7 @@ def apply_model_delta(
     applied = per_call
     limited_by = "per_call" if per_call != requested else None
     if applied > 0:
-        room = DAILY_GAIN_CAP - int(record.get("gained_today", 0))
+        room = gain_room(record, source, ts)
         if applied > room:
             applied, limited_by = max(0, room), "daily_gain"
     elif applied < 0:
@@ -509,7 +555,7 @@ def apply_model_delta(
             softened = -max(1, -applied // 2)
             if softened != applied:
                 applied, limited_by = softened, limited_by or "grace"
-        room = DAILY_LOSS_CAP - int(record.get("lost_today", 0))
+        room = 0 if record.get("day", "") > today_str(ts) else DAILY_LOSS_CAP - int(record.get("lost_today", 0))
         if -applied > room:
             applied, limited_by = -max(0, room), "daily_loss"
 
@@ -523,12 +569,16 @@ def apply_model_delta(
     _settle(record, previous_stage, new_stage, ts)
     if applied > 0:
         record["gained_today"] = int(record.get("gained_today", 0)) + applied
+        source_key = "gained_gift" if source == "gift" else "gained_chat"
+        record[source_key] = int(record.get(source_key, 0)) + applied
     elif applied < 0:
         record["lost_today"] = int(record.get("lost_today", 0)) - applied
     record["updated_at"] = ts
     if applied != 0:
-        record["last_model_ts"] = ts
-        record["last_model_sign"] = sign
+        record["gain_revision"] = int(record.get("gain_revision", 0)) + 1
+        if source != "gift":
+            record["last_model_ts"] = ts
+            record["last_model_sign"] = sign
         _touch_daily(record, ts)
         _append_history(
             record,
@@ -568,6 +618,7 @@ def set_affection(
     previous_stage = record_stage(record, before)
     new_stage = _gated(raw_stage_for(after), record, gate)
     record["affection"] = after
+    record["gain_revision"] = int(record.get("gain_revision", 0)) + 1
     _settle(record, previous_stage, new_stage, ts)
     record["updated_at"] = ts
     _touch_daily(record, ts)
@@ -616,6 +667,7 @@ def apply_decay(record: dict[str, Any], enabled: bool, now: float | None = None)
     after = affection - amount
     record["affection"] = after
     record["stage"] = resolve_stage(stage, after)
+    record["gain_revision"] = int(record.get("gain_revision", 0)) + 1
     record["updated_at"] = ts
     _touch_daily(record, ts)
     _append_history(record, {"ts": ts, "delta": -amount, "value": after, "reason": "", "source": "decay"})
@@ -695,19 +747,40 @@ def effective_nickname(record: dict[str, Any], stage: str | None = None) -> str:
     return ""
 
 
-def set_nicknames(record: dict[str, Any], values: Any) -> dict[str, str]:
-    """Replace all nicknames. Unknown stages are rejected; empty values clear."""
-    if not isinstance(values, dict):
+def set_nicknames(record: dict[str, Any], values: Any, *, expected: Any = None) -> dict[str, str]:
+    """Replace legacy input, or merge edits whose original values still match."""
+    if not isinstance(values, dict) or any(not isinstance(value, str) for value in values.values()):
         raise EngineError("invalid_nicknames", "nicknames must be an object")
     unknown = [key for key in values if key not in STAGE_KEYS]
     if unknown:
         raise EngineError("invalid_nicknames", f"unknown stage: {unknown[0]}")
     cleaned = {key: text for key, value in values.items() if (text := clean_text(value, NICKNAME_MAX_CHARS))}
+    if expected is not None:
+        if (
+            not isinstance(expected, dict) or expected.keys() != values.keys()
+            or any(not isinstance(value, str) for value in expected.values())
+        ):
+            raise EngineError("invalid_nicknames")
+        existing = record.get("nicknames") or {}
+        if any(existing.get(key, "") not in (clean_text(value, NICKNAME_MAX_CHARS), cleaned.get(key, ""))
+               for key, value in expected.items()):
+            raise EngineError("nickname_conflict")
+        merged = dict(existing)
+        for key in values:
+            if key in cleaned:
+                merged[key] = cleaned[key]
+            else:
+                merged.pop(key, None)
+        cleaned = merged
     record["nicknames"] = cleaned
     return cleaned
 
 
-def set_first_met(record: dict[str, Any], value: Any, now: float | None = None) -> str:
+def set_first_met(
+    record: dict[str, Any], value: Any, now: float | None = None, *, expected: Any = None, source: Any = "custom",
+) -> str:
+    if source not in ("custom", "plugin", "host"):
+        raise EngineError("invalid_first_met_source")
     parsed = _parse_day(value)
     if parsed is None:
         raise EngineError("invalid_date", "date must be YYYY-MM-DD")
@@ -715,7 +788,24 @@ def set_first_met(record: dict[str, Any], value: Any, now: float | None = None) 
         raise EngineError("date_in_future", "date is in the future")
     if parsed < EARLIEST_DATE:
         raise EngineError("date_too_old", "date is too old")
+    if expected is not None:
+        original = _parse_day(expected)
+        if original is None:
+            raise EngineError("invalid_date")
+        if record.get("first_met") not in (original.isoformat(), parsed.isoformat()):
+            raise EngineError("first_met_conflict")
+    original_date = record.get("plugin_first_met") or record["first_met"]
+    if source == "plugin" and parsed.isoformat() != original_date:
+        raise EngineError("first_met_conflict")
+    if "plugin_first_met" not in record:
+        record["plugin_first_met"] = original_date
+        record["plugin_first_met_legacy"] = True
+    if source == "host":
+        record["host_first_met"] = parsed.isoformat()
+    elif source == "custom":
+        record["custom_first_met"] = parsed.isoformat()
     record["first_met"] = parsed.isoformat()
+    record["first_met_source"] = source
     return record["first_met"]
 
 
@@ -772,6 +862,8 @@ def new_state() -> dict[str, Any]:
         # Dates the user cares about (birthdays...), known to every character.
         "anniversaries": [],
         "settings": dict(DEFAULT_SETTINGS),
+        # Economy is validated by _shop when the plugin starts.
+        "shop": {},
     }
 
 
@@ -812,6 +904,7 @@ def normalize_state(raw: Any) -> dict[str, Any]:
             if len(state["anniversaries"]) >= ANNIVERSARY_LIMIT:
                 break
     state["settings"] = normalize_settings(raw.get("settings"))
+    state["shop"] = copy.deepcopy(raw.get("shop")) if isinstance(raw.get("shop"), dict) else {}
     return state
 
 
@@ -888,6 +981,8 @@ def set_per_character(state: dict[str, Any], enabled: bool, current: str | None)
       has none, created lazily).
     * disable: the shared value becomes the current character's value; all
       independent records stay on disk for a later re-enable.
+    * existing destination nicknames stay with their own scope, including
+      deliberately empty settings; a new current record inherits shared names.
     """
     enabled = bool(enabled)
     if bool(state.get("per_character")) == enabled:
@@ -895,12 +990,32 @@ def set_per_character(state: dict[str, Any], enabled: bool, current: str | None)
     if not current:
         raise EngineError("current_character_unknown", "current character is unknown")
     characters = state.setdefault("characters", {})
+    destination = characters.get(current) if enabled else state["shared"]
+    source = state["shared"] if enabled else characters.get(current)
+    merged = copy.deepcopy(source) if source is not None else None
+    if merged is not None and destination is not None:
+        merged["nicknames"] = copy.deepcopy(destination.get("nicknames") or {})
+        for key in (
+            "first_met", "plugin_first_met", "plugin_first_met_legacy",
+            "host_first_met", "custom_first_met", "first_met_source",
+        ):
+            merged[key] = copy.deepcopy(destination[key])
+        day = max(merged["day"], destination["day"])
+        for key in ("gained_today", "gained_chat", "gained_gift", "lost_today"):
+            merged[key] = max(
+                int(merged.get(key, 0)) if merged["day"] == day else 0,
+                int(destination.get(key, 0)) if destination["day"] == day else 0,
+            )
+        merged["gained_today"] = max(merged["gained_today"], merged["gained_chat"] + merged["gained_gift"])
+        merged["day"] = day
+        merged["quota_blocked_day"] = max(merged.get("quota_blocked_day", ""), destination.get("quota_blocked_day", ""))
+        merged["gain_revision"] = max(merged.get("gain_revision", 0), destination.get("gain_revision", 0)) + 1
     if enabled:
-        characters[current] = copy.deepcopy(state["shared"])
+        characters[current] = merged
     else:
         record = characters.get(current)
         if record is not None:
-            state["shared"] = copy.deepcopy(record)
+            state["shared"] = merged
     state["per_character"] = enabled
     state["current_character"] = current
     return {"changed": True, "per_character": enabled, "current_character": current}
@@ -913,10 +1028,22 @@ def record_view(record: dict[str, Any], history_limit: int = 20, *, gate: bool =
     view = {
         "affection": affection,
         **stage_progress(affection, stage),
-        "gained_today": int(record.get("gained_today", 0)) if record.get("day") == today_str() else 0,
-        "lost_today": int(record.get("lost_today", 0)) if record.get("day") == today_str() else 0,
+        "gained_today": int(record.get("gained_today", 0)) if record.get("day", "") >= today_str() else 0,
+        "gained_chat": int(record.get("gained_chat", 0)) if record.get("day", "") >= today_str() else 0,
+        "gained_gift": int(record.get("gained_gift", 0)) if record.get("day", "") >= today_str() else 0,
+        "gain_revision": int(record.get("gain_revision", 0)),
+        "gift_room": gain_room(record, "gift"),
+        "chat_room": gain_room(record, "model"),
+        "quota_blocked": record.get("quota_blocked_day", "") >= today_str(),
+        "clock_error": record.get("day", "") > today_str(),
+        "lost_today": int(record.get("lost_today", 0)) if record.get("day", "") >= today_str() else 0,
         "history": list(reversed(record.get("history", [])[-history_limit:])) if history_limit > 0 else [],
         "first_met": record.get("first_met") or today_str(),
+        "plugin_first_met": record.get("plugin_first_met") or record.get("first_met") or today_str(),
+        "plugin_first_met_legacy": record.get("plugin_first_met_legacy") is True,
+        "host_first_met": record.get("host_first_met"),
+        "custom_first_met": record.get("custom_first_met"),
+        "first_met_source": record.get("first_met_source", "custom"),
         "milestones": dict(record.get("milestones") or {}),
         "nicknames": dict(record.get("nicknames") or {}),
         "nickname": effective_nickname(record, stage),

@@ -63,7 +63,12 @@ def stage_name(stage: str) -> str:
     return STAGE_NAMES.get(stage, stage)
 
 
-def stage_tone(stage: str) -> str:
+def stage_tone(stage: str, *, awaiting_confession: bool = False) -> str:
+    if stage == "ambiguous" and awaiting_confession:
+        return (
+            "你对对方已有很深的好感，可以认真回应对方的恋爱心意，不必一直停在试探和暗示。"
+            "双方尚未确认时保持暧昧；确认并成功记录后，就可以坦率地以恋人身份相处。"
+        )
     return STAGE_TONES.get(stage, "")
 
 
@@ -109,9 +114,15 @@ def confession_line(confess_tool: str) -> str:
     if not confess_tool:
         return ""
     return (
-        "你已经非常喜欢对方，只差一次真正的告白。不要自己宣布在一起；"
-        "可以更明显地流露心意，或在合适的时候鼓起勇气表白。"
-        f"只有当你们之间真的完成了告白并彼此答应时，才调用 {confess_tool}。\n"
+        "【此刻可确认恋爱关系】由你结合当前对话和紧接的前文判断双方是否认真确认了恋爱关系。"
+        "不要求固定关键词或句式；含蓄的表白与答应也可以，但必须能确认双方都有恋爱意愿，"
+        "普通陪伴、玩笑、试探、单方面喜欢、拒绝或犹豫都不能当作确认。"
+        "对方认真表达喜欢，而你还拿不准是否要正式交往时，按自己的性格自然问清楚，"
+        "不要反复只说害羞或暗示，把确认一直拖下去。"
+        f"对方提出交往而你决定接受，或对方答应了你的表白时，在本轮自然回复前调用 {confess_tool}。"
+        "紧接的前文已经彼此答应、当前仍在延续这次确认却尚未记录，也应现在记录，不必让对方重新告白。"
+        "成功后以恋人身份回应，以成功结果为准，不再被旧的暧昧提示拉回去；失败时不能声称已经记录。"
+        "只有久远记忆、单方面要求改关系或意思不明时不能补记，也不要凭空假设对方答应。\n"
     )
 
 
@@ -130,7 +141,7 @@ def update_tool_description(
     idle_days: int = 0,
 ) -> str:
     return (
-        f"【当前关系：{stage_name(stage)}】说话语气：{stage_tone(stage)}\n"
+        f"【当前关系：{stage_name(stage)}】说话语气：{stage_tone(stage, awaiting_confession=bool(confess_tool))}\n"
         + nickname_line(nickname)
         + today_events_line(events or [])
         + idle_line(idle_days)
@@ -143,10 +154,17 @@ def update_tool_description(
 
 def confess_tool_description() -> str:
     return (
-        "记录你和对方正式确认恋人关系的那一刻。只在双方真的告白并彼此答应时调用一次，"
-        "例如对方认真说「我喜欢你，和我在一起吧」而你答应了，或你表白后对方答应了。"
-        "玩笑、试探、普通夸奖、一方单方面的喜欢都不算。调用后你们就是恋人了，"
-        "请用恋人的语气自然地回应，不要提到这个工具。"
+        "当对方提出交往而你决定接受，或对方答应了你的表白时，先调用本工具记录，再自然回复。"
+        "由你根据当前对话和紧接的前文判断双方恋爱意愿，不能只在对白里答应却不记录。"
+        "不要求固定关键词或句式：直接表白、含蓄表达都可以，只要你能确认双方是在认真"
+        "表达恋爱意愿并彼此答应，而不是普通陪伴。例如前文双方已认真表达喜欢，"
+        "随后用只想陪着对方和相互承诺完成了恋爱确认，也可由你判断后记录。"
+        "紧接的前文已确认而尚未记录、当前仍在延续这次确认时可补记，不必让对方重新告白；"
+        "不能仅凭久远记忆补记。只记录一次；玩笑、试探、转述、假设、普通夸奖、拒绝、犹豫、"
+        "单方面喜欢或只是要求修改关系都不算。没有把握时自然询问对方，"
+        "不要求对方照念指定句子，不要反复用害羞或暗示拖延确认。插件会校验好感门槛，"
+        "成功后以结果为准，用恋人的语气自然回应；失败时不能声称已经记录。"
+        "不要提到这个工具、插件或数值。"
     )
 
 
@@ -164,7 +182,10 @@ CONFESS_PARAMETERS: dict[str, Any] = {
 
 def confess_result_note(nickname: str = "") -> str:
     call = f"之后可以叫对方「{nickname}」。" if nickname else ""
-    return f"你们现在是恋人了。说话语气：{stage_tone('lover')}{call}自然地回应这一刻，不要提到工具或数值。"
+    return (
+        f"你们现在是恋人了，以本次成功结果为准，旧的暧昧提示已过时。说话语气：{stage_tone('lover')}"
+        f"{call}自然地回应这一刻，不要提到工具或数值。"
+    )
 
 
 UPDATE_PARAMETERS: dict[str, Any] = {
@@ -208,29 +229,37 @@ def relationship_context(
     events: list[dict[str, Any]] | None = None,
     *,
     awaiting_confession: bool = False,
+    confess_tool: str = "",
     idle_days: int = 0,
     transition: tuple[str, str] | None = None,
 ) -> str:
     """Relationship state pushed into the character's context with ai_behavior="read".
 
-    This is what actually steers the tone: the host puts it in front of the
-    next user message, where the model reads it, unlike a tool description.
+    The host queues it for a natural user turn. Submission alone cannot prove
+    that a provider received or followed the guidance.
     """
     change = ""
     if transition and transition[0] != transition[1]:
         previous, current = transition
         direction = "更近了一步" if stage_index_of(current) > stage_index_of(previous) else "有些疏远了"
         change = f"你们的关系刚从「{stage_name(previous)}」变成了「{stage_name(current)}」，{direction}，不要直接宣布这个变化。\n"
-    return (
-        f"（与你相恋·关系状态，只给你看）你和{{MASTER_NAME}}现在是「{stage_name(stage)}」关系。\n"
-        + change
-        + f"这一阶段的分寸：{stage_tone(stage)}\n"
-        "你的性格、说话方式和口癪都不变，变的只是你们之间的亲密程度；"
+    confirmation = (confession_line(confess_tool) if confess_tool else CONFESSION_HINT) if awaiting_confession else ""
+    authority = (
+        "这是尚未记录恋爱确认的状态，不是要求你否认当前对话中双方已经表达的恋爱心意；"
+        "满足确认条件时应记录更新关系。\n"
+        if awaiting_confession and confess_tool else
         "如果之前的对话或记忆比现在更亲密，以现在的关系为准。\n"
+    )
+    return (
+        confirmation
+        + f"（与你相恋·关系状态，只给你看）你和{{MASTER_NAME}}现在是「{stage_name(stage)}」关系。\n"
+        + change
+        + f"这一阶段的分寸：{stage_tone(stage, awaiting_confession=awaiting_confession)}\n"
+        "你的性格、说话方式和口癪都不变，变的只是你们之间的亲密程度；"
+        + authority
         + nickname_line(nickname)
         + today_events_line(events or [])
         + idle_line(idle_days)
-        + (CONFESSION_HINT if awaiting_confession else "")
         + "不要向对方提起好感度、数值、关系阶段或这条提示。"
     )
 

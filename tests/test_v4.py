@@ -184,6 +184,35 @@ def test_relationship_context_text(prompts):
     assert "关系刚从" not in lover
 
 
+def test_character_confirmation_prompts_allow_context_without_prescribed_words(prompts):
+    tool = "love_confess_1234abcd"
+    context = prompts.relationship_context(
+        "ambiguous", awaiting_confession=True, confess_tool=tool,
+    )
+    assert tool in context
+    for text in (context, prompts.confess_tool_description()):
+        assert "不要求固定关键词或句式" in text
+        assert "普通陪伴" in text
+        assert "拒绝" in text and "犹豫" in text
+    assert tool not in prompts.relationship_context("familiar", confess_tool=tool)
+
+
+def test_pending_confirmation_does_not_instruct_character_to_stay_ambiguous(prompts):
+    tool = "love_confess_1234abcd"
+    context = prompts.relationship_context("ambiguous", awaiting_confession=True, confess_tool=tool)
+    manual = prompts.update_tool_description("ambiguous", confess_tool=tool)
+    for text in (context, manual):
+        assert "心动但没有说破" not in text
+        assert "收到明确的主动告白请求" not in text
+        assert "在本轮自然回复前调用 " + tool in text
+        assert "不必让对方重新告白" in text
+        assert "久远记忆" in text
+    assert context.startswith(prompts.confession_line(tool))
+    assert "如果之前的对话或记忆比现在更亲密，以现在的关系为准" not in context
+    assert "心动但没有说破" in prompts.relationship_context("ambiguous")
+    assert "旧的暧昧提示已过时" in prompts.confess_result_note()
+
+
 # ------------------------------------------------------------ offline judge
 
 

@@ -75,6 +75,9 @@ _UI_HISTORY_LIMIT = 20
 # nothing changed: the host summarises old turns away every ~10 turns.
 _CONTEXT_REFRESH_TURNS = 6
 _CONTEXT_RETRY_SECONDS = 60.0
+# Pending confirmation must survive one-shot context consumption and reconnects.
+_CONTEXT_WAITING_REFRESH_SECONDS = 60.0
+_CONTEXT_GUIDANCE_REVISION = "20261111.2"
 # Conversation bus: recent records read per tick (filtered locally).
 _BUS_POLL_LIMIT = 50
 _WARN_THROTTLE_SECONDS = 300.0
@@ -115,6 +118,12 @@ class _ScoreJob:
 def _role_suffix(name: str) -> str:
     """Stable ASCII suffix for a character name (tool names must be ASCII)."""
     return hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+
+
+def _confess_tool_name(scope: str) -> str:
+    if scope.startswith(engine.CHAR_SCOPE_PREFIX):
+        return f"{_SHARED_CONFESS_TOOL}_{_role_suffix(scope[len(engine.CHAR_SCOPE_PREFIX):])}"
+    return _SHARED_CONFESS_TOOL
 
 
 def _record_events(
@@ -193,7 +202,7 @@ class LoveWithYouPlugin(NekoPluginBase):
         }
         self._bus_warned = 0.0
         self._score_warned = 0.0
-        # character -> {key, turns, transition, retry_at}: what we last told it.
+        # Per-character guidance submission snapshots, never proof of model receipt.
         self._context: dict[str, dict[str, Any]] = {}
         self._gift_turns: dict[str, tuple[str, str]] = {}
 
@@ -489,24 +498,27 @@ class LoveWithYouPlugin(NekoPluginBase):
         state_description = prompts.auto_state_tool_description() if auto else prompts.state_tool_description()
 
         def tools_for(record: dict[str, Any], role: str | None, scope: str, suffix: str):
-            if auto:
-                # The plugin scores by itself; a second scorer would double count.
-                return {f"{_SHARED_STATE_TOOL}{suffix}": (role, scope, "state", state_description)}
             stage = engine.record_stage(record, int(record.get("affection", 0)))
-            confess_name = f"{_SHARED_CONFESS_TOOL}{suffix}"
+            confess_name = _confess_tool_name(scope)
             waiting = engine.awaiting_confession(record, gate)
-            idle = engine.idle_days(record, today)
-            description = prompts.update_tool_description(
-                stage,
-                engine.effective_nickname(record, stage),
-                _record_events(record, anniversaries, today, upcoming=False),
-                confess_tool=confess_name if waiting else "",
-                idle_days=idle if decay and idle >= engine.DECAY_GRACE_DAYS else 0,
-            )
             tools = {
-                f"{_SHARED_STATE_TOOL}{suffix}": (role, scope, "state", state_description),
-                f"{_SHARED_UPDATE_TOOL}{suffix}": (role, scope, "update", description),
+                f"{_SHARED_STATE_TOOL}{suffix}": (
+                    role, scope, "state",
+                    state_description + ("\n" + prompts.confession_line(confess_name) if waiting else ""),
+                ),
             }
+            if not auto:
+                # Automatic scoring owns affection changes, but the character
+                # can confirm mutual consent independently of that scorer.
+                idle = engine.idle_days(record, today)
+                description = prompts.update_tool_description(
+                    stage,
+                    engine.effective_nickname(record, stage),
+                    _record_events(record, anniversaries, today, upcoming=False),
+                    confess_tool=confess_name if waiting else "",
+                    idle_days=idle if decay and idle >= engine.DECAY_GRACE_DAYS else 0,
+                )
+                tools[f"{_SHARED_UPDATE_TOOL}{suffix}"] = (role, scope, "update", description)
             if waiting:
                 tools[confess_name] = (role, scope, "confess", prompts.confess_tool_description())
             return tools
@@ -588,12 +600,15 @@ class LoveWithYouPlugin(NekoPluginBase):
                 events = _record_events(record, self._state.get("anniversaries", []), today, upcoming=False)
                 met_day = _met_day(record, today)
             self.logger.debug("与你相恋: love_state scope={}", scope)
-            hint = {"hint": "只差一次真正的告白。"} if view["awaiting_confession"] else {}
+            hint = (
+                {"hint": prompts.confession_line(_confess_tool_name(scope))}
+                if view["awaiting_confession"] else {}
+            )
             return {
                 **hint,
                 "affection": view["affection"],
                 "stage": prompts.stage_name(view["stage"]),
-                "tone": prompts.stage_tone(view["stage"]),
+                "tone": prompts.stage_tone(view["stage"], awaiting_confession=view["awaiting_confession"]),
                 "next_stage": prompts.stage_name(view["next_stage"]) if view["next_stage"] else None,
                 "points_to_next": view["points_to_next"],
                 "nickname": view["nickname"] or None,
@@ -650,9 +665,17 @@ class LoveWithYouPlugin(NekoPluginBase):
     def _make_confess_handler(self, bound_scope: str) -> Callable[..., Any]:
         async def handler(moment: Any = None, **_: Any) -> dict[str, Any]:
             scope = bound_scope
+            self.logger.info(
+                "与你相恋: love_confess requested tool={} scope={} guidance={}",
+                _confess_tool_name(bound_scope), bound_scope, _CONTEXT_GUIDANCE_REVISION,
+            )
             try:
                 with self._lock, self._state_transaction_locked():
+                    if not self._ready or self._stopping.is_set():
+                        raise engine.EngineError("not_ready")
                     scope = self._effective_scope(bound_scope)
+                    if scope != bound_scope:
+                        raise engine.EngineError("relationship_changed")
                     record = engine.get_record(self._state, scope)
                     if record is None:
                         raise engine.EngineError("unknown_scope")
@@ -667,6 +690,7 @@ class LoveWithYouPlugin(NekoPluginBase):
                 return {"output": {"reason": str(exc)}, "is_error": True, "error": exc.code.upper()}
             # No read push: the model sees the result in this very turn.
             self.logger.info("与你相恋: confession scope={} {} -> {}", scope, result["previous_stage"], result["stage"])
+            self._reconcile_tools()
             return {
                 "stage": prompts.stage_name(result["stage"]),
                 "stage_changed": result["stage_changed"],
@@ -695,7 +719,10 @@ class LoveWithYouPlugin(NekoPluginBase):
         """Caller holds the lock."""
         entry = self._context.get(target)
         if entry is None:
-            entry = {"key": None, "turns": 0, "transition": None, "retry_at": 0.0}
+            entry = {
+                "key": None, "turns": 0, "transition": None, "retry_at": 0.0,
+                "activity": 0, "submitted_activity": 0, "submitted_at": 0.0, "sequence": 0,
+            }
             self._context[target] = entry
         return entry
 
@@ -714,11 +741,13 @@ class LoveWithYouPlugin(NekoPluginBase):
 
         A push happens when what the character should know changed (stage,
         nickname, today's events, confession, idle spell), when a stage just
-        changed, or after _CONTEXT_REFRESH_TURNS user messages.
+        changed, or after _CONTEXT_REFRESH_TURNS user messages. Pending
+        confirmation also refreshes after user/reply activity; a bounded timer
+        keeps the current character's guidance queued across reconnects.
         """
         now = time.monotonic()
         today = date.today()
-        pushes: list[tuple[str, str, str, Any]] = []
+        pushes: list[tuple[str, str, str, dict[str, Any]]] = []
         with self._lock:
             current = self._state.get("current_character")
             if current:
@@ -739,18 +768,31 @@ class LoveWithYouPlugin(NekoPluginBase):
                 idle = idle if decay and idle >= engine.DECAY_GRACE_DAYS else 0
                 key = (scope, stage, nickname, waiting, idle, tuple(prompts.event_text(e) for e in events))
                 transition = entry["transition"]
-                if key == entry["key"] and transition is None and entry["turns"] < _CONTEXT_REFRESH_TURNS:
+                if key != entry["key"] or transition is not None:
+                    reason = "state_changed"
+                elif waiting and entry["activity"] != entry["submitted_activity"]:
+                    reason = "confirmation_activity"
+                elif waiting and target == current and now - entry["submitted_at"] >= _CONTEXT_WAITING_REFRESH_SECONDS:
+                    reason = "confirmation_refresh"
+                elif entry["turns"] >= _CONTEXT_REFRESH_TURNS:
+                    reason = "turn_refresh"
+                else:
                     continue
                 text = prompts.relationship_context(
                     stage,
                     nickname,
                     events,
                     awaiting_confession=waiting,
+                    confess_tool=_confess_tool_name(scope) if waiting else "",
                     idle_days=idle,
                     transition=transition,
                 )
-                pushes.append((target, text, stage, (key, transition)))
-        for target, text, stage, (key, transition) in pushes:
+                pushes.append((target, text, stage, {
+                    "key": key, "transition": transition, "turns": entry["turns"],
+                    "activity": entry["activity"], "waiting": waiting, "reason": reason,
+                    "tool": _confess_tool_name(scope) if waiting else "", "sequence": entry["sequence"] + 1,
+                }))
+        for target, text, stage, snapshot in pushes:
             try:
                 receipt = self.push_message(
                     source=self.plugin_id,
@@ -760,7 +802,11 @@ class LoveWithYouPlugin(NekoPluginBase):
                     target_lanlan=target,
                     # Newest wins: an unread older state is dropped, not stacked.
                     coalesce_key=f"{self.plugin_id}:context:{target}",
-                    metadata={"event_type": "relationship_context", "stage": stage},
+                    metadata={
+                        "event_type": "relationship_context", "stage": stage,
+                        "awaiting_confession": snapshot["waiting"], "confess_tool": snapshot["tool"],
+                        "guidance_revision": _CONTEXT_GUIDANCE_REVISION, "sequence": snapshot["sequence"],
+                    },
                 )
                 if isinstance(receipt, dict) and receipt.get("submitted") is False:
                     raise RuntimeError("submission_rejected")
@@ -771,13 +817,20 @@ class LoveWithYouPlugin(NekoPluginBase):
                 continue
             with self._lock:
                 entry = self._context_entry(target)
-                entry["key"] = key
-                entry["turns"] = 0
+                entry["key"] = snapshot["key"]
+                entry["turns"] = max(0, entry["turns"] - snapshot["turns"])
+                entry["submitted_activity"] = snapshot["activity"]
+                entry["submitted_at"] = now
+                entry["sequence"] = snapshot["sequence"]
                 entry["retry_at"] = 0.0
                 # A change that landed while we were pushing waits for the next tick.
-                if entry["transition"] == transition:
+                if entry["transition"] == snapshot["transition"]:
                     entry["transition"] = None
-            self.logger.info("与你相恋: context pushed to {} stage={}", target, stage)
+            self.logger.info(
+                "与你相恋: context submitted to {} stage={} awaiting={} tool={} guidance={} sequence={} reason={}",
+                target, stage, snapshot["waiting"], snapshot["tool"], _CONTEXT_GUIDANCE_REVISION,
+                snapshot["sequence"], snapshot["reason"],
+            )
 
     # ------------------------------------------------------------ conversation bus
 
@@ -892,6 +945,8 @@ class LoveWithYouPlugin(NekoPluginBase):
                     return
                 stage_change = self._on_proactive_reply_locked(message)
             else:
+                if message.role in ("user", "reply"):
+                    self._context_entry(message.lanlan)["activity"] += 1
                 income_exchange = self._income_tracker.feed(message)
                 if income_exchange is not None and income_exchange.income_event is not None:
                     if len(self._income_pending) < 128:
@@ -917,6 +972,14 @@ class LoveWithYouPlugin(NekoPluginBase):
                         stage_change = self._handle_proactive_response_locked(message)
                 elif message.role == "reply":
                     self._note_intervening_reply_locked(message)
+                    scope = engine.scope_key_for(self._state, message.lanlan)
+                    record = engine.get_record(self._state, scope, create=False)
+                    if record is not None and engine.awaiting_confession(record, self._gate()):
+                        self.logger.info(
+                            "与你相恋: confirmation pending after reply target={} scope={} tool={} guidance_sequence={}",
+                            message.lanlan, scope, _confess_tool_name(scope),
+                            self._context_entry(message.lanlan)["sequence"],
+                        )
                 exchange = None if message.metadata.get("skip_score") else self._tracker.feed(message)
                 if exchange is not None:
                     self._enqueue(exchange)

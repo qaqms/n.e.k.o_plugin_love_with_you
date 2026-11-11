@@ -951,6 +951,128 @@ def test_restart_cannot_replay_old_queue_or_stop_sentinel(plugin, runtime):
     assert plugin._state["shared"]["affection"] == 2
 
 
+@pytest.mark.parametrize("auto", [False, True])
+@pytest.mark.parametrize("independent", [False, True])
+@pytest.mark.parametrize(("value", "confessed", "gate", "available"), [
+    (79, False, True, False),
+    (80, False, True, True),
+    (91, False, True, True),
+    (91, True, True, False),
+    (91, False, False, False),
+])
+def test_character_confession_tools_follow_gate_and_role_without_manual_scoring(
+    plugin, runtime, auto, independent, value, confessed, gate, available,
+):
+    runtime.engine.set_affection(plugin._state["shared"], value, gate=True)
+    plugin._state["shared"]["confessed"] = confessed
+    plugin._state["settings"].update(auto_score=auto, require_confession=gate)
+    if independent:
+        runtime.engine.set_per_character(plugin._state, True, "YUI")
+        plugin._live_roles = {"YUI"}
+    scope = "char:YUI" if independent else "shared"
+    suffix = f"_{runtime._role_suffix('YUI')}" if independent else ""
+    desired = plugin._desired_tools()
+    assert set(desired) == {
+        "love_state" + suffix,
+        *([] if auto else ["love_update" + suffix]),
+        *(["love_confess" + suffix] if available else []),
+    }
+    for role, target, _kind, _description in desired.values():
+        assert role == ("YUI" if independent else None)
+        assert target == scope
+    if available:
+        assert desired[runtime._confess_tool_name(scope)][2] == "confess"
+        assert runtime._confess_tool_name(scope) in desired["love_state" + suffix][3]
+        hint = asyncio.run(plugin._make_state_handler(scope)())["hint"]
+        assert runtime._confess_tool_name(scope) in hint
+        plugin.push_message = Mock()
+        plugin._flush_context()
+        context = plugin.push_message.call_args.kwargs["parts"][0]["text"]
+        assert runtime._confess_tool_name(scope) in context
+
+
+@pytest.mark.parametrize("independent", [False, True])
+def test_character_can_record_contextual_consent_with_auto_scoring_and_no_judge(plugin, runtime, independent):
+    runtime.engine.set_affection(plugin._state["shared"], 91, gate=True)
+    if independent:
+        runtime.engine.set_per_character(plugin._state, True, "YUI")
+        runtime.engine.set_affection(runtime.engine.get_record(plugin._state, "char:MIO"), 85, gate=True)
+    scope = "char:YUI" if independent else "shared"
+    other = copy.deepcopy(plugin._state["characters"].get("MIO"))
+    economy = copy.deepcopy(plugin._state["shop"])
+    plugin.register_llm_tool = Mock()
+    plugin.unregister_llm_tool = Mock()
+    plugin._reconcile_tools = runtime.LoveWithYouPlugin._reconcile_tools.__get__(plugin)
+    plugin._reconcile_tools()
+    specs = {call.kwargs["name"]: call.kwargs for call in plugin.register_llm_tool.call_args_list}
+    spec = specs[runtime._confess_tool_name(scope)]
+    assert spec["role"] == ("YUI" if independent else None)
+    assert not any(name.startswith("love_update") for name in specs)
+
+    proposal = "想一直陪着您，只陪着您。可以吗？"
+    answer = "当然可以，我也会一直陪着你的。"
+    plugin._enqueue(runtime.conv.Exchange("YUI", answer, "那太好了", "", proposal, 1))
+    job = plugin._jobs.get_nowait()
+    assert not runtime.scoring.rule_verdict(
+        answer, "那太好了", previous_reply=proposal, awaiting_confession=True,
+    ).confession
+    result = asyncio.run(spec["handler"](moment="彼此认真确认了恋爱心意"))
+    assert result["stage"] == "恋人" and result["stage_changed"]
+    record = runtime.engine.get_record(plugin._state, scope)
+    assert record["affection"] == 91 and record["confessed"]
+    assert record["confessed_on"] == runtime.engine.today_str()
+    assert record["milestones"]["lover"] == record["confessed_on"]
+    assert plugin._state["shop"] == economy
+    assert plugin._state["characters"].get("MIO") == other
+    assert runtime._confess_tool_name(scope) not in plugin._registered
+    plugin._complete.assert_not_called()
+
+    repeated = asyncio.run(spec["handler"](moment="重复确认"))
+    assert repeated["error"] == "ALREADY_CONFESSED"
+    plugin._complete = AsyncMock(return_value=(None, runtime.judge.UNBOUND))
+    asyncio.run(plugin._score(job))
+    assert record["confessed"] and record["stage"] == "lover"
+    assert len([item for item in record["history"] if item["source"] == "confession"]) == 1
+    saved, warning = plugin._state_file.load()
+    restored = runtime.engine.normalize_state(saved)
+    assert warning is None
+    assert runtime.engine.get_record(restored, scope)["confessed"]
+    dashboard = asyncio.run(plugin.dashboard())
+    shown = next(item for item in dashboard["scopes"] if item["key"] == scope)
+    assert shown["stage"] == "lover" and not shown["awaiting_confession"]
+
+
+@pytest.mark.parametrize(("condition", "error"), [
+    ("below_threshold", "NOT_READY"),
+    ("gate_off", "NOT_NEEDED"),
+    ("stopped", "NOT_READY"),
+    ("stopping", "NOT_READY"),
+    ("shared_to_independent", "RELATIONSHIP_CHANGED"),
+    ("independent_to_shared", "RELATIONSHIP_CHANGED"),
+])
+def test_character_confirmation_cannot_bypass_runtime_gate_or_redirect_stale_tools(plugin, runtime, condition, error):
+    runtime.engine.set_affection(plugin._state["shared"], 91, gate=True)
+    scope = "shared"
+    if condition == "below_threshold":
+        runtime.engine.set_affection(plugin._state["shared"], 79, gate=True)
+    elif condition == "gate_off":
+        plugin._state["settings"]["require_confession"] = False
+    elif condition == "stopped":
+        plugin._ready = False
+    elif condition == "stopping":
+        plugin._stopping.set()
+    elif condition == "shared_to_independent":
+        runtime.engine.set_per_character(plugin._state, True, "YUI")
+    elif condition == "independent_to_shared":
+        runtime.engine.set_per_character(plugin._state, True, "YUI")
+        scope = "char:YUI"
+        runtime.engine.set_per_character(plugin._state, False, "YUI")
+    before = copy.deepcopy(plugin._state)
+    result = asyncio.run(plugin._make_confess_handler(scope)(moment="确认关系"))
+    assert result["error"] == error and result["is_error"]
+    assert plugin._state == before and not plugin._state_file.path.exists()
+
+
 def test_proactive_confession_is_opt_in_and_waits_for_delivered_reply(plugin, runtime):
     async def scenario():
         plugin.push_message = Mock()
@@ -1320,6 +1442,150 @@ def test_rejected_context_submission_keeps_relationship_context_for_retry(plugin
     entry = plugin._context["YUI"]
     assert entry["key"] is None
     assert entry["retry_at"] > runtime.time.monotonic()
+
+
+@pytest.mark.parametrize("auto", [True, False])
+def test_pending_confirmation_requeues_after_each_turn_without_interrupting(plugin, runtime, monkeypatch, auto):
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: 1000.0)
+    runtime.engine.set_affection(plugin._state["shared"], 91, gate=True)
+    plugin._state["settings"]["auto_score"] = auto
+    queued = {}
+
+    def submit(**kwargs):
+        queued[kwargs["target_lanlan"]] = kwargs
+        return {"submitted": True}
+
+    plugin.push_message = Mock(side_effect=submit)
+    plugin._flush_context()
+    first = queued.pop("YUI")  # A natural turn consumes a passive host cue.
+    plugin._on_message(runtime.conv.Message(10, "user", "YUI", "我喜欢你"))
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 2
+    queued.pop("YUI")
+    plugin._on_message(runtime.conv.Message(11, "reply", "YUI", "你是想和我正式交往吗？"))
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 3
+    latest = queued["YUI"]
+    for cue in (first, latest):
+        assert cue["ai_behavior"] == "read" and cue["visibility"] == []
+        assert cue["metadata"]["awaiting_confession"] is True
+        assert cue["metadata"]["confess_tool"] == "love_confess"
+    assert first["coalesce_key"] == latest["coalesce_key"]
+    assert latest["metadata"]["sequence"] == 3
+    assert latest["metadata"]["guidance_revision"] == runtime._CONTEXT_GUIDANCE_REVISION
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 3
+    assert not plugin._state["shared"]["confessed"]
+
+
+def test_pending_confirmation_refreshes_across_idle_reconnect_and_stops_after_success(plugin, runtime, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    runtime.engine.set_affection(plugin._state["shared"], 91, gate=True)
+    plugin.push_message = Mock(return_value={"submitted": True})
+    plugin._flush_context()
+    clock[0] += runtime._CONTEXT_WAITING_REFRESH_SECONDS - 1
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 1
+    clock[0] += 1
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 2
+    result = asyncio.run(plugin._make_confess_handler("shared")(moment="彼此认真确认恋爱心意"))
+    assert result["stage"] == "恋人"
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 3
+    latest = plugin.push_message.call_args.kwargs
+    assert latest["metadata"]["awaiting_confession"] is False
+    assert latest["metadata"]["confess_tool"] == ""
+    assert "love_confess" not in latest["parts"][0]["text"]
+    clock[0] += 600
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 3
+
+
+@pytest.mark.parametrize("condition", ["below_threshold", "already_lover", "gate_off"])
+def test_other_relationships_keep_six_user_turn_refresh(plugin, runtime, monkeypatch, condition):
+    clock = [1000.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    if condition != "below_threshold":
+        runtime.engine.set_affection(plugin._state["shared"], 91, gate=True)
+        if condition == "already_lover":
+            runtime.engine.confess(plugin._state["shared"], "已确认")
+        else:
+            plugin._state["settings"]["require_confession"] = False
+    plugin.push_message = Mock(return_value={"submitted": True})
+    plugin._flush_context()
+    for n in range(runtime._CONTEXT_REFRESH_TURNS - 1):
+        income_turn(plugin, runtime, 10 + 3 * n, "hello")
+        clock[0] += 70
+        plugin._flush_context()
+    assert plugin.push_message.call_count == 1
+    plugin._on_message(runtime.conv.Message(100, "user", "YUI", "hello"))
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 2
+
+
+def test_context_failure_preserves_pending_activity_until_retry_succeeds(plugin, runtime, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    runtime.engine.set_affection(plugin._state["shared"], 91, gate=True)
+    plugin.push_message = Mock(return_value={"submitted": True})
+    plugin._flush_context()
+    plugin._on_message(runtime.conv.Message(10, "user", "YUI", "我喜欢你"))
+    plugin.push_message.return_value = {"submitted": False}
+    plugin._flush_context()
+    entry = plugin._context["YUI"]
+    assert entry["sequence"] == 1 and entry["submitted_activity"] == 0
+    plugin._on_message(runtime.conv.Message(11, "reply", "YUI", "你想正式交往吗？"))
+    clock[0] += runtime._CONTEXT_RETRY_SECONDS - 1
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 2
+    clock[0] += 1
+    plugin.push_message.return_value = {"submitted": True}
+    plugin._flush_context()
+    assert entry["sequence"] == 2 and entry["submitted_activity"] == entry["activity"] == 2
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 3
+
+
+def test_activity_during_submission_is_not_mistaken_for_submitted_context(plugin, runtime, monkeypatch):
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: 1000.0)
+    runtime.engine.set_affection(plugin._state["shared"], 91, gate=True)
+
+    def submit(**_kwargs):
+        if plugin.push_message.call_count == 1:
+            plugin._on_message(runtime.conv.Message(10, "user", "YUI", "我喜欢你"))
+        return {"submitted": True}
+
+    plugin.push_message = Mock(side_effect=submit)
+    plugin._flush_context()
+    entry = plugin._context["YUI"]
+    assert entry["turns"] == 1 and entry["submitted_activity"] == 0 and entry["activity"] == 1
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 2 and entry["submitted_activity"] == 1
+
+
+def test_pending_context_refresh_is_bound_to_each_character(plugin, runtime, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: clock[0])
+    runtime.engine.set_affection(plugin._state["shared"], 91, gate=True)
+    runtime.engine.set_per_character(plugin._state, True, "YUI")
+    runtime.engine.set_affection(runtime.engine.get_record(plugin._state, "char:MIO"), 91, gate=True)
+    plugin._context_entry("MIO")
+    plugin.push_message = Mock(return_value={"submitted": True})
+    plugin._flush_context()
+    plugin.push_message.reset_mock()
+    plugin._on_message(runtime.conv.Message(10, "reply", "MIO", "你好"))
+    plugin._flush_context()
+    cue = plugin.push_message.call_args.kwargs
+    assert plugin.push_message.call_count == 1 and cue["target_lanlan"] == "MIO"
+    assert cue["metadata"]["confess_tool"] == runtime._confess_tool_name("char:MIO")
+    assert runtime._confess_tool_name("char:YUI") not in cue["parts"][0]["text"]
+    clock[0] += runtime._CONTEXT_WAITING_REFRESH_SECONDS
+    plugin.push_message.reset_mock()
+    plugin._flush_context()
+    assert plugin.push_message.call_count == 1
+    assert plugin.push_message.call_args.kwargs["target_lanlan"] == "YUI"
 
 
 @pytest.mark.parametrize("spoken_at", [None, -1, 1])

@@ -32,8 +32,11 @@ def test_save_replaces_existing(storage, tmp_path):
     assert json.loads(path.read_text(encoding="utf-8")) == {"v": 2}
 
 
-def test_repeated_corruption_in_one_second_preserves_each_backup(storage, tmp_path, monkeypatch):
-    monkeypatch.setattr(storage.time, "time", lambda: 1000)
+def test_repeated_corruption_in_one_second_preserves_each_backup(
+    storage, tmp_path, monkeypatch, module_clock
+):
+    module_clock.time = lambda: 1000
+    monkeypatch.setattr(storage, "time", module_clock)
     path = tmp_path / "state.json"
     store = storage.StateFile(path)
     for content in ("{first broken file", "{second broken file"):

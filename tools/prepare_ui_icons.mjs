@@ -25,4 +25,24 @@ export function Icon(props: { name: keyof typeof icons }) {
   return <span className="lwy-icon" aria-hidden="true" style={{ maskImage: image, WebkitMaskImage: image }} />
 }
 `
-writeFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../ui/icons.tsx"), output)
+if (!process.argv.includes("--game-only")) {
+  writeFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../ui/icons.tsx"), output)
+}
+
+const gameNames = ["Coins", "ShoppingBag", "Undo2", "ArrowLeft", "Plus", "Check",
+  "Heart", "Footprints", "Swords", "Magnet", "Flame", "Wind", "Shield", "RotateCw", "Save", "BookOpen", "Snowflake"]
+const gameIcons = Object.fromEntries(gameNames.map(name => [name,
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${(icons[name][0] === "svg" ? icons[name][2] : icons[name]).map(([tag, attrs]) =>
+    `<${tag} ${Object.entries(attrs).map(([key, value]) => `${key}="${value}"`).join(" ")}/>`).join("")}</svg>`]))
+writeFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../static/icons.mjs"),
+  `/* Generated from Lucide by tools/prepare_ui_icons.mjs.\n${license}\n*/\nconst icons = ${JSON.stringify(gameIcons, null, 2)}
+
+export function icon(name) {
+  const node = document.createElement("span")
+  node.className = "game-icon"
+  node.setAttribute("aria-hidden", "true")
+  const image = \`url("data:image/svg+xml,\${encodeURIComponent(icons[name])}")\`
+  node.style.maskImage = node.style.webkitMaskImage = image
+  return node
+}
+`)

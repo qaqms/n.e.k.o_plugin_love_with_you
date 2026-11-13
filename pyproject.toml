@@ -1,6 +1,6 @@
 [project]
 name = "love_with_you"
-version = "0.5.1"
+version = "0.7.9"
 dependencies = []
 
 # Editor-only: resolve the N.E.K.O SDK (`plugin.sdk.plugin`) from the sibling
@@ -13,7 +13,7 @@ extraPaths = ["../N.E.K.O"]
 # Keep the release CLI's plain `pytest tests` collection inside tests/.
 addopts = "--rootdir=tests --confcutdir=tests --import-mode=importlib -p no:cacheprovider --basetemp=../.pytest-love-with-you"
 
-# Keep local pytest temp output (created on Windows when TEMP is unusable)
-# out of the installable package.
+# Keep tests, development tools and local pytest temp output out of the
+# installable package.
 [tool.neko.build]
-exclude_dirs = ["pytest-of-*", ".benchmarks", "tools"]
+exclude_dirs = ["pytest-of-*", ".benchmarks", "tools", "tests"]

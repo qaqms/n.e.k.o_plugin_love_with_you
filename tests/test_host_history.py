@@ -65,6 +65,7 @@ def test_legacy_host_reply_stamps_require_a_real_preceding_user_message(host, se
     ("[20270101 Fri 12:00] future", {}),
     ("[20260101 Thu 12:00] tool", {"chat_original_source": {"origin": "tool"}}),
     ("[20260101 Thu 12:00] proactive", {"turn_type": "proactive_reply"}),
+    ("[20260101 Thu 12:00] invitation", {"event_type": "experience_note"}),
 ])
 def test_legacy_reply_stamp_rejects_invalid_or_generated_replies(host, prefix, metadata):
     rows = [
@@ -72,6 +73,13 @@ def test_legacy_reply_stamp_rejects_invalid_or_generated_replies(host, prefix, m
         {"type": "ai", "data": {"content": prefix, "metadata": metadata}},
     ]
     assert host.earliest_chat_date(rows, NOW) is None
+
+
+@pytest.mark.parametrize("kind", ["human", "ai"])
+def test_experience_invitation_does_not_supply_first_met_date(host, kind):
+    row = message("2026-01-01", kind=kind)
+    row["data"]["metadata"]["event_type"] = "experience_note"
+    assert host.earliest_chat_date([row, message("2026-10-10")], NOW) == "2026-10-10"
 
 
 @pytest.mark.parametrize("stamp", [None, True, 123, "NaN", "123.45", "-1", "9" * 100])

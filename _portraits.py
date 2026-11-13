@@ -148,34 +148,39 @@ class PortraitLibrary:
             result["available"] = False
         return result
 
+    def _available(self) -> list[dict[str, Any]]:
+        self._reload()
+        return [meta for item in self._items.values() if (meta := self._meta(item))["available"]]
+
     def summary(self) -> dict[str, Any]:
         with self._lock:
-            self._reload()
-            available = [item for item in self._items.values() if self._meta(item)["available"]]
-            settings = copy.deepcopy(self._prefs)
-            ids = {item["id"] for item in available}
-            if settings["selected_id"] not in ids:
-                settings["selected_id"] = available[0]["id"] if available else ""
-            if settings["pool_ids"] is not None:
-                settings["pool_ids"] = [item for item in settings["pool_ids"] if item in ids]
-            if not self._explicit_mode and not self._items:
-                settings["mode"] = "legacy"
-            pool = settings["pool_ids"]
-            candidates = ids if pool is None else ids.intersection(pool)
-            revision = hashlib.sha256(
-                (repr(self._catalog_stamp) + json.dumps(
-                    list(self._custom_items.values()), ensure_ascii=False, sort_keys=True,
-                )).encode()
-            ).hexdigest()[:16]
-            return {
-                "settings": settings,
-                "count": len(available),
-                "ids": [item["id"] for item in available],
-                "pool_count": len(candidates),
-                "collections": sorted({item["collection"] for item in available}),
-                "revision": revision,
-                "catalog_error": self._catalog_error or self._custom_error,
-            }
+            return self._summary(self._available())
+
+    def _summary(self, available: list[dict[str, Any]]) -> dict[str, Any]:
+        settings = copy.deepcopy(self._prefs)
+        ids = {item["id"] for item in available}
+        if settings["selected_id"] not in ids:
+            settings["selected_id"] = available[0]["id"] if available else ""
+        if settings["pool_ids"] is not None:
+            settings["pool_ids"] = [item for item in settings["pool_ids"] if item in ids]
+        if not self._explicit_mode and not self._items:
+            settings["mode"] = "legacy"
+        pool = settings["pool_ids"]
+        candidates = ids if pool is None else ids.intersection(pool)
+        revision = hashlib.sha256(
+            (repr(self._catalog_stamp) + json.dumps(
+                list(self._custom_items.values()), ensure_ascii=False, sort_keys=True,
+            )).encode()
+        ).hexdigest()[:16]
+        return {
+            "settings": settings,
+            "count": len(available),
+            "ids": [item["id"] for item in available],
+            "pool_count": len(candidates),
+            "collections": sorted({item["collection"] for item in available}),
+            "revision": revision,
+            "catalog_error": self._catalog_error or self._custom_error,
+        }
 
     def list_items(self, page: Any = 0, collection: Any = "", query: Any = "") -> dict[str, Any]:
         if type(page) is not int or page < 0 or not isinstance(collection, str) or not isinstance(query, str):
@@ -220,12 +225,11 @@ class PortraitLibrary:
         if not isinstance(previous_id, str):
             raise PortraitError("portrait_invalid_settings")
         with self._lock:
-            summary = self.summary()
+            candidates = self._available()
+            summary = self._summary(candidates)
             settings = summary["settings"]
             if settings["mode"] in ("off", "legacy"):
                 return {"available": False}
-            candidates = [self._meta(item) for item in self._items.values()]
-            candidates = [item for item in candidates if item["available"]]
             if settings["mode"] == "fixed":
                 return next((item for item in candidates if item["id"] == settings["selected_id"]), {"available": False})
             pool = settings["pool_ids"]

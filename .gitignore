@@ -11,6 +11,7 @@ vendor/
 /.vendor.backup-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].pending
 dist/
 build/
+node_modules/
 *.egg-info/
 store.db
 .env

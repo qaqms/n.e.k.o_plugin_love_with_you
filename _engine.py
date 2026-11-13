@@ -53,6 +53,9 @@ DAILY_LOSS_CAP = 4
 HISTORY_LIMIT = 50
 REASON_MAX_CHARS = 80
 NICKNAME_MAX_CHARS = 12
+ADDRESSING_VERSION = 1
+ADDRESSING_DEFAULTS_VERSION = 1
+AVOIDED_NAMES_MAX = 20
 ANNIVERSARY_TITLE_MAX_CHARS = 20
 ANNIVERSARY_LIMIT = 20
 CONFESSION_MOMENT_MAX_CHARS = 40
@@ -214,6 +217,8 @@ def proactive_confession_state(record: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "attempts": attempts,
         "target": target,
+        "request_id": raw["request_id"] if isinstance(raw.get("request_id"), str)
+        and re.fullmatch(r"[a-zA-Z0-9_-]{12,80}", raw["request_id"]) else "",
         "last_attempt_at": timestamp("last_attempt_at"),
         "waiting_since": timestamp("waiting_since"),
         "cooldown_until": timestamp("cooldown_until") or 0.0,
@@ -274,6 +279,8 @@ def new_record(affection: int = 0, now: float | None = None) -> dict[str, Any]:
         "milestones": {},
         # stage key -> what the character calls the user at that stage.
         "nicknames": {},
+        "addressing": new_addressing(),
+        "addressing_revision": 0,
         # Last model change (cooldown).
         "last_model_ts": None,
         "last_model_sign": 0,
@@ -290,6 +297,7 @@ def new_record(affection: int = 0, now: float | None = None) -> dict[str, Any]:
             "status": "idle",
             "attempts": 0,
             "target": "",
+            "request_id": "",
             "last_attempt_at": None,
             "waiting_since": None,
             "cooldown_until": 0.0,
@@ -329,6 +337,10 @@ def normalize_record(raw: Any, now: float | None = None) -> dict[str, Any]:
         record["updated_at"] = float(updated_at)
     _normalize_relationship(record, raw)
     _normalize_v3(record, raw)
+    record["addressing"] = normalize_addressing(raw.get("addressing"), record["nicknames"])
+    record["nicknames"] = _custom_names(record["addressing"])
+    revision = raw.get("addressing_revision", 0)
+    record["addressing_revision"] = max(0, revision) if isinstance(revision, int) and not isinstance(revision, bool) else 0
     if raw.get("quota_version") != 1 and record["gained_today"]:
         record["quota_blocked_day"] = record["day"]
     elif isinstance(raw.get("quota_blocked_day"), str) and _parse_day(raw["quota_blocked_day"]):
@@ -622,7 +634,7 @@ def set_affection(
     _settle(record, previous_stage, new_stage, ts)
     record["updated_at"] = ts
     _touch_daily(record, ts)
-    if after != before or source == "reset":
+    if after != before or source in {"reset", "restart"}:
         _append_history(
             record,
             {
@@ -640,6 +652,18 @@ def set_affection(
         "stage": new_stage,
         "stage_changed": new_stage != previous_stage,
     }
+
+
+def restart_relationship(record: dict[str, Any], now: float | None = None) -> dict[str, Any]:
+    """Explicitly restart romance, keeping history, identity, preferences and quotas."""
+    ts = time.time() if now is None else now
+    result = set_affection(record, 0, source="restart", now=ts, gate=True)
+    record.update(confessed=False, confessed_on=None, confession="")
+    record.setdefault("milestones", {}).pop("lover", None)
+    record.pop("proactive_confession", None)
+    proactive_confession_state(record)
+    mark_active(record, ts)
+    return result
 
 
 def apply_decay(record: dict[str, Any], enabled: bool, now: float | None = None) -> int:
@@ -736,15 +760,177 @@ def trend_view(record: dict[str, Any], days: int = TREND_DAYS, today: date | Non
 # ---------------------------------------------------------------- relationship details
 
 
+def new_addressing() -> dict[str, Any]:
+    return {
+        "version": ADDRESSING_VERSION,
+        "stages": {key: {"mode": "auto", "text": ""} for key in STAGE_KEYS},
+        "endearments": True, "preferred_name": "", "avoided": [],
+    }
+
+
+def normalize_addressing(raw: Any, legacy: dict[str, str]) -> dict[str, Any]:
+    """Missing preferences mean legacy inheritance, never opt an old record in."""
+    valid = isinstance(raw, dict) and raw.get("version") == ADDRESSING_VERSION
+    stages = raw.get("stages", {}) if valid else {}
+    stages = stages if isinstance(stages, dict) else {}
+    result = {
+        "version": ADDRESSING_VERSION, "stages": {}, "endearments": valid and raw.get("endearments") is True,
+        "preferred_name": clean_text(raw.get("preferred_name"), NICKNAME_MAX_CHARS) if valid else "",
+        "avoided": [],
+    }
+    if valid and isinstance(raw.get("avoided"), list):
+        result["avoided"] = list(dict.fromkeys(
+            clean_text(name, NICKNAME_MAX_CHARS) for name in raw["avoided"] if isinstance(name, str) and name.strip()
+        ))[:AVOIDED_NAMES_MAX]
+    for key in STAGE_KEYS:
+        item = stages.get(key)
+        if (
+            isinstance(item, dict) and isinstance(item.get("mode"), str)
+            and item["mode"] in {"auto", "custom", "persona", "inherit"}
+        ):
+            mode = item["mode"]
+            text = clean_text(item.get("text"), NICKNAME_MAX_CHARS) if mode == "custom" else ""
+            result["stages"][key] = {"mode": mode if mode != "custom" or text else "persona", "text": text}
+        else:
+            text = legacy.get(key, "")
+            result["stages"][key] = {"mode": "custom" if text else "inherit", "text": text}
+    return result
+
+
+def addressing_preferences(record: dict[str, Any]) -> dict[str, Any]:
+    return normalize_addressing(record.get("addressing"), record.get("nicknames") or {})
+
+
+def _custom_names(preferences: dict[str, Any]) -> dict[str, str]:
+    return {key: item["text"] for key, item in preferences["stages"].items() if item["mode"] == "custom"}
+
+
+def resolve_addressing(record: dict[str, Any], stage: str | None = None) -> dict[str, Any]:
+    prefs = addressing_preferences(record)
+    current = stage if stage in STAGE_KEYS else record_stage(record, int(record.get("affection", 0)))
+    avoided = {name.casefold() for name in prefs["avoided"]}
+    text, candidate, source, source_stage = "", "", "persona", current
+    for key in STAGE_KEYS[:stage_index(current) + 1]:
+        item = prefs["stages"][key]
+        if item["mode"] == "custom":
+            text = item["text"] if item["text"].casefold() not in avoided else ""
+            candidate, source, source_stage = "", "custom" if text else "persona", key
+        elif item["mode"] == "persona":
+            text, candidate, source, source_stage = "", "", "persona", key
+        elif item["mode"] == "auto":
+            preferred = prefs["preferred_name"]
+            if preferred and preferred.casefold() not in avoided:
+                text, candidate, source, source_stage = preferred, "", "preferred", key
+            elif not text:
+                candidate = (
+                    "亲爱的" if key == "lover" and record.get("confessed") and prefs["endearments"]
+                    and "亲爱的".casefold() not in avoided else ""
+                )
+                source, source_stage = "default_lover" if candidate else "default", key
+    return {
+        "mode": prefs["stages"][current]["mode"], "text": text, "candidate": candidate,
+        "source": source, "source_stage": source_stage, "avoided": prefs["avoided"],
+    }
+
+
 def effective_nickname(record: dict[str, Any], stage: str | None = None) -> str:
-    """Nickname for ``stage``, inheriting from the nearest lower stage that has one."""
-    nicknames = record.get("nicknames") or {}
-    current = stage or record_stage(record, int(record.get("affection", 0)))
-    for key in reversed(STAGE_KEYS[: stage_index(current) + 1]):
-        text = nicknames.get(key)
-        if isinstance(text, str) and text:
-            return text
-    return ""
+    return resolve_addressing(record, stage)["text"]
+
+
+def _addressing_patch(changes: Any) -> dict[str, Any]:
+    if not isinstance(changes, dict) or not changes or set(changes) - {"stages", "endearments", "preferred_name", "avoided"}:
+        raise EngineError("invalid_addressing")
+    result: dict[str, Any] = {}
+    for key, value in changes.items():
+        if key == "stages":
+            if not isinstance(value, dict) or not value or set(value) - set(STAGE_KEYS):
+                raise EngineError("invalid_addressing")
+            result[key] = {}
+            for stage, item in value.items():
+                if (
+                    not isinstance(item, dict) or set(item) != {"mode", "text"}
+                    or not isinstance(item["mode"], str) or item["mode"] not in {"auto", "custom", "persona", "inherit"}
+                    or not isinstance(item["text"], str)
+                ):
+                    raise EngineError("invalid_addressing")
+                text = clean_text(item["text"], NICKNAME_MAX_CHARS) if item["mode"] == "custom" else ""
+                if item["mode"] == "custom" and not text:
+                    raise EngineError("nickname_required")
+                result[key][stage] = {"mode": item["mode"], "text": text}
+        elif key == "endearments":
+            if not isinstance(value, bool):
+                raise EngineError("invalid_addressing")
+            result[key] = value
+        elif key == "preferred_name":
+            if not isinstance(value, str):
+                raise EngineError("invalid_addressing")
+            result[key] = clean_text(value, NICKNAME_MAX_CHARS)
+        else:
+            if not isinstance(value, list) or len(value) > AVOIDED_NAMES_MAX or any(not isinstance(v, str) for v in value):
+                raise EngineError("invalid_addressing")
+            result[key] = list(dict.fromkeys(
+                text for name in value if (text := clean_text(name, NICKNAME_MAX_CHARS))
+            ))
+    return result
+
+
+def set_addressing(record: dict[str, Any], changes: Any, *, expected: Any = None) -> dict[str, Any]:
+    patch = _addressing_patch(changes)
+    before = addressing_preferences(record)
+    if expected is not None:
+        old = _addressing_patch(expected)
+        if set(old) != set(patch) or ("stages" in patch and set(old["stages"]) != set(patch["stages"])):
+            raise EngineError("invalid_addressing")
+        for key, value in patch.items():
+            pairs = (
+                ((before[key][stage], old[key][stage], item) for stage, item in value.items())
+                if key == "stages" else [(before[key], old[key], value)]
+            )
+            if any(actual != previous and actual != requested for actual, previous, requested in pairs):
+                raise EngineError("nickname_conflict")
+    after = copy.deepcopy(before)
+    for key, value in patch.items():
+        if key == "stages":
+            after[key].update(value)
+        else:
+            after[key] = value
+    denied = {name.casefold() for name in after["avoided"]}
+    chosen = [*_custom_names(after).values(), after["preferred_name"]]
+    if any(name and name.casefold() in denied for name in chosen):
+        raise EngineError("nickname_blocked")
+    record["addressing"] = after
+    record["nicknames"] = _custom_names(after)
+    if after != before:
+        record["addressing_revision"] = int(record.get("addressing_revision", 0)) + 1
+    return copy.deepcopy(after)
+
+
+def apply_address_request(record: dict[str, Any], operation: Any, name: Any) -> dict[str, Any]:
+    if operation not in ("set_name", "avoid_name", "allow_name") or not isinstance(name, str):
+        raise EngineError("invalid_addressing")
+    value = clean_text(name, NICKNAME_MAX_CHARS)
+    if not value or len(name.strip()) > NICKNAME_MAX_CHARS:
+        raise EngineError("invalid_addressing")
+    prefs = addressing_preferences(record)
+    patch: dict[str, Any] = {}
+    if operation == "set_name":
+        patch["preferred_name"] = value
+        current = record_stage(record, int(record.get("affection", 0)))
+        patch["stages"] = {current: {"mode": "auto", "text": ""}}
+    else:
+        denied = [item for item in prefs["avoided"] if item.casefold() != value.casefold()]
+        if operation == "avoid_name":
+            denied.append(value)
+            if prefs["preferred_name"].casefold() == value.casefold():
+                patch["preferred_name"] = ""
+            replacements = {
+                key: {"mode": "persona", "text": ""} for key, item in prefs["stages"].items()
+                if item["mode"] == "custom" and item["text"].casefold() == value.casefold()
+            }
+            if replacements:
+                patch["stages"] = replacements
+        patch["avoided"] = denied
+    return set_addressing(record, patch)
 
 
 def set_nicknames(record: dict[str, Any], values: Any, *, expected: Any = None) -> dict[str, str]:
@@ -772,7 +958,14 @@ def set_nicknames(record: dict[str, Any], values: Any, *, expected: Any = None) 
             else:
                 merged.pop(key, None)
         cleaned = merged
-    record["nicknames"] = cleaned
+    prefs = addressing_preferences(record)
+    keys = values if expected is not None else STAGE_KEYS
+    patch = {
+        key: {"mode": "custom" if cleaned.get(key) else "inherit", "text": cleaned.get(key, "")}
+        for key in STAGE_KEYS if key in keys or prefs["stages"][key]["text"] != cleaned.get(key, "")
+    }
+    if patch:
+        set_addressing(record, {"stages": patch})
     return cleaned
 
 
@@ -854,6 +1047,7 @@ def remove_anniversary(state: dict[str, Any], item_id: Any) -> bool:
 def new_state() -> dict[str, Any]:
     return {
         "version": SCHEMA_VERSION,
+        "addressing_defaults_version": ADDRESSING_DEFAULTS_VERSION,
         "per_character": False,
         "shared": new_record(),
         "characters": {},
@@ -864,6 +1058,8 @@ def new_state() -> dict[str, Any]:
         "settings": dict(DEFAULT_SETTINGS),
         # Economy is validated by _shop when the plugin starts.
         "shop": {},
+        # Validated by _experiences at the plugin boundary, independently of affection.
+        "experiences": {},
     }
 
 
@@ -880,6 +1076,10 @@ def normalize_state(raw: Any) -> dict[str, Any]:
     state = new_state()
     if not isinstance(raw, dict):
         return state
+    state["addressing_defaults_version"] = (
+        ADDRESSING_DEFAULTS_VERSION
+        if raw.get("addressing_defaults_version") == ADDRESSING_DEFAULTS_VERSION else 0
+    )
     state["per_character"] = raw.get("per_character") is True
     state["shared"] = normalize_record(raw.get("shared"))
     characters = raw.get("characters")
@@ -905,6 +1105,7 @@ def normalize_state(raw: Any) -> dict[str, Any]:
                 break
     state["settings"] = normalize_settings(raw.get("settings"))
     state["shop"] = copy.deepcopy(raw.get("shop")) if isinstance(raw.get("shop"), dict) else {}
+    state["experiences"] = copy.deepcopy(raw.get("experiences", {}))
     return state
 
 
@@ -981,8 +1182,9 @@ def set_per_character(state: dict[str, Any], enabled: bool, current: str | None)
       has none, created lazily).
     * disable: the shared value becomes the current character's value; all
       independent records stay on disk for a later re-enable.
-    * existing destination nicknames stay with their own scope, including
-      deliberately empty settings; a new current record inherits shared names.
+    * existing destinations keep their own relationship facts, history, dates
+      and addressing; only affection and used quotas carry across. A new
+      independent record inherits the shared relationship.
     """
     enabled = bool(enabled)
     if bool(state.get("per_character")) == enabled:
@@ -991,31 +1193,35 @@ def set_per_character(state: dict[str, Any], enabled: bool, current: str | None)
         raise EngineError("current_character_unknown", "current character is unknown")
     characters = state.setdefault("characters", {})
     destination = characters.get(current) if enabled else state["shared"]
-    source = state["shared"] if enabled else characters.get(current)
-    merged = copy.deepcopy(source) if source is not None else None
-    if merged is not None and destination is not None:
-        merged["nicknames"] = copy.deepcopy(destination.get("nicknames") or {})
-        for key in (
-            "first_met", "plugin_first_met", "plugin_first_met_legacy",
-            "host_first_met", "custom_first_met", "first_met_source",
-        ):
-            merged[key] = copy.deepcopy(destination[key])
-        day = max(merged["day"], destination["day"])
+    source = state["shared"] if enabled else get_record(state, CHAR_SCOPE_PREFIX + current)
+    merged = copy.deepcopy(destination if destination is not None else source)
+    if destination is not None:
+        ts = time.time()
+        previous_stage = record_stage(merged, int(merged["affection"]))
+        merged["affection"] = int(source["affection"])
+        new_stage = _gated(
+            raw_stage_for(merged["affection"]), merged, bool(state["settings"]["require_confession"]),
+        )
+        _settle(merged, previous_stage, new_stage, ts)
+        merged["updated_at"] = ts
+        _touch_daily(merged, ts)
+        day = max(source["day"], destination["day"])
         for key in ("gained_today", "gained_chat", "gained_gift", "lost_today"):
             merged[key] = max(
-                int(merged.get(key, 0)) if merged["day"] == day else 0,
+                int(source.get(key, 0)) if source["day"] == day else 0,
                 int(destination.get(key, 0)) if destination["day"] == day else 0,
             )
         merged["gained_today"] = max(merged["gained_today"], merged["gained_chat"] + merged["gained_gift"])
         merged["day"] = day
-        merged["quota_blocked_day"] = max(merged.get("quota_blocked_day", ""), destination.get("quota_blocked_day", ""))
-        merged["gain_revision"] = max(merged.get("gain_revision", 0), destination.get("gain_revision", 0)) + 1
+        merged["quota_blocked_day"] = max(source.get("quota_blocked_day", ""), destination.get("quota_blocked_day", ""))
+        merged["gain_revision"] = max(source.get("gain_revision", 0), destination.get("gain_revision", 0)) + 1
+        if (source.get("last_model_ts") or 0) > (destination.get("last_model_ts") or 0):
+            merged["last_model_ts"] = source["last_model_ts"]
+            merged["last_model_sign"] = source["last_model_sign"]
     if enabled:
         characters[current] = merged
     else:
-        record = characters.get(current)
-        if record is not None:
-            state["shared"] = merged
+        state["shared"] = merged
     state["per_character"] = enabled
     state["current_character"] = current
     return {"changed": True, "per_character": enabled, "current_character": current}
@@ -1047,6 +1253,10 @@ def record_view(record: dict[str, Any], history_limit: int = 20, *, gate: bool =
         "milestones": dict(record.get("milestones") or {}),
         "nicknames": dict(record.get("nicknames") or {}),
         "nickname": effective_nickname(record, stage),
+        "addressing": addressing_preferences(record),
+        "addressing_revision": int(record.get("addressing_revision", 0)),
+        "addressing_preview": {key: resolve_addressing(record, key) for key in STAGE_KEYS},
+        "confessed": record.get("confessed") is True,
         "awaiting_confession": awaiting_confession(record, gate),
         "confessed_on": record.get("confessed_on"),
         "confession": record.get("confession") or "",

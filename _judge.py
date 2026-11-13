@@ -25,6 +25,13 @@ UNAVAILABLE = "gateway_unavailable"
 
 async def complete(models: Any, prompt: str) -> tuple[str | None, str]:
     """Return (text, "ok") or (None, status)."""
+    try:
+        return await asyncio.wait_for(_request(models, prompt), timeout=TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        return None, "timeout"
+
+
+async def _request(models: Any, prompt: str) -> tuple[str | None, str]:
     get_client = getattr(models, "get_client", None)
     if not callable(get_client):
         return None, UNAVAILABLE
@@ -34,17 +41,12 @@ async def complete(models: Any, prompt: str) -> tuple[str | None, str]:
     except Exception:
         return None, UNAVAILABLE
     try:
-        response = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=USAGE,
-                # Keep one user message for compatibility with host model
-                # adapters; build_prompt embeds the same guardrails alongside
-                # the JSON-delimited dialogue data.
-                messages=[{"role": "user", "content": prompt}],
-                max_completion_tokens=MAX_TOKENS,
-                temperature=0.2,
-            ),
-            timeout=TIMEOUT_SECONDS,
+        response = await client.chat.completions.create(
+            model=USAGE,
+            # One user message keeps compatibility with host model adapters.
+            messages=[{"role": "user", "content": prompt}],
+            max_completion_tokens=MAX_TOKENS,
+            temperature=0.2,
         )
     except asyncio.TimeoutError:
         return None, "timeout"

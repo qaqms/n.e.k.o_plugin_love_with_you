@@ -1,6 +1,7 @@
 import { Alert, Button, Input, Modal, useCallback, useRef, useState } from "@neko/plugin-ui"
 import type { HostedApi } from "@neko/plugin-ui"
 import { Icon } from "./icons"
+import { unwrap } from "./requests"
 
 type ImportRow = {
   key: number; name: string; data_url: string; thumbnail_url: string
@@ -141,11 +142,8 @@ export function PortraitImport(props: {
           const response = await props.api.call("import_portrait", {
             name: row.name.trim(), collection: game, data_url: row.data_url, thumbnail_url: row.thumbnail_url,
           }, { userInitiated: true })
-          let payload = response
-          for (let depth = 0; depth < 4 && payload && !payload.item; depth++) {
-            payload = payload.result ?? payload.data ?? payload.value
-          }
-          if (!payload?.item?.id) throw new Error("portrait_save_failed")
+          const payload = unwrap(response, "item")
+          if (typeof payload.item?.id !== "string" || !payload.item.id) throw new Error("invalid_response")
           if (payload.duplicate) duplicates++
           else saved++
           patchRow(row.key, { status: payload.duplicate ? "duplicate" : "saved", error: "" })

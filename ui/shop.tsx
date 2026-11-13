@@ -1,32 +1,30 @@
 import { Alert, Button, Modal, useCallback, useEffect, useRef, useState } from "@neko/plugin-ui"
 import type { PluginSurfaceProps } from "@neko/plugin-ui"
 import { Icon } from "./icons"
+import { unwrap } from "./requests"
+import type { RunAction } from "./requests"
+import { useBackgroundRefresh } from "./refresh"
 
 type Product = { id: string; price: number; gain: number; icon: string; quantity: number }
 type Gift = {
   id: string; item_id: string; character: string; applied: number; ts: number
   reaction: string; can_retry: boolean; attempts: number; requested_at: number
 }
+type Reward = { reward: string; period: string; coins: number; claimed: boolean; ready: boolean }
 export type ShopState = {
   coins: number; revision: number; daily_coins: number; can_claim: boolean
   gift_remaining: number; gift_daily_cap: number; inventory_limit: number
   catalog: Product[]; history: Gift[]
   income_total: number; can_gesture: boolean; bus_ok: boolean | null; income_error?: string
   income: {
-    count: number; earned: number; paid: number; steps: Array<{ turns: number; coins: number }>
+    count: number; earned: number; paid: number; steps: Array<Reward & { turns: number }>
+    weekly: Reward; pending: Reward[]
     weekly_days: number; weekly_goal: number; weekly_coins: number; weekly_paid: boolean
     legacy_claimed: boolean; clock_error: boolean
   }
   ledger: Array<{ id: string; source: string; amount: number; balance: number; ts: number; item_id: string; day: string }>
 }
 type Request = { action: string; args: Record<string, unknown> }
-type Run = (action: string, args: Record<string, unknown>, success: string | ((value: any) => string),
-  acknowledged?: () => void) => Promise<boolean>
-
-export const SHOP_ERRORS = ["shop_stale", "shop_already_claimed", "shop_insufficient_coins", "shop_inventory_full",
-  "shop_no_stock", "shop_daily_limit", "shop_no_affection_room", "shop_unknown_character",
-  "shop_invalid_request", "shop_item_not_found", "shop_gift_not_found", "shop_reaction_wait", "shop_not_ready",
-  "shop_income_automatic", "shop_gain_changed", "shop_gesture_limit"]
 
 export const SHOP_STYLE = `
 .lwy-shop-wallet { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
@@ -61,24 +59,31 @@ export const SHOP_STYLE = `
 .lwy-shop-income { display:grid; gap:14px; padding-bottom:18px; border-bottom:1px solid var(--line); }
 .lwy-shop-income-head, .lwy-shop-week { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 .lwy-shop-income-steps { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
-.lwy-shop-step { display:grid; gap:6px; min-width:0; font-size:13px; overflow-wrap:anywhere; }
+.lwy-shop-step { display:grid; align-content:start; gap:6px; min-width:0; font-size:13px; overflow-wrap:anywhere; }
 .lwy-shop-step progress { width:100%; height:6px; accent-color:var(--accent); }
 .lwy-shop-step strong { font-size:14px; }
+.lwy-shop-step .neko-button { width:100%; min-width:0; padding:8px; white-space:normal; }
+.lwy-shop-unclaimed { display:grid; gap:10px; }
 .lwy-shop-income-notice:empty { display:none; }
 .lwy-shop-partial { margin:0; color:var(--warning); }
 .lwy-shop-smaller { display:flex; flex-wrap:wrap; gap:8px; }
 .lwy-shop-ledger-amount { font-variant-numeric:tabular-nums; }
-@media(max-width:479px) { .lwy-shop-product { padding:14px; } .lwy-shop-toolbar { align-items:stretch; }
+@media(max-width:479px) { .lwy-shop-income-steps { grid-template-columns:1fr; }
+  .lwy-shop-product { padding:14px; } .lwy-shop-toolbar { align-items:stretch; }
   .lwy-shop-recipient { width:100%; } .lwy-shop-wallet > .neko-button { width:100%; } }
 `
 
-function resultOf(value: any): any {
-  let current = value
-  for (let n = 0; n < 5 && current && typeof current === "object"; n++) {
-    if ("reaction" in current || "credited" in current || "quantity" in current || "applied" in current) return current
-    current = current.result ?? current.data ?? current.value
-  }
-  throw new Error("shop_invalid_response")
+function resultOf(value: any, action: string): any {
+  const key = action === "claim_shop_coins" ? "credited" : action === "buy_shop_item" ? "quantity" : "reaction"
+  const result = unwrap(value, key)
+  const count = (value: unknown) => Number.isInteger(value) && Number(value) >= 0
+  const named = (value: unknown) => typeof value === "string" && Boolean(value)
+  const valid = action === "claim_shop_coins" ? count(result.credited) && count(result.coins)
+    : action === "buy_shop_item" ? count(result.quantity) && count(result.coins) && named(result.item_id)
+    : ["pending", "submitted", "received", "unavailable", "unknown"].includes(result.reaction) &&
+      (action !== "send_shop_gift" || count(result.applied) && named(result.item_id) && named(result.character) && named(result.gift_id))
+  if (!valid) throw new Error("invalid_response")
+  return result
 }
 
 export function Shop(props: {
@@ -86,7 +91,7 @@ export function Shop(props: {
   scopes: Array<{ label: string | null; affection: number; gained_today: number; is_current: boolean
     gained_chat?: number; chat_room?: number; gift_room?: number; gain_revision?: number; quota_blocked?: boolean; clock_error?: boolean }>
   dailyGain: number; dailyChat: number; api: PluginSurfaceProps["api"]; t: PluginSurfaceProps["t"]
-  useLocalState: PluginSurfaceProps["useLocalState"]; busy: boolean; stale: boolean; run: Run
+  useLocalState: PluginSurfaceProps["useLocalState"]; busy: boolean; stale: boolean; run: RunAction
   refresh: () => Promise<void>; dialog: (open: boolean) => void; feedback: () => any
   beginEdit: () => void
 }) {
@@ -109,19 +114,7 @@ export function Shop(props: {
   const characters = [...new Set([props.current || "", ...props.characters].filter(Boolean))]
   const character = characters.includes(recipient) ? recipient : props.current || characters[0] || ""
   const productName = (id: string) => t(`shop.item.${id}`)
-  const hasWaiting = data?.history.some(gift => ["pending", "submitted"].includes(gift.reaction) ||
-    (["unavailable", "unknown"].includes(gift.reaction) && !gift.can_retry && gift.attempts < 3))
-  useEffect(() => {
-    let alive = true, timer: ReturnType<typeof setTimeout>
-    const poll = async () => {
-      if (!locked.current && document.visibilityState !== "hidden") {
-        try { await props.api.refresh() } catch { /* The next visible poll can recover. */ }
-      }
-      if (alive) timer = setTimeout(poll, 5000)
-    }
-    timer = setTimeout(poll, 5000)
-    return () => { alive = false; clearTimeout(timer) }
-  }, [hasWaiting])
+  useBackgroundRefresh(() => props.api.refresh(), props.busy || Boolean(selection))
   useEffect(() => {
     if (data && seenIncome.current !== undefined && data.income_total > seenIncome.current) {
       setIncomeNotice(t("shop.incomeReceived", { n: data.income_total - seenIncome.current }))
@@ -144,8 +137,13 @@ export function Shop(props: {
       100 - (scope?.affection || 0), scope?.gift_room ?? props.dailyGain - (scope?.gained_today || 0)))
   }
   function clearRequest() { requestRef.current = null; setPending(null) }
-  function successFor(action: string, value: any) {
-    const result = resultOf(value)
+  function successFor(action: string, value: any, args: Record<string, unknown>) {
+    const result = resultOf(value, action)
+    if ((args.item_id !== undefined && result.item_id !== args.item_id) ||
+      (action === "send_shop_gift" && (result.character !== args.character || result.applied !== args.expected_gain)) ||
+      (action === "claim_shop_coins" && (result.reward !== args.reward || result.period !== args.period))) {
+      throw new Error("invalid_response")
+    }
     if (action === "claim_shop_coins") return t("shop.claimed", { n: result.credited })
     if (action === "buy_shop_item") return t("shop.bought", { name: productName(result.item_id), n: result.quantity })
     if (action === "send_shop_gift") {
@@ -167,11 +165,15 @@ export function Shop(props: {
     if (!request) return
     const submitted = request
     const ok = await run(submitted.action, submitted.args, value => {
-      return successFor(submitted.action, value)
+      return successFor(submitted.action, value, submitted.args)
     }, clearRequest)
     if (ok) setSelection(null)
   }
   const blocked = props.busy || Boolean(pending) || props.stale
+  const claimButton = (reward: Reward) => reward.ready ? <Button tone="primary"
+    disabled={blocked || Boolean(selection)} onClick={() => perform("claim_shop_coins", {
+      reward: reward.reward, period: reward.period,
+    })}><Icon name="Coins" />{t("shop.claimReward")}</Button> : null
   const products = tab === "bag" ? data.catalog.filter(product => product.quantity > 0) : data.catalog
 
   return <div className="lwy-sections">
@@ -186,18 +188,27 @@ export function Shop(props: {
     {data.income ? <section className="lwy-shop-income" aria-label={t("shop.incomeTitle")}>
       <div className="lwy-shop-income-head"><strong>{t("shop.incomeTitle")}</strong>
         <span className="lwy-sub">{t("shop.incomeToday", { n: data.income.earned, max: data.daily_coins })}</span></div>
-      <div className="lwy-shop-income-steps">{data.income.steps.map((step, index) =>
+      <div className="lwy-shop-income-steps">{data.income.steps.map(step =>
         <div className="lwy-shop-step" key={step.turns}>
           <strong>{t(`shop.incomeStep.${step.turns}`)}</strong>
           <progress aria-label={t(`shop.incomeStep.${step.turns}`)} max={step.turns}
-            value={data.income.paid > index ? step.turns : Math.min(data.income.count, step.turns)} />
-          <span>{data.income.paid > index ? t("shop.incomeDone", { n: step.coins })
+            value={step.claimed ? step.turns : Math.min(data.income.count, step.turns)} />
+          <span>{step.claimed ? t("shop.incomeDone", { n: step.coins })
             : t("shop.incomeProgress", { n: Math.min(data.income.count, step.turns), max: step.turns, coins: step.coins })}</span>
+          {claimButton(step)}
         </div>)}</div>
       <div className="lwy-shop-week"><span>{t("shop.weekProgress", {
         n: Math.min(data.income.weekly_days, data.income.weekly_goal), max: data.income.weekly_goal,
       })}</span><span className="lwy-sub">{data.income.weekly_paid
-        ? t("shop.incomeDone", { n: data.income.weekly_coins }) : t("shop.weekReward", { n: data.income.weekly_coins })}</span></div>
+        ? t("shop.incomeDone", { n: data.income.weekly_coins }) : t("shop.weekReward", { n: data.income.weekly_coins })}</span>
+        {claimButton(data.income.weekly)}</div>
+      {data.income.pending.length ? <div className="lwy-shop-unclaimed">
+        <strong>{t("shop.pendingRewards")}</strong>
+        {data.income.pending.map(reward => <div className="lwy-shop-week" key={`${reward.period}:${reward.reward}`}>
+          <span className="lwy-sub">{reward.period} · {t(`shop.ledger.${reward.reward}`)} · +{t("shop.price", { n: reward.coins })}</span>
+          {claimButton(reward)}
+        </div>)}
+      </div> : null}
     </section> : null}
     {data.bus_ok === false ? <Alert tone="warning" message={t("shop.incomeDisconnected")} /> : null}
     {data.income_error ? <Alert tone="warning" message={t("shop.incomePending")} /> : null}

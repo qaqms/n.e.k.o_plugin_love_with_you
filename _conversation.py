@@ -32,7 +32,7 @@ PROACTIVE_REPLY_TURN = "proactive_reply"
 MESSAGE_MAX_CHARS = 300
 # Several user messages before one reply are merged, up to this many.
 PENDING_MAX_MESSAGES = 4
-# Remembered (ts, role, lanlan, content-prefix) keys for de-duplication.
+# Remembered (ts, role, lanlan, content-digest) keys for de-duplication.
 SEEN_LIMIT = 256
 
 
@@ -48,6 +48,7 @@ class Message:
     spoken_at: float | None = None
     income_text: str = field(default="", compare=False)
     income_valid: bool = field(default=True, compare=False)
+    fingerprint: str = field(default="", compare=False)
 
     @property
     def said_at(self) -> float:
@@ -80,6 +81,20 @@ def _field(record: Any, name: str) -> Any:
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _special_message(metadata: dict[str, Any]) -> bool:
+    proof = _as_dict(metadata.get("chat_original_source"))
+    sources = metadata.get("sources", [])
+    sources = sources if isinstance(sources, list) else [sources]
+    return (
+        metadata.get("source") in ("theater_numeric_v2", "avatar-drop", "tool", "agent", "proactive")
+        or "avatar-drop" in sources or proof.get("origin") in ("tool", "agent")
+        or metadata.get("event_type") in (
+            "gift_received", "relationship_context", "proactive_confession", "experience_note",
+        )
+        or metadata.get("turn_type") in ("proactive_reply", "proactive_instruction")
+    )
 
 
 def _correlation_metadata(*values: dict[str, Any]) -> dict[str, Any]:
@@ -117,7 +132,9 @@ def parse_record(record: Any) -> Message | None:
     raw_meta = _as_dict(raw.get("metadata"))
 
     turn_type = _field(record, "turn_type") or metadata.get("turn_type") or raw_meta.get("turn_type")
-    if (metadata.get("event_type") or raw_meta.get("event_type")) in ("gift_received", "proactive_confession"):
+    if any(_special_message(value) for value in (
+        metadata, raw_meta, raw, {"source": _field(record, "source")},
+    )):
         return None
     if turn_type == USER_TURN:
         role = "user"
@@ -146,6 +163,7 @@ def parse_record(record: Any) -> Message | None:
         spoken_at=spoken_at,
         income_text=digest,
         income_valid=bool(digest),
+        fingerprint=hashlib.sha256(content.encode("utf-8")).hexdigest(),
     )
 
 
@@ -179,11 +197,20 @@ def parse_proactive_record(record: Any) -> Message | None:
         source=str(source or ""),
         metadata=correlation,
         spoken_at=spoken_at,
+        fingerprint=hashlib.sha256(content.encode("utf-8")).hexdigest(),
     )
 
 
 def parse_gift_instruction(record: Any) -> tuple[str, str, str, float] | None:
     """The host's ephemeral instruction/reply pair shares a conversation ID."""
+    return _parse_instruction(record, "GIFT")
+
+
+def parse_confession_instruction(record: Any) -> tuple[str, str, str, float] | None:
+    return _parse_instruction(record, "CONFESSION")
+
+
+def _parse_instruction(record: Any, marker: str) -> tuple[str, str, str, float] | None:
     metadata = _as_dict(_field(record, "metadata"))
     raw = _as_dict(_field(record, "raw"))
     raw_meta = _as_dict(raw.get("metadata"))
@@ -198,7 +225,7 @@ def parse_gift_instruction(record: Any) -> tuple[str, str, str, float] | None:
         return None
     if not isinstance(character, str) or not character or ts is None:
         return None
-    match = re.search(r"\[LWY-GIFT:([a-zA-Z0-9_-]{12,80})\]", content)
+    match = re.search(r"\[LWY-" + marker + r":([a-zA-Z0-9_-]{12,80})\]", content)
     return (conversation_id, character, match[1], ts) if match else None
 
 
@@ -206,6 +233,7 @@ class BusCursor:
     """Hands out each message once, in arrival order."""
 
     def __init__(self, start_ts: float) -> None:
+        self.start = float(start_ts)
         self.since = float(start_ts)
         self._seen: list[tuple[float, str, str, str]] = []
 
@@ -214,7 +242,8 @@ class BusCursor:
         for message in sorted(messages, key=lambda item: item.ts):
             if message.ts < self.since:
                 continue
-            key = (message.ts, message.role, message.lanlan, message.content[:40])
+            digest = message.fingerprint or hashlib.sha256(message.content.encode("utf-8")).hexdigest()
+            key = (message.ts, message.role, message.lanlan, digest)
             if key in self._seen:
                 continue
             self._seen.append(key)
@@ -234,15 +263,7 @@ def _history_message(row: Any) -> tuple[str, str, dict[str, Any]]:
     if not role or not isinstance(data, dict):
         return "", "", {}
     metadata = {**_as_dict(data.get("metadata")), **_as_dict(row.get("metadata"))}
-    proof = _as_dict(metadata.get("chat_original_source"))
-    sources = metadata.get("sources", [])
-    sources = sources if isinstance(sources, list) else [sources]
-    if (
-        metadata.get("source") in ("theater_numeric_v2", "avatar-drop", "tool", "agent", "proactive")
-        or "avatar-drop" in sources or proof.get("origin") in ("tool", "agent")
-        or metadata.get("event_type") in ("gift_received", "relationship_context", "proactive_confession")
-        or metadata.get("turn_type") in ("proactive_reply", "proactive_instruction")
-    ):
+    if _special_message(metadata):
         return "", "", {}
     content = data.get("content")
     if isinstance(content, list):

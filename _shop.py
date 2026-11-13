@@ -121,9 +121,12 @@ def normalize(raw: Any, today: str | None = None) -> dict[str, Any]:
             entry = days[day_key]
             if not isinstance(entry, dict):
                 continue
+            claimed = entry.get("claimed")
+            claimed = sorted({value for value in claimed if type(value) is int and value in INCOME_STEPS}) \
+                if isinstance(claimed, list) else list(INCOME_STEPS[:_integer(entry.get("paid"), maximum=3)])
             result["days"][day_key] = {
                 "count": _integer(entry.get("count"), maximum=8),
-                "paid": _integer(entry.get("paid"), maximum=3),
+                "paid": len(claimed), "claimed": claimed,
                 "earned": _integer(entry.get("earned"), maximum=DAILY_COINS),
                 "last_at": _timestamp(entry.get("last_at")),
                 "times": [_timestamp(value) for value in entry.get("times", [])[-8:] if _timestamp(value)]
@@ -174,7 +177,7 @@ def _week(day: str) -> str:
 
 
 def _new_day(*, paid: int = 0) -> dict[str, Any]:
-    return {"count": 0, "paid": paid, "earned": paid * STEP_COINS,
+    return {"count": 0, "paid": paid, "claimed": list(INCOME_STEPS[:paid]), "earned": paid * STEP_COINS,
             "last_at": 0, "times": [], "texts": [], "events": []}
 
 
@@ -188,7 +191,7 @@ def _ledger(economy: dict[str, Any], key: str, source: str, amount: int, now: fl
 
 
 def accrue(economy: dict[str, Any], event: dict[str, Any], now: float) -> int:
-    """One observed normal exchange; persist progress and credit together."""
+    """Persist one observed normal exchange. Rewards require an explicit claim."""
     today = datetime.fromtimestamp(now).date()
     today_key = today.isoformat()
     if economy["highest_day"] > today_key:
@@ -215,15 +218,6 @@ def accrue(economy: dict[str, Any], event: dict[str, Any], now: float) -> int:
     progress["times"].append(user_at)
     progress["texts"].append(event["text"])
     progress["events"].append(event["id"])
-    before = economy["coins"]
-    for index, threshold in enumerate(INCOME_STEPS, 1):
-        if progress["count"] >= threshold and progress["paid"] < index:
-            old = economy["coins"]
-            economy["coins"] = min(1_000_000_000, old + STEP_COINS)
-            progress["paid"] = index
-            progress["earned"] += economy["coins"] - old
-            _ledger(economy, f"{event['id']}:{threshold}", f"daily_{threshold}",
-                    economy["coins"] - old, now, day)
     week_key = _week(day)
     current_week = date.fromisoformat(_week(today_key))
     for old in list(economy["weeks"]):
@@ -233,15 +227,8 @@ def accrue(economy: dict[str, Any], event: dict[str, Any], now: float) -> int:
     if progress["count"] >= 3 and day not in week["days"]:
         week["days"].append(day)
         week["days"].sort()
-    if len(week["days"]) >= WEEKLY_DAYS and not week["paid"]:
-        old = economy["coins"]
-        economy["coins"] = min(1_000_000_000, old + WEEKLY_COINS)
-        week["paid"] = True
-        _ledger(economy, f"week:{week_key}", "weekly", economy["coins"] - old, now, day)
-    credited = economy["coins"] - before
-    economy["income_total"] += credited
     economy["revision"] += 1
-    return credited
+    return 0
 
 
 def item(item_id: Any) -> dict[str, Any]:
@@ -271,9 +258,60 @@ def commit(economy: dict[str, Any], request_id: str, revision: int, signature: l
     del economy["receipts"][:-RECEIPT_LIMIT]
 
 
-def claim(economy: dict[str, Any], today: str) -> dict[str, Any]:
-    # Retained entry point can replay old receipts, but cannot mint new money.
-    raise ShopError("shop_income_automatic")
+def _rewards(economy: dict[str, Any], today: str) -> list[dict[str, Any]]:
+    """Project eligible periods even when no new exchanges have pruned storage."""
+    previous_day = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+    week = _week(today)
+    previous_week = (date.fromisoformat(week) - timedelta(days=7)).isoformat()
+    clock_ok = economy["highest_day"] <= today
+    rewards = []
+    for period in (today, previous_day):
+        progress = economy["days"].get(period, _new_day())
+        for threshold in INCOME_STEPS:
+            claimed = threshold in progress["claimed"]
+            rewards.append({
+                "reward": f"daily_{threshold}", "period": period, "coins": STEP_COINS,
+                "claimed": claimed, "ready": clock_ok and not claimed and progress["count"] >= threshold,
+            })
+    for period in (week, previous_week):
+        progress = economy["weeks"].get(period, {"days": [], "paid": False})
+        rewards.append({
+            "reward": "weekly", "period": period, "coins": WEEKLY_COINS,
+            "claimed": progress["paid"],
+            "ready": clock_ok and not progress["paid"] and len(progress["days"]) >= WEEKLY_DAYS,
+        })
+    return rewards
+
+
+def claim(economy: dict[str, Any], today: str, reward: Any = "", period: Any = "",
+          now: float | None = None) -> dict[str, Any]:
+    if not isinstance(reward, str) or not isinstance(period, str):
+        raise ShopError("shop_invalid_request")
+    if economy["highest_day"] > today:
+        raise ShopError("shop_reward_unavailable")
+    selected = next((entry for entry in _rewards(economy, today)
+                     if entry["reward"] == reward and entry["period"] == period), None)
+    if selected is None:
+        raise ShopError("shop_invalid_request")
+    if selected["claimed"]:
+        raise ShopError("shop_already_claimed")
+    if not selected["ready"]:
+        raise ShopError("shop_reward_unavailable")
+    before = economy["coins"]
+    economy["coins"] = min(1_000_000_000, before + selected["coins"])
+    credited = economy["coins"] - before
+    if reward == "weekly":
+        economy["weeks"][period]["paid"] = True
+    else:
+        progress = economy["days"][period]
+        progress["claimed"] = sorted([*progress["claimed"], int(reward.split("_")[1])])
+        progress["paid"] = len(progress["claimed"])
+        progress["earned"] += credited
+    economy["highest_day"] = max(economy["highest_day"], today)
+    economy["income_total"] += credited
+    _ledger(economy, f"claim:{period}:{reward}", reward, credited,
+            now if now is not None else datetime.now().timestamp(), period)
+    return {"coins": economy["coins"], "credited": credited, "reward": reward, "period": period}
 
 
 def buy(economy: dict[str, Any], item_id: Any, now: float | None = None, request_id: str = "") -> dict[str, Any]:
@@ -334,6 +372,9 @@ def find_gift(economy: dict[str, Any], gift_id: Any) -> dict[str, Any]:
 
 
 def view(economy: dict[str, Any], today: str, now: float) -> dict[str, Any]:
+    rewards = _rewards(economy, today)
+    daily = [entry for entry in rewards if entry["reward"] != "weekly" and entry["period"] == today]
+    weekly = next(entry for entry in rewards if entry["reward"] == "weekly" and entry["period"] == _week(today))
     history = copy.deepcopy(list(reversed(economy["history"])))
     for entry in history:
         if entry["reaction"] in {"pending", "submitted"} and now - entry["requested_at"] >= REACTION_TIMEOUT:
@@ -344,12 +385,15 @@ def view(economy: dict[str, Any], today: str, now: float) -> dict[str, Any]:
         )
     return {
         "coins": economy["coins"], "revision": economy["revision"],
-        "daily_coins": DAILY_COINS, "can_claim": False,
+        "daily_coins": DAILY_COINS, "can_claim": any(entry["ready"] for entry in rewards),
         "income_total": economy["income_total"],
         "income": {
             "count": economy["days"].get(today, {}).get("count", 0),
             "earned": economy["days"].get(today, {}).get("earned", 0),
-            "steps": [{"turns": threshold, "coins": STEP_COINS} for threshold in INCOME_STEPS],
+            "steps": [dict(entry, turns=threshold) for entry, threshold in zip(daily, INCOME_STEPS)],
+            "weekly": weekly,
+            "pending": [entry for entry in rewards if entry["ready"]
+                        and entry["period"] != (_week(today) if entry["reward"] == "weekly" else today)],
             "paid": economy["days"].get(today, {}).get("paid", 0),
             "weekly_days": len(economy["weeks"].get(_week(today), {}).get("days", [])),
             "weekly_goal": WEEKLY_DAYS, "weekly_coins": WEEKLY_COINS,

@@ -19,10 +19,16 @@ import { Icon } from "./icons"
 import { INTERACTION_STYLE, useInteractionFeedback } from "./interaction"
 import { DEFAULT_APPEARANCE, THEME_PRESETS, normalizeAppearance, themeCss } from "./theme"
 import type { Appearance } from "./theme"
-import { Shop, SHOP_ERRORS, SHOP_STYLE } from "./shop"
+import { Shop, SHOP_STYLE } from "./shop"
 import type { ShopState } from "./shop"
 import { PortraitImport, PORTRAIT_IMPORT_STYLE } from "./portrait-import"
 import { SCROLLBAR_STYLE, useQuietScrollbars } from "./scrollbars"
+import { ADDRESS_MODES, addressConfig, addressDiff, addressPreview, cleanName, defaultAddressing, mergeAddressDraft, normalizedAddress, sameAddress } from "./addressing"
+import type { Addressing, StageAddress } from "./addressing"
+import { Experiences, EXPERIENCE_STYLE } from "./experiences"
+import type { ExperienceDestination, ExperienceState } from "./experiences"
+import { Together, TOGETHER_STYLE } from "./together"
+import { errorCode, submitAction, unwrap } from "./requests"
 
 type HistoryItem = { ts: number; delta: number; value: number; reason: string; source: string }
 
@@ -75,6 +81,8 @@ type Scope = {
   first_met_source?: "plugin" | "host" | "custom"
   milestones?: Record<string, string>
   nicknames?: Record<string, string>
+  addressing?: Addressing
+  confessed?: boolean
   nickname?: string
   met_day?: number
   today_events?: CalEvent[]
@@ -87,6 +95,7 @@ type Scope = {
 }
 
 type Dashboard = {
+  experiences?: ExperienceState
   shop?: ShopState
   appearance?: Appearance
   per_character?: boolean
@@ -103,6 +112,7 @@ type Dashboard = {
     daily_chat?: number
     daily_loss: number
     nickname_chars?: number
+    avoided_names?: number
     title_chars?: number
     anniversaries?: number
   }
@@ -124,47 +134,16 @@ type Dashboard = {
   portraits?: PortraitLibrary | null
 }
 
-type Section = "heart" | "history" | "dates" | "nicknames" | "shop" | "settings"
+type Section = "heart" | "history" | "dates" | "nicknames" | "shop" | "settings" | "experiences"
 type Feedback = { tone: "pending" | "success" | "warning" | "danger"; message: string; action: string }
 
-const SECTIONS: Section[] = ["heart", "shop", "history", "dates", "nicknames", "settings"]
-const SECTION_ICONS = { heart: "Heart", history: "History", dates: "CalendarDays", nicknames: "MessageCircle", shop: "ShoppingBag", settings: "Settings" } as const
-const TREND_RANGES = [30, 90, 365]
-
-// Backend error codes the panel can explain; anything else is shown verbatim.
-const ERROR_CODES = [
-  ...SHOP_ERRORS,
-  "date_in_future",
-  "date_too_old",
-  "invalid_date",
-  "title_required",
-  "too_many",
-  "not_found",
-  "invalid_nicknames",
-  "nickname_conflict",
-  "first_met_conflict",
-  "invalid_first_met_source",
-  "host_history_unavailable",
-  "host_history_incomplete",
-  "host_history_empty",
-  "per_character_off",
-  "shared_not_in_use",
-  "unknown_scope",
-  "current_character_unknown",
-  "invalid_settings",
-  "portrait_invalid_settings",
-  "portrait_not_found",
-  "portrait_too_large",
-  "portrait_not_ready",
-  "portrait_save_failed",
-  "portrait_invalid_image",
-  "portrait_source_too_large",
-  "portrait_library_full",
-  "portrait_custom_only",
-  "appearance_invalid_settings",
-  "appearance_not_ready",
-  "appearance_save_failed",
+const SECTION_GROUPS: Array<{ label: string; sections: Section[] }> = [
+  { label: "nav.daily", sections: ["heart", "experiences", "shop"] },
+  { label: "nav.records", sections: ["history", "dates", "nicknames"] },
 ]
+const SECTIONS: Section[] = [...SECTION_GROUPS.flatMap(group => group.sections), "settings"]
+const SECTION_ICONS = { heart: "Heart", history: "History", dates: "CalendarDays", nicknames: "MessageCircle", shop: "ShoppingBag", settings: "Settings", experiences: "BookOpen" } as const
+const TREND_RANGES = [30, 90, 365]
 
 // Theme + host-control overrides are document-wide on purpose: useConfirm()
 // mounts its dialog on <body>, outside the .lwy tree.
@@ -212,12 +191,18 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .lwy-sidebar-toggle { display: grid; place-items: center; flex: none; width: 32px; height: 32px;
   padding: 0; border: 1px solid var(--line); border-radius: 5px; color: var(--hint); background: transparent; cursor: pointer; }
 .lwy-sidebar-body { display: flex; flex: 1 0 auto; flex-direction: column; gap: 24px; min-width: 0; }
+.lwy-nav-group { display:grid;gap:6px;min-width:0; }
+.lwy-nav-group + .lwy-nav-group { margin-top:14px;padding-top:14px;border-top:1px solid var(--line); }
+.lwy-nav-group-label { margin:0 10px 2px;color:var(--hint);font-size:11px;overflow-wrap:anywhere; }
+.lwy-nav-settings { margin-top:auto;padding-top:12px;border-top:1px solid var(--line); }
 .sidebar-collapsed .lwy-sidebar { padding: 24px 6px 16px; }
 .sidebar-collapsed .lwy-sidebar-head { justify-content: center; }
 .sidebar-collapsed .lwy-nav-label, .sidebar-collapsed .lwy-sidebar-foot { display: none; }
+.sidebar-collapsed .lwy-nav-group-label { display:none; }
 .sidebar-collapsed .lwy-nav button { justify-content: center; padding: 10px 4px; }
 .lwy-brand-mark { display: none; color: var(--accent); height: 32px; align-items: center; justify-content: center; }
 .lwy-nav { display: grid; gap: 6px; flex: none; min-width: 0; }
+.lwy-nav-main { flex:1 0 auto;align-content:start; }
 .lwy-nav button { position: relative; display: flex; align-items: center; gap: 9px; min-height: 44px; width: 100%; border: 0; border-radius: 6px;
   padding: 10px; background: transparent; text-align: left; color: var(--hint); font: inherit; font-size: 13px;
   line-height: 1.5; cursor: pointer; overflow-wrap: anywhere; transition: color 160ms ease, background 160ms ease; }
@@ -320,11 +305,22 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .lwy-met-option small { color: var(--hint); font-size: 12px; }
 .lwy-met-option:has(input:disabled) { opacity: 0.55; cursor: default; }
 .lwy-met-options + .lwy-note { margin-bottom: 16px; }
-.lwy-nick-grid { display: grid; gap: 18px; }
-.lwy-nick-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) 38px; gap: 12px; align-items: center; }
-.lwy-nick-row .neko-input { width: 100%; }
-.lwy-nick-grid label { display: contents; }
-.lwy-nick-grid label span { font-size: 13px; color: var(--hint); overflow-wrap: anywhere; }
+.lwy-nick-grid { display: grid; gap: 0; }
+.lwy-nick-row { padding: 16px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.lwy-nick-controls { display: grid; grid-template-columns: 72px minmax(0, 1fr) 36px; gap: 12px; align-items: center; }
+.lwy-nick-controls > label { display: contents; }
+.lwy-nick-controls > label > span { font-size: 13px; overflow-wrap: anywhere; }
+.lwy-nick-row .neko-input, .lwy-nick-row .neko-select { width: 100%; min-width: 0; }
+.lwy-nick-custom { display: grid; grid-template-columns: minmax(0,1fr) 38px; gap: 8px; align-items: center; margin-top: 10px; }
+.lwy-nick-preview { font-size: 12px; color: var(--hint); margin: 8px 0 0; overflow-wrap: anywhere; line-height: 1.6; }
+.lwy-address-prefs { display: grid; gap: 16px; padding-top: 22px; }
+.lwy-address-prefs > label:not(.neko-switch) { display: grid; gap: 8px; font-size: 13px; }
+.lwy-address-prefs .neko-switch { display: flex; align-items: center; font-size: 13px; }
+.lwy-nick-controls .lwy-icon-button, .lwy-avoid-add .lwy-icon-button { width: 36px; height: 40px; }
+.lwy-avoid-add { display: grid; grid-template-columns: minmax(0, 1fr) 36px; gap: 8px; }
+.lwy-avoided { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.lwy-avoided > span { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.lwy-address-error { color: var(--danger); font-size: 12px; margin: 8px 0 0; }
 .lwy-field { display: grid; gap: 6px; margin-bottom: 12px; font-size: 13px; color: var(--hint); }
 .lwy-note { color: var(--hint); font-size: 13px; line-height: 1.8; margin: 0; max-width: 68ch; }
 .lwy-btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -501,6 +497,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
   .lwy .lwy-sidebar { gap: 20px; padding: 20px 6px 16px; }
   .lwy-sidebar-head { justify-content: center; }
   .lwy-brand, .lwy-sidebar-toggle, .lwy-nav-label, .lwy-sidebar-foot { display: none; }
+  .lwy-nav-group-label { display:none; }
   .lwy-brand-mark { display: flex; }
   .lwy-nav button { justify-content: center; padding: 10px 4px; }
   .lwy-workspace { padding: 20px 16px 160px; }
@@ -519,8 +516,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
   .lwy-when { grid-column: 2; }
   .lwy-ev { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
   .lwy-ev-name { grid-column: 1 / -1; white-space: normal; overflow-wrap: anywhere; }
-  .lwy-nick-row { grid-template-columns: minmax(0, 1fr) 30px; gap: 8px; }
-  .lwy-nick-row label > span { grid-column: 1 / -1; }
+  .lwy-nick-controls { grid-template-columns: minmax(0, 1fr) 36px; gap: 8px; }
+  .lwy-nick-controls > label > span { grid-column: 1 / -1; }
   .lwy-scope { width: 100%; }
   .lwy-scope select { width: 100%; }
   .lwy-page-layout.has-art { column-gap: 10px; }
@@ -529,30 +526,30 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
   .lwy-summary { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-height: 480px) {
-  .lwy .lwy-sidebar { gap: 12px; padding-top: 12px; padding-bottom: 12px; }
-  .lwy-sidebar-body { gap: 12px; }
+  .lwy .lwy-sidebar { gap: 6px; padding-top: 8px; padding-bottom: 8px; }
+  .lwy-sidebar-body { gap: 6px; }
+  .lwy-sidebar-foot { display:none; }
+  .lwy .lwy-nav-group { gap:2px; }
+  .lwy .lwy-nav-main { gap:0; }
+  .lwy .lwy-nav-group + .lwy-nav-group { margin-top:4px;padding-top:4px; }
+  .lwy .lwy-nav-settings { padding-top:4px; }
+  .lwy .lwy-nav-group-label { display:none; }
   .lwy-nav { gap: 4px; }
-  .lwy-nav button { min-height: 40px; padding-top: 7px; padding-bottom: 7px; }
+  .lwy-nav button { min-height: 38px; padding-top: 6px; padding-bottom: 6px; }
 }
 @media (max-height: 360px) {
   .lwy .lwy-sidebar { gap: 8px; padding-top: 8px; padding-bottom: 8px; }
   .lwy-nav { gap: 2px; }
   .lwy-nav button { min-height: 36px; padding-top: 5px; padding-bottom: 5px; }
 }
+@media (max-height: 360px) and (max-width: 700px) {
+  .lwy-sidebar-head { display: none; }
+}
 @keyframes lwy-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes lwy-beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.25); } 30% { transform: scale(1); } }
 @keyframes lwy-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .lwy-heart, .lwy-art img, .lwy-spinning { animation: none; } }
 `
-
-function unwrap(value: any, key: string): any {
-  let current = value
-  for (let i = 0; i < 4 && current && typeof current === "object"; i += 1) {
-    if (key in current) return current
-    current = current.result ?? current.data ?? current.value
-  }
-  return {}
-}
 
 function parseIsoDay(value: string): { y: number; m: number; d: number } | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "")
@@ -632,7 +629,9 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const confirm = useConfirm()
 
   const [section, setSection] = props.useLocalState<Section>("lwy:section", "heart")
-  const [sidebarCollapsed, setSidebarCollapsed] = props.useLocalState<boolean>("lwy:sidebar-collapsed", true)
+  const [sidebarCollapsed, setSidebarCollapsed] = props.useLocalState<boolean>("lwy:sidebar-collapsed", false)
+  const [experienceDestination, setExperienceDestination] = useState<ExperienceDestination | null>(null)
+  const experienceArrived = useCallback(() => setExperienceDestination(null), [])
   const [selectedKey, setSelectedKey] = props.useLocalState<string>("lwy:scope", "")
   const [art, setArt] = useState<string>("")
   const [busy, setBusy] = useState(false)
@@ -701,7 +700,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<number | "">(0)
   const [dialogScope, setDialogScope] = useState("")
-  const [nickDrafts, setNickDrafts] = useState<Record<string, { values: Record<string, string>; base: Record<string, string> }>>({})
+  const [nickDrafts, setNickDrafts] = useState<Record<string, { values: Addressing; base: Addressing }>>({})
+  const [avoidDrafts, setAvoidDrafts] = useState<Record<string, string>>({})
   const [metOpen, setMetOpen] = useState(false)
   const [metDraft, setMetDraft] = useState("")
   const [metCustomDraft, setMetCustomDraft] = useState("")
@@ -785,7 +785,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   function errorText(error: any): string {
     const raw = String((error && error.message) || error || "")
-    const code = [...ERROR_CODES].sort((a, b) => b.length - a.length).find((item) => raw.includes(item))
+    const code = errorCode(error)
+    if (code === "invalid_response") return t("feedback.unconfirmed")
     return code ? t(`error.${code}`, { defaultValue: raw }) : t("feedback.failed", { defaultValue: "操作未完成，请稍后重试。" })
   }
 
@@ -958,39 +959,40 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   }
 
   // Preserve each character's edits across navigation and background refreshes.
-  const savedNicknames = (scope && scope.nicknames) || {}
+  const savedNicknames = addressConfig(scope)
   const savedNickKey = scope ? `${scope.key}|${JSON.stringify(savedNicknames)}` : ""
   const nickEntry = scope ? nickDrafts[scope.key] : undefined
   const nickDraft = nickEntry?.values || savedNicknames
   const nickBase = nickEntry?.base || savedNicknames
-  const nickDirty = stages.some(item => (nickDraft[item.key] || "").trim() !== (nickBase[item.key] || ""))
+  const nickDirty = !sameAddress(normalizedAddress(nickDraft), nickBase)
+  const invalidCustom = stages.some(item => nickDraft.stages[item.key].mode === "custom" && !cleanName(nickDraft.stages[item.key].text))
+  const nickDenied = new Set(nickDraft.avoided.map(name => name.toLowerCase()))
+  const nicknameBlocked = [nickDraft.preferred_name, ...Object.values(nickDraft.stages).filter(item => item.mode === "custom").map(item => item.text)]
+    .some(name => name && nickDenied.has(cleanName(name).toLowerCase()))
+  const avoidDraft = scope ? avoidDrafts[scope.key] || "" : ""
   useEffect(() => {
     if (!scope) return
     setNickDrafts(previous => {
       const entry = previous[scope.key]
-      if (entry && stages.some(item => (entry.values[item.key] || "").trim() !== (entry.base[item.key] || ""))) {
-        const values = { ...entry.values }, base = { ...entry.base }
-        for (const item of stages) {
-          if ((values[item.key] || "").trim() === (base[item.key] || "")) {
-            values[item.key] = savedNicknames[item.key] || ""
-            base[item.key] = savedNicknames[item.key] || ""
-          }
-        }
-        return { ...previous, [scope.key]: { values, base } }
-      }
-      return { ...previous, [scope.key]: { values: { ...savedNicknames }, base: { ...savedNicknames } } }
+      return { ...previous, [scope.key]: entry
+        ? mergeAddressDraft(entry.values, entry.base, savedNicknames)
+        : { values: savedNicknames, base: savedNicknames } }
     })
   }, [savedNickKey])
 
-  function editNickname(key: string, value: string) {
+  function editAddress(changes: Partial<Addressing>) {
     if (!scope) return
     setFeedback(null)
     setNickDrafts(previous => ({
       ...previous, [scope.key]: {
-        base: previous[scope.key]?.base || { ...savedNicknames },
-        values: { ...(previous[scope.key]?.values || savedNicknames), [key]: Array.from(value).slice(0, limits.nickname_chars || 12).join("") },
+        base: previous[scope.key]?.base || savedNicknames,
+        values: { ...(previous[scope.key]?.values || savedNicknames), ...changes },
       },
     }))
+  }
+
+  function editNickname(key: string, value: Partial<StageAddress>) {
+    editAddress({ stages: { ...nickDraft.stages, [key]: { ...nickDraft.stages[key], ...value } } })
   }
 
   async function run(actionId: string, args: Record<string, unknown>, success: string | ((result: any) => string),
@@ -1012,30 +1014,19 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     setFeedback({ tone: "pending", action: actionId, message: shopProgress[actionId] ? t(shopProgress[actionId]) : actionId === "sync_characters"
       ? t("feedback.refreshing", { defaultValue: "正在刷新…" }) : t("common.saving", { defaultValue: "保存中…" }) })
     try {
-      let message = typeof success === "string" ? success : ""
-      try {
-        const result = await api.call(actionId, args, { userInitiated: true })
+      const result = await submitAction(api, actionId, args, success, acknowledged, () => {
         committed = true
-        message = typeof success === "string" ? success : success(result)
-        acknowledged?.()
-      } catch (error: any) {
-        // A recognized backend rejection did not execute this request.
-        if (SHOP_ERRORS.some(code => String(error?.message || error).includes(code))) acknowledged?.()
-        if (["shop_stale", "shop_no_affection_room", "shop_gain_changed", "nickname_conflict", "first_met_conflict"].some(code => String(error?.message || error).includes(code))) {
-          setRefreshError(true)
-        }
-        setFeedback({ tone: "danger", action: actionId, message: errorText(error) })
+        setFeedback({ tone: "pending", action: actionId,
+          message: t("feedback.savedRefreshing", { defaultValue: "操作已完成，正在更新面板…" }) })
+      })
+      if (result.saved === false) {
+        if (result.stale) setRefreshError(true)
+        setFeedback({ tone: "danger", action: actionId, message: errorText(result.error) })
         return false
       }
-      setFeedback({ tone: "pending", action: actionId, message: t("feedback.savedRefreshing", { defaultValue: "操作已完成，正在更新面板…" }) })
-      // A failed refresh must not turn an acknowledged save into a failed save.
-      let refreshed = true
-      try {
-        await api.refresh()
-        setRefreshError(false)
-      } catch { refreshed = false; setRefreshError(true) }
-      setFeedback({ tone: refreshed ? "success" : "warning", action: actionId,
-        message: refreshed ? message : `${message} · ${t("feedback.stale", { defaultValue: "显示数据尚未更新，请刷新。" })}` })
+      setRefreshError(result.stale)
+      setFeedback({ tone: result.stale ? "warning" : "success", action: actionId,
+        message: result.stale ? `${result.message} · ${t("feedback.stale", { defaultValue: "显示数据尚未更新，请刷新。" })}` : result.message })
       return true
     } finally {
       endPending(committed)
@@ -1081,8 +1072,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     const ok = await confirm({
       title: next ? t("perChar.onTitle", { defaultValue: "开启独立好感？" }) : t("perChar.offTitle", { defaultValue: "改回共用好感？" }),
       message: next
-        ? t("perChar.onMessage", { defaultValue: "当前角色保留现在的好感；其他角色恢复各自以前的记录，没有记录的从 0 开始。不会清除任何数据。" })
-        : t("perChar.offMessage", { defaultValue: "共用好感将使用当前角色的值；其他角色的独立记录会保留，下次开启时恢复。" }),
+        ? t("perChar.onMessage", { defaultValue: "当前角色沿用现在的好感数值；已有独立记录的表白状态、日期和历史各自保留。首次建立当前角色记录时继承共用关系，其他无记录角色从 0 开始。" })
+        : t("perChar.offMessage", { defaultValue: "共用好感数值改为当前角色的值，共用关系原有的表白状态、日期和历史保留。各角色的独立记录也会保留。" }),
       confirmLabel: t("common.confirm", { defaultValue: "确定" }),
       cancelLabel: t("common.cancel", { defaultValue: "取消" }),
     })
@@ -1121,16 +1112,20 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     await run("set_settings", { [key]: next }, t("feedback.rulesSaved", { defaultValue: "关系规则已更新" }))
   }
 
-  async function reset() {
+  async function reset(restart = false) {
     if (!scope) return
+    const target = scope
     const ok = await confirm({
-      title: t("reset.title", { defaultValue: "重置好感？" }),
-      message: t("reset.message", { defaultValue: "只会把这一份好感清零，其他角色不受影响，心动记录会保留。" }),
+      title: t(restart ? "restart.title" : "reset.title"),
+      message: t(restart ? "restart.message" : "reset.message", { name: target.label || t("reset.shared") }),
       tone: "danger",
-      confirmLabel: t("reset.confirm", { defaultValue: "重置" }),
+      confirmLabel: t(restart ? "restart.confirm" : "reset.confirm"),
       cancelLabel: t("common.cancel", { defaultValue: "取消" }),
     })
-    if (ok) await run("reset_affection", { scope: scope.key }, t("toast.reset", { defaultValue: "已重置" }))
+    if (ok) await run(restart ? "restart_relationship" : "reset_affection", {
+      scope: target.key,
+      ...(restart ? { expected_revision: target.gain_revision ?? 0, expected_confessed: target.confessed === true } : {}),
+    }, t(restart ? "restart.done" : "toast.reset"))
   }
 
   async function saveDraft() {
@@ -1141,21 +1136,27 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   }
 
   async function saveNicknames() {
-    if (!scope) return
-    const payload: Record<string, string> = {}
-    const expected: Record<string, string> = {}
-    for (const item of stages) {
-      const value = (nickDraft[item.key] || "").trim()
-      if (value !== (nickBase[item.key] || "")) {
-        payload[item.key] = value
-        expected[item.key] = nickBase[item.key] || ""
-      }
-    }
+    if (!scope || invalidCustom || nicknameBlocked) return
+    const { changes, expected } = addressDiff(normalizedAddress(nickDraft), nickBase)
     const key = scope.key
-    await run("set_nicknames", { scope: key, nicknames: payload, expected_nicknames: expected }, result => {
+    await run("set_addressing", { scope: key, changes, expected }, result => {
       const saved = unwrap(result, "scope").result
       setNickDrafts(previous => ({ ...previous, [key]: { values: { ...saved }, base: { ...saved } } }))
       return t("feedback.nicknamesSaved", { defaultValue: "称呼已保存" })
+    })
+  }
+
+  async function restoreAddressDefaults() {
+    if (!scope) return
+    const key = scope.key
+    const defaults = defaultAddressing()
+    const { version: _version, ...changes } = defaults
+    const { version: _baseVersion, ...expected } = nickBase
+    await run("set_addressing", { scope: key, changes, expected }, result => {
+      const saved = unwrap(result, "scope").result
+      setNickDrafts(previous => ({ ...previous, [key]: { values: saved, base: saved } }))
+      setAvoidDrafts(previous => ({ ...previous, [key]: "" }))
+      return t("nick.defaultsRestored")
     })
   }
 
@@ -1253,15 +1254,6 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     if (ok) await run("remove_anniversary", { id: item.id }, t("toast.removed", { defaultValue: "已删除" }))
   }
 
-  // Placeholder shows what an empty stage inherits from the stages below it.
-  function inheritedNickname(index: number): string {
-    for (let i = index - 1; i >= 0; i -= 1) {
-      const value = (nickDraft[stages[i].key] || "").trim()
-      if (value) return value
-    }
-    return ""
-  }
-
   const hasArt = activeSection === "heart" && portraitMode !== "off" && Boolean(art)
   const settings = state.settings || { require_confession: true, decay: false, auto_score: true, proactive_confession: false }
   const decayRules = state.decay_rules || { grace_days: 3, per_day: 1 }
@@ -1301,7 +1293,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const loverSince = milestones.lover || ""
   const tooLarge = Array.isArray(decoration.too_large) ? decoration.too_large : []
   const sectionLabel = (key: Section) =>
-    key === "shop" ? t("nav.shop", { defaultValue: "礼物商店" }) : key === "heart"
+    key === "experiences" ? t("xp.title") : key === "shop" ? t("nav.shop", { defaultValue: "礼物商店" }) : key === "heart"
       ? t("nav.heart", { defaultValue: "关系概览" })
       : key === "history"
         ? t("nav.history", { defaultValue: "心动记录" })
@@ -1313,8 +1305,23 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   function changeSection(next: Section) {
     if (!busyRef.current) setFeedback(null)
+    if (next !== "experiences") setExperienceDestination(null)
     setSection(next)
     workspaceRef.current?.scrollTo({ top: 0 })
+  }
+
+  function openExperiences(destination?: ExperienceDestination) {
+    setExperienceDestination(destination || null)
+    changeSection("experiences")
+  }
+
+  function renderNavigation(key: Section) {
+    return <button key={key} type="button"
+      aria-current={key === activeSection ? "page" : undefined}
+      aria-controls="lwy-page" aria-label={sectionLabel(key)} title={sectionLabel(key)}
+      className={key === activeSection ? "on" : ""} onClick={() => changeSection(key)}>
+      <Icon name={SECTION_ICONS[key]} /><span className="lwy-nav-label">{sectionLabel(key)}</span>
+    </button>
   }
 
   function jumpToSettings(id: string) {
@@ -1431,7 +1438,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   ? t("hero.withName", { name: current.label, defaultValue: "{name} 和你现在是" })
                   : t("hero.shared", { defaultValue: "你们现在是" })}
               </span>
-              <span className="lwy-stage-name">{stageName(current.stage)}</span>
+              <span className="lwy-stage-name">{current.confessed && current.stage !== "lover" ? t("nick.confirmedLover") : stageName(current.stage)}</span>
               {current.nickname ? (
                 <span className="lwy-nick">
                   {t("hero.nicknamePrefix", { defaultValue: "会叫你" })} <b>「{current.nickname}」</b>
@@ -1441,7 +1448,9 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                 <span className="lwy-wait">{t("hero.awaitConfession", { defaultValue: "好感已经够了，只差一句告白" })}</span>
               ) : (
                 <span className="lwy-hint">
-                  {current.next_stage
+                  {current.confessed && current.stage !== "lover"
+                    ? t("nick.currentCloseness", { stage: stageName(current.stage) })
+                    : current.next_stage
                     ? t("hero.next", { n: current.points_to_next, stage: stageName(current.next_stage), defaultValue: "再 {n} 点就是「{stage}」" })
                     : t("hero.max", { defaultValue: "已经是最亲密的关系了" })}
                 </span>
@@ -1485,7 +1494,10 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function renderOverviewDates(current: Scope) {
     return (
       <>
-      <section className="lwy-overview-footer" aria-label={sectionLabel("dates")}>
+      <section className="lwy-overview-footer">
+        <Together data={state.experiences}
+          character={state.per_character ? current.label || "" : state.current_character || ""}
+          busy={busy} t={t} open={openExperiences} />
         <div className="lwy-summary">
           <div className="lwy-summary-item">
             <span className="lwy-sub">{t("overview.firstMet", { defaultValue: "相识的日子" })}</span>
@@ -1663,26 +1675,73 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         <section className="lwy-card">
           <div className="lwy-card-head">
             <h2 className="lwy-h">{t("nick.title", { defaultValue: "称呼" })}</h2>
+            <Button tone="default" disabled={busy || (!nickDirty && !avoidDraft && sameAddress(nickBase, defaultAddressing()))}
+              onClick={restoreAddressDefaults}>
+              <Icon name="RotateCw" />{t("nick.resetAll")}
+            </Button>
           </div>
           <p className="lwy-note" style={{ marginBottom: "20px" }}>
-            {t("nick.note", { defaultValue: "角色在这个阶段会这样叫你。留空的阶段沿用上一阶段的称呼。" })}
+            {t("nick.note")}
           </p>
           <div className="lwy-nick-grid">
-            {stages.map((item, index) => (
-              <div key={item.key} className="lwy-nick-row">
-                <label>
-                <span>{stageName(item.key)}</span>
-                <Input
-                  value={nickDraft[item.key] || ""}
-                  disabled={busy}
-                  placeholder={inheritedNickname(index) || t("nick.placeholder", { defaultValue: "沿用人设里的称呼" })}
-                  onChange={(value: string) => editNickname(item.key, value)}
-                />
-                </label>
-                <span className="lwy-counter" aria-hidden="true">{Array.from(nickDraft[item.key] || "").length}/{limits.nickname_chars || 12}</span>
+            {stages.map(item => {
+              const entry = nickDraft.stages[item.key]
+              const preview = addressPreview(nickDraft, item.key, scope?.confessed === true)
+              const resetLabel = t("nick.reset", { stage: stageName(item.key) })
+              return <div key={item.key} className="lwy-nick-row" data-stage={item.key}>
+                <div className="lwy-nick-controls">
+                  <label><span>{stageName(item.key)}</span>
+                  <Select value={entry.mode} disabled={busy}
+                    options={ADDRESS_MODES.map(mode => ({ value: mode, label: t(`nick.mode.${mode}`) }))}
+                    onChange={mode => editNickname(item.key, { mode: mode as StageAddress["mode"], text: "" })} />
+                  </label>
+                  <button type="button" className="lwy-icon-button" disabled={busy || entry.mode === "auto"} title={resetLabel} aria-label={resetLabel}
+                    onClick={() => editNickname(item.key, { mode: "auto", text: "" })}><Icon name="RotateCw" /></button>
+                </div>
+                {entry.mode === "custom" ? <div className="lwy-nick-custom">
+                  <label><span className="lwy-sr-only">{t("nick.customFor", { stage: stageName(item.key) })}</span>
+                  <Input value={entry.text} disabled={busy}
+                    placeholder={t("nick.customPlaceholder")}
+                    onChange={value => editNickname(item.key, { text: Array.from(value).slice(0, 12).join("") })} />
+                  </label>
+                  <span className="lwy-counter" aria-hidden="true">{Array.from(entry.text).length}/{limits.nickname_chars || 12}</span>
+                </div> : null}
+                <p className="lwy-nick-preview">{t("nick.effective", { name: preview.text || (preview.candidate
+                  ? t("nick.optional", { name: preview.candidate }) : t("nick.personaValue")) })}
+                  {" · "}{t(`nick.source.${preview.source}`)}
+                  {preview.sourceStage !== item.key ? ` · ${stageName(preview.sourceStage)}` : ""}
+                </p>
               </div>
-            ))}
+            })}
           </div>
+          <div className="lwy-address-prefs">
+            <label><span>{t("nick.preferred")}</span>
+              <Input value={nickDraft.preferred_name} disabled={busy} onChange={value => editAddress({ preferred_name: Array.from(value).slice(0,12).join("") })} />
+            </label>
+            <Switch checked={nickDraft.endearments} disabled={busy} label={t("nick.endearments")}
+              onChange={value => editAddress({ endearments: value })} />
+            <div><p style={{ fontSize: "13px", margin: "0 0 8px" }}>{t("nick.avoided")}</p>
+              <div className="lwy-avoid-add">
+                <label><span className="lwy-sr-only">{t("nick.avoidInput")}</span>
+                <Input value={avoidDraft} disabled={busy}
+                  onChange={value => scope && setAvoidDrafts(previous => ({ ...previous, [scope.key]: Array.from(value).slice(0,12).join("") }))} />
+                </label>
+                <button type="button" className="lwy-icon-button" title={t("nick.addAvoid")} aria-label={t("nick.addAvoid")}
+                  disabled={busy || !cleanName(avoidDraft) || nickDraft.avoided.length >= (limits.avoided_names || 20) ||
+                    nickDenied.has(cleanName(avoidDraft).toLowerCase())}
+                  onClick={() => {
+                    editAddress({ avoided: [...nickDraft.avoided, cleanName(avoidDraft)] })
+                    if (scope) setAvoidDrafts(previous => ({ ...previous, [scope.key]: "" }))
+                  }}><Icon name="Plus" /></button>
+              </div>
+            </div>
+            <div className="lwy-avoided">
+              {nickDraft.avoided.map(name => <span key={name}>{name}<button type="button" className="lwy-icon-button"
+                title={t("nick.removeAvoid", { name })} aria-label={t("nick.removeAvoid", { name })} disabled={busy}
+                onClick={() => editAddress({ avoided: nickDraft.avoided.filter(item => item !== name) })}><Icon name="Trash2" /></button></span>)}
+            </div>
+          </div>
+          {invalidCustom || nicknameBlocked ? <p className="lwy-address-error" role="alert">{t(invalidCustom ? "error.nickname_required" : "error.nickname_blocked")}</p> : null}
           <div className="lwy-savebar">
             <span className={nickDirty ? "lwy-save-state dirty" : "lwy-save-state"} role="status">
               {nickDirty ? t("common.unsaved", { defaultValue: "尚未保存" }) : t("common.noChanges", { defaultValue: "没有未保存的修改" })}
@@ -1692,7 +1751,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                 setFeedback(null)
                 if (scope) setNickDrafts(previous => ({ ...previous, [scope.key]: { values: { ...savedNicknames }, base: { ...savedNicknames } } }))
               }}>{t("common.discard", { defaultValue: "撤销修改" })}</Button> : null}
-              <Button tone="primary" disabled={busy || !nickDirty} onClick={saveNicknames}>{saveLabel("set_nicknames")}</Button>
+              <Button tone="primary" disabled={busy || !nickDirty || invalidCustom || nicknameBlocked} onClick={saveNicknames}>{saveLabel("set_addressing")}</Button>
             </div>
           </div>
         </section>
@@ -1938,7 +1997,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             </Button>
           </div>
           <p className="lwy-note">
-            {t("settings.perCharacterNote", { defaultValue: "关闭时所有角色共用一份好感、称呼和相识日。切换开关不会清除任何角色的数据。" })}
+            {t("settings.perCharacterNote", { defaultValue: "关闭时所有角色共用同一份关系。切换时，已有共用与独立记录的表白、日期和历史分别保留，当前好感数值继续沿用。" })}
           </p>
           {current ? (
             <div className="lwy-set-row">
@@ -1952,8 +2011,11 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   <Icon name="Pencil" />
                   {t("settings.adjust", { defaultValue: "调整" })}
                 </Button>
-                <Button tone="danger" disabled={busy} onClick={reset}>
-                  {t("settings.reset", { defaultValue: "重置" })}
+                <Button tone="default" disabled={busy} onClick={() => reset()}>
+                  {t("settings.reset", { defaultValue: "清零好感" })}
+                </Button>
+                <Button tone="danger" disabled={busy || refreshError} onClick={() => reset(true)}>
+                  <Icon name="RotateCw" />{t("restart.confirm")}
                 </Button>
               </div>
             </div>
@@ -1965,7 +2027,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   return (
     <div className={sidebarCollapsed ? "lwy sidebar-collapsed" : "lwy"}>
-      <style>{STYLE + SHOP_STYLE + PORTRAIT_IMPORT_STYLE + INTERACTION_STYLE + SCROLLBAR_STYLE + themeCss(liveAppearance)}</style>
+      <style>{STYLE + SHOP_STYLE + EXPERIENCE_STYLE + TOGETHER_STYLE + PORTRAIT_IMPORT_STYLE + INTERACTION_STYLE + SCROLLBAR_STYLE + themeCss(liveAppearance)}</style>
 
       <aside className="lwy-sidebar">
         <div className="lwy-sidebar-head">
@@ -1988,22 +2050,14 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           </button>
         </div>
         <div id="lwy-sidebar-navigation" className="lwy-sidebar-body">
-          <nav className="lwy-nav" aria-label={t("nav.label", { defaultValue: "插件页面" })}>
-            {SECTIONS.map((key) => (
-              <button
-                key={key}
-                type="button"
-                aria-current={key === activeSection ? "page" : undefined}
-                aria-controls="lwy-page"
-                aria-label={sectionLabel(key)}
-                title={sectionLabel(key)}
-                className={key === activeSection ? "on" : ""}
-                onClick={() => changeSection(key)}
-              >
-                <Icon name={SECTION_ICONS[key]} />
-                <span className="lwy-nav-label">{sectionLabel(key)}</span>
-              </button>
-            ))}
+          <nav className="lwy-nav lwy-nav-main" aria-label={t("nav.label", { defaultValue: "插件页面" })}>
+            {SECTION_GROUPS.map(group => <div className="lwy-nav-group" key={group.label} role="group" aria-label={t(group.label)}>
+              <span className="lwy-nav-group-label" aria-hidden="true">{t(group.label)}</span>
+              {group.sections.map(renderNavigation)}
+            </div>)}
+          </nav>
+          <nav className="lwy-nav lwy-nav-settings" aria-label={sectionLabel("settings")}>
+            {renderNavigation("settings")}
           </nav>
           <div className="lwy-sidebar-foot">
             <strong>{scope?.label || t("scope.shared", { defaultValue: "共用" })}</strong>
@@ -2023,23 +2077,22 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
               <div className="lwy-head-text">
                 <h1 id="lwy-page-title" className="lwy-title">{sectionLabel(activeSection)}</h1>
                 <span className="lwy-sub">
-                  {activeSection === "shop" ? t("shop.subtitle") : scope?.label
+                  {activeSection === "experiences" ? t("xp.subtitle") : activeSection === "shop" ? t("shop.subtitle") : scope?.label
                     ? t("settings.editingName", { name: scope.label, defaultValue: "正在管理：{name}" })
                     : t("settings.editingShared", { defaultValue: "正在管理：共用好感" })}
                 </span>
               </div>
-              {scopes.length > 1 && activeSection !== "shop" ? (
+              {scopes.length > 1 && activeSection !== "shop" && activeSection !== "experiences" ? (
                 <label className="lwy-scope">
-                  <span className="lwy-sub">{t("scope.select", { defaultValue: "选择角色" })}</span>
-                  <Select
+                  <span id="lwy-scope-label" className="lwy-sub">{t("scope.select", { defaultValue: "选择角色" })}</span>
+                  <select className="neko-select" aria-labelledby="lwy-scope-label"
                     value={scope?.key || ""}
                     disabled={busy}
-                    options={scopes.map((item) => ({
-                      value: item.key,
-                      label: `${item.label || t("scope.shared", { defaultValue: "共用" })}${item.is_current ? ` · ${t("scope.current", { defaultValue: "当前角色" })}` : ""}`,
-                    }))}
-                    onChange={(value: string) => { setFeedback(null); setSelectedKey(value) }}
-                  />
+                    onChange={(event: any) => { setFeedback(null); setSelectedKey(event.target.value) }}>
+                    {scopes.map(item => <option key={item.key} value={item.key} selected={item.key === scope?.key}>
+                      {`${item.label || t("scope.shared", { defaultValue: "共用" })}${item.is_current ? ` · ${t("scope.current", { defaultValue: "当前角色" })}` : ""}`}
+                    </option>)}
+                  </select>
                 </label>
               ) : null}
             </header>
@@ -2072,6 +2125,12 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             <article key="page-body" id="lwy-page" className="lwy-page" aria-labelledby="lwy-page-title">
               {activeSection === "settings" ? (
                 renderSettings(scope)
+              ) : activeSection === "experiences" ? (
+                <Experiences data={state.experiences} characters={state.known_characters || []} current={state.current_character}
+                  today={state.today || ""} api={api} t={t} useLocalState={props.useLocalState}
+                  busy={busy} stale={refreshError} run={run} refresh={refreshPanel}
+                  dialog={onShopDialog} feedback={() => renderFeedback(true)}
+                  destination={experienceDestination} arrived={experienceArrived} />
               ) : activeSection === "shop" ? (
                 <Shop data={state.shop} characters={state.known_characters || []} current={state.current_character}
                   perCharacter={Boolean(state.per_character)} scopes={scopes} dailyGain={limits.daily_gain}

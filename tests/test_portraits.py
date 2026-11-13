@@ -294,3 +294,14 @@ def test_custom_only_library_without_bundled_catalog(tmp_path, portraits, storag
     assert library.summary()["count"] == 1
     assert library.summary()["settings"]["mode"] == "fixed"
     assert library.choose()["id"] == item_id
+
+
+def test_choosing_a_portrait_scans_each_file_only_once(tmp_path, portraits, storage, monkeypatch):
+    from unittest.mock import Mock
+
+    library, items = make_library(tmp_path, portraits, storage)
+    library.summary()
+    probe = Mock(wraps=library._meta)
+    monkeypatch.setattr(library, "_meta", probe)
+    assert library.choose()["available"]
+    assert probe.call_count == len(items)

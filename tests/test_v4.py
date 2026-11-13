@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
+
+import pytest
 
 DAY = 1_750_000_000.0
 
@@ -40,9 +43,50 @@ def test_parse_record_skips_other_turns(conv):
     }) is None
 
 
+@pytest.mark.parametrize("turn_type", ["user_message", "assistant_message"])
+@pytest.mark.parametrize("metadata_location", ["metadata", "raw"])
+def test_experience_invitation_never_enters_chat_scoring(conv, turn_type, metadata_location):
+    record = {
+        "content": "一起写便签", "timestamp": DAY,
+        "turn_type": turn_type, "lanlan_name": "YUI",
+    }
+    metadata = {"event_type": "experience_note"}
+    record[metadata_location] = {"metadata": metadata} if metadata_location == "raw" else metadata
+    assert conv.parse_record(record) is None
+
+
 def test_parse_record_clips_long_text(conv):
     message = conv.parse_record(_rec("user_message", "YUI", "啊" * 1000, DAY))
     assert message is not None and len(message.content) == conv.MESSAGE_MAX_CHARS
+
+
+@pytest.mark.parametrize("metadata", [
+    {"event_type": "relationship_context"}, {"source": "tool"}, {"source": "agent"},
+    {"source": "avatar-drop"}, {"chat_original_source": {"origin": "agent"}},
+])
+@pytest.mark.parametrize("turn_type", ["user_message", "assistant_message"])
+def test_explicit_special_bus_sources_are_excluded_from_ordinary_chat(conv, metadata, turn_type):
+    record = _rec(turn_type, "YUI", "special message", DAY, nested=True)
+    record["metadata"].update(metadata)
+    assert conv.parse_record(record) is None
+
+
+def test_cursor_does_not_merge_different_messages_sharing_a_prefix(conv):
+    cursor = conv.BusCursor(DAY)
+    first = conv.Message(DAY + 1, "user", "YUI", "x" * 40 + "first")
+    second = conv.Message(DAY + 1, "user", "YUI", "x" * 40 + "second")
+    assert cursor.fresh([first, second]) == [first, second]
+    assert cursor.fresh([first, second]) == []
+
+
+def test_cursor_uses_full_original_text_instead_of_the_income_normalization(conv):
+    cursor = conv.BusCursor(DAY)
+    texts = ["我愿意？", "我愿意！", "x" * 400 + "first", "x" * 400 + "second"]
+    messages = [conv.parse_record(_rec("user_message", "YUI", text, DAY + 1)) for text in texts]
+    assert messages[0].income_text == messages[1].income_text
+    assert messages[2].content == messages[3].content
+    assert cursor.fresh(messages) == messages
+    assert cursor.fresh(messages) == []
 
 
 def test_cursor_hands_out_each_message_once(conv):
@@ -151,7 +195,10 @@ def test_build_prompt_includes_context(scoring):
         previous_user="摸摸头",
         previous_reply="喵~",
     )
-    assert "「陌生」" in prompt and "对方：你个笨蛋" in prompt and "上一轮：\n" in prompt
+    payload = json.loads(prompt.split("待评分资料（JSON）：\n", 1)[1])
+    assert payload["relationship"]["stage"] == "陌生"
+    assert payload["current"]["user"] == "你个笨蛋"
+    assert payload["previous"] == {"user": "摸摸头", "reply": "喵~"}
     assert "confession 固定为 false" in prompt
     waiting = scoring.build_prompt(
         character="YUI", stage_name="暧昧", affection=85, user="我喜欢你", reply="我也是", awaiting_confession=True
@@ -174,7 +221,7 @@ def test_auto_source_and_no_cooldown(engine):
 
 def test_relationship_context_text(prompts):
     text = prompts.relationship_context("stranger", "", [], transition=("familiar", "stranger"))
-    assert "「陌生」" in text and "不撒娇" in text and "有些疏远了" in text
+    assert "「陌生」" in text and "尊重边界" in text and "有些疏远了" in text
     assert "以现在的关系为准" in text and "{MASTER_NAME}" in text
     assert "工具" not in text
     lover = prompts.relationship_context(
@@ -209,7 +256,7 @@ def test_pending_confirmation_does_not_instruct_character_to_stay_ambiguous(prom
         assert "久远记忆" in text
     assert context.startswith(prompts.confession_line(tool))
     assert "如果之前的对话或记忆比现在更亲密，以现在的关系为准" not in context
-    assert "心动但没有说破" in prompts.relationship_context("ambiguous")
+    assert "双方确认前不宣布在一起" in prompts.relationship_context("ambiguous")
     assert "旧的暧昧提示已过时" in prompts.confess_result_note()
 
 

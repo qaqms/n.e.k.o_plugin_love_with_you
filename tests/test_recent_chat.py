@@ -63,6 +63,7 @@ def test_rolling_and_summarized_window_can_retain_a_tail_anchor(conv):
     {"source": "avatar-drop"}, {"source": "theater_numeric_v2"}, {"source": "tool"},
     {"chat_original_source": {"origin": "agent"}}, {"turn_type": "proactive_reply"},
     {"event_type": "gift_received"}, {"event_type": "proactive_confession"},
+    {"event_type": "experience_note"},
 ])
 def test_generated_or_special_replies_never_complete_an_income_turn(conv, metadata):
     tracker = conv.RecentHistoryTracker(NOW)

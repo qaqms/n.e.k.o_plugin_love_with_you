@@ -6,7 +6,7 @@ import { dependency, pluginRoot, startPreview } from "./ui_preview.mjs"
 
 const { chromium } = dependency("playwright")
 const artifacts = process.env.NEKO_UI_ARTIFACTS ? resolve(process.env.NEKO_UI_ARTIFACTS) : resolve(pluginRoot, "../.neko-ui-review/artifacts")
-const sections = ["关系概览", "心动记录", "纪念日", "专属称呼", "设置", "礼物商店"]
+const sections = ["关系概览", "心动记录", "纪念日", "专属称呼", "设置", "礼物商店", "共同经历"]
 let browser, server, url
 before(async () => {
   ;({ server, url } = await startPreview())
@@ -28,6 +28,11 @@ async function pageFor(options = {}, query = "") {
   return page
 }
 const navigate = (page, section) => page.locator(".lwy-nav").getByRole("button", { name: section, exact: true }).click()
+const nickname = (page, stage) => page.getByLabel(`${stage}的自定义称呼`, { exact: true })
+async function editNickname(page, stage, text) {
+  await page.getByRole("combobox", { name: stage, exact: true }).selectOption("custom")
+  await nickname(page, stage).fill(text)
+}
 const settle = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 async function noHorizontalOverflow(page) {
   const overflow = await page.evaluate(() => {
@@ -38,11 +43,11 @@ async function noHorizontalOverflow(page) {
   assert.deepEqual(overflow, [])
 }
 
-test("shop shows automatic income, purchase, explicit recipient and affection feedback", async () => {
+test("shop shows unclaimed income, purchase, explicit recipient and affection feedback", async () => {
   const page = await pageFor()
   await navigate(page, "礼物商店")
-  await page.getByText("今日已到账 20 / 30 币", { exact: true }).waitFor()
-  assert.equal(await page.getByRole("button", { name: /领取今日/ }).count(), 0)
+  await page.getByText("今日已领取 0 / 30 金币", { exact: true }).waitFor()
+  assert.equal(await page.getByRole("button", { name: "领取", exact: true }).count(), 2)
   assert.equal(await page.locator(".lwy-shop-balance strong").textContent(), "100")
   await page.locator('[data-product="cake"]').getByRole("button", { name: "购买", exact: true }).click()
   await page.getByRole("status").filter({ hasText: "已购买草莓蛋糕，背包中共 1 份" }).waitFor()
@@ -81,6 +86,63 @@ test("lost purchase response retries the same request without spending twice", a
   assert.deepEqual(details.calls[0].args, details.calls[1].args)
   assert.equal(details.state.shop.coins, 60)
   assert.equal(details.state.shop.catalog.find(item => item.id === "cake").quantity, 1)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("an incomplete purchase response requires checking the same request", async () => {
+  const page = await pageFor({}, "?page=shop")
+  await page.evaluate(() => {
+    window.__uiTest.responseOverrideAction = "buy_shop_item"
+    window.__uiTest.responseOverride = { quantity: 1 }
+  })
+  await page.locator('[data-product="cake"]').getByRole("button", { name: "购买", exact: true }).click()
+  await page.getByRole("button", { name: "确认上次操作", exact: true }).waitFor({ timeout: 2500 })
+  await page.evaluate(() => { window.__uiTest.responseOverrideAction = "" })
+  await page.locator(".lwy-shop-wallet").getByRole("button", { name: "刷新", exact: true }).click()
+  await page.getByRole("button", { name: "确认上次操作", exact: true }).click()
+  await page.getByRole("status").filter({ hasText: "已购买草莓蛋糕，背包中共 1 份" }).waitFor()
+  const calls = await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "buy_shop_item"))
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls[0].args, calls[1].args)
+  assert.equal(await page.evaluate(() => window.__uiTest.snapshot().shop.coins), 60)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("a transport error containing a longer error token keeps the original request", async () => {
+  const page = await pageFor({}, "?page=shop")
+  await page.evaluate(() => {
+    window.__uiTest.failAction = "buy_shop_item"
+    window.__uiTest.failMessage = "transport: shop_stale_extra"
+  })
+  await page.locator('[data-product="cake"]').getByRole("button", { name: "购买", exact: true }).click()
+  await page.getByRole("button", { name: "确认上次操作", exact: true }).waitFor({ timeout: 2500 })
+  await page.evaluate(() => { window.__uiTest.failAction = "" })
+  await page.getByRole("button", { name: "确认上次操作", exact: true }).click()
+  await page.getByRole("status").filter({ hasText: "已购买草莓蛋糕" }).waitFor()
+  const calls = await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "buy_shop_item"))
+  assert.deepEqual(calls[0].args, calls[1].args)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("a structured rejection code clears the rejected request and requires refresh", async () => {
+  const page = await pageFor({}, "?page=shop")
+  await page.evaluate(() => {
+    window.__uiTest.failAction = "buy_shop_item"
+    window.__uiTest.failMessage = "Request rejected"
+    window.__uiTest.failCode = "shop_stale"
+  })
+  await page.locator('[data-product="cake"]').getByRole("button", { name: "购买", exact: true }).click()
+  await page.getByRole("alert").filter({ hasText: "商店数据已更新" }).waitFor({ timeout: 2500 })
+  assert.equal(await page.getByRole("button", { name: "确认上次操作", exact: true }).count(), 0)
+  await page.evaluate(() => { window.__uiTest.failAction = "" })
+  await page.locator(".lwy-shop-wallet").getByRole("button", { name: "刷新", exact: true }).click()
+  await page.locator('[data-product="cake"]').getByRole("button", { name: "购买", exact: true }).click()
+  await page.getByRole("status").filter({ hasText: "已购买草莓蛋糕" }).waitFor()
+  const calls = await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "buy_shop_item"))
+  assert.notEqual(calls[0].args.request_id, calls[1].args.request_id)
   assert.deepEqual(page.uiErrors, [])
   await page.close()
 })
@@ -183,26 +245,97 @@ test("full affection leaves gifts in the bag and the shop works without characte
   await page.close()
 })
 
-test("income updates preserve the shop and show one credit notice with wallet history", async () => {
+test("chat progress never credits gold before a manual claim and each step is independent", async () => {
   const page = await pageFor({}, "?page=shop")
   await page.evaluate(() => {
     window.__incomeShopNode = document.querySelector(".lwy-shop-wallet")
     const state = window.__uiTest.snapshot()
-    state.shop.coins += 10
-    state.shop.income_total += 10
     state.shop.income.count = 8
-    state.shop.income.earned = 30
-    state.shop.income.paid = 3
-    state.shop.ledger.unshift({id:"income-test",source:"daily_8",amount:10,balance:110,
-      ts:Date.now()/1000,item_id:"",day:state.today})
+    state.shop.income.steps.forEach(step => { step.ready = true })
     window.__uiTest.update({shop:state.shop})
   })
-  await page.getByText("相伴奖励已到账 +10 心意币", { exact:true }).waitFor()
+  assert.equal(await page.locator(".lwy-shop-balance strong").textContent(), "100")
+  assert.equal(await page.locator(".lwy-shop-income-notice").textContent(), "")
+  assert.equal(await page.getByRole("button", {name:"领取",exact:true}).count(), 3)
+  await page.locator(".lwy-shop-step").nth(2).getByRole("button", {name:"领取",exact:true}).click()
+  await page.getByText("相伴奖励已领取 +10 金币", { exact:true }).waitFor()
   assert.equal(await page.evaluate(() => window.__incomeShopNode === document.querySelector(".lwy-shop-wallet")), true)
-  await page.getByText("今日已到账 30 / 30 币", { exact:true }).waitFor()
+  await page.getByText("今日已领取 10 / 30 金币", { exact:true }).waitFor()
+  assert.equal(await page.getByRole("button", {name:"领取",exact:true}).count(), 2)
+  await page.locator(".lwy-shop-step").nth(2).getByText("已领取 +10", {exact:true}).waitFor()
+  assert.equal(await page.locator(".lwy-shop-balance strong").textContent(), "110")
   await page.getByRole("button", {name:"收支记录",exact:true}).click()
   await page.getByRole("region", {name:"收支记录",exact:true}).getByText("相伴奖励", {exact:true}).waitFor()
   await page.getByText("当时余额 110", {exact:true}).waitFor()
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+for (const failure of ["before", "after"]) test(`manual claim retries a ${failure}-save failure without duplicate gold`, async () => {
+  const page = await pageFor({}, "?page=shop")
+  await page.evaluate(failure => {
+    if (failure === "before") window.__uiTest.failAction = "claim_shop_coins"
+    else window.__uiTest.failAfterAction = "claim_shop_coins"
+  }, failure)
+  await page.locator(".lwy-shop-step").nth(0).getByRole("button", {name:"领取",exact:true}).click()
+  await page.getByRole("button", {name:"确认上次操作",exact:true}).waitFor()
+  assert.equal(await page.evaluate(() => window.__uiTest.snapshot().shop.coins), failure === "before" ? 100 : 110)
+  assert.equal(await page.locator(".lwy-shop-step").nth(1).getByRole("button").isDisabled(), true)
+  await page.evaluate(() => { window.__uiTest.failAction = ""; window.__uiTest.failAfterAction = "" })
+  await page.getByRole("button", {name:"确认上次操作",exact:true}).click()
+  await page.getByText("今日已领取 10 / 30 金币", {exact:true}).waitFor()
+  const detail = await page.evaluate(() => ({
+    shop:window.__uiTest.snapshot().shop,
+    calls:window.__uiTest.calls.filter(call => call.action === "claim_shop_coins"),
+  }))
+  assert.equal(detail.shop.coins, 110)
+  assert.equal(detail.shop.ledger.length, 1)
+  assert.deepEqual(detail.calls[0].args, detail.calls[1].args)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("rapid claim clicks submit once and block other shop actions until saved", async () => {
+  const page = await pageFor({}, "?page=shop")
+  await page.evaluate(() => { window.__uiTest.delay = 250 })
+  await page.locator(".lwy-shop-step").nth(0).getByRole("button").evaluate(button => {
+    button.click(); button.click(); button.click()
+  })
+  assert.equal(await page.locator('[data-product="tea"]').getByRole("button").isDisabled(), true)
+  await page.getByText("今日已领取 10 / 30 金币", {exact:true}).waitFor()
+  assert.equal(await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "claim_shop_coins").length), 1)
+  assert.equal(await page.locator(".lwy-shop-balance strong").textContent(), "110")
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("weekly and previous-period rewards can be claimed individually on mobile", async () => {
+  const page = await pageFor({viewport:{width:320,height:740}}, "?page=shop")
+  await page.evaluate(() => {
+    const state = window.__uiTest.snapshot()
+    state.shop.income.weekly_days = 4
+    state.shop.income.weekly.ready = true
+    const yesterday = new Date(state.today+"T12:00:00Z")
+    yesterday.setUTCDate(yesterday.getUTCDate()-1)
+    state.shop.income.pending = [{
+      reward:"daily_8",period:yesterday.toISOString().slice(0,10),coins:10,claimed:false,ready:true,
+    }]
+    window.__uiTest.update({shop:state.shop})
+  })
+  const weeklyClaim = page.locator(".lwy-shop-income > .lwy-shop-week").getByRole("button", {name:"领取",exact:true})
+  await weeklyClaim.waitFor()
+  await noHorizontalOverflow(page)
+  await page.screenshot({path:`${artifacts}/gold-claims-mobile.png`,fullPage:true})
+  await weeklyClaim.click()
+  await page.getByText("已领取 +40", {exact:true}).waitFor()
+  await page.locator(".lwy-shop-unclaimed").getByRole("button", {name:"领取",exact:true}).click()
+  await page.locator(".lwy-shop-unclaimed").waitFor({state:"hidden"})
+  const state = await page.evaluate(() => window.__uiTest.snapshot())
+  assert.equal(state.shop.coins, 150)
+  assert.equal(state.shop.income.earned, 0)
+  assert.equal(state.shop.income.weekly_paid, true)
+  assert.deepEqual(state.shop.ledger.map(item => item.source), ["daily_8","weekly"])
+  await noHorizontalOverflow(page)
   assert.deepEqual(page.uiErrors, [])
   await page.close()
 })
@@ -376,7 +509,7 @@ test("pointer hover, press and release are distinct without moving controls or f
   await page.mouse.move(940, 700)
   const idle = await button.evaluate(node => getComputedStyle(node).boxShadow)
   await button.hover()
-  await page.waitForFunction(() => getComputedStyle(document.querySelectorAll(".lwy-nav button")[3]).boxShadow !== "none")
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.lwy-nav button[aria-label="纪念日"]')).boxShadow !== "none")
   assert.notEqual(await button.evaluate(node => getComputedStyle(node).boxShadow), idle)
   assert.deepEqual(await button.boundingBox(), before)
   await page.mouse.down()
@@ -626,12 +759,15 @@ test("warnings and errors persist and a new operation never inherits an old succ
   await page.close()
 })
 
-test("desktop navigation starts collapsed, orders the shop second and preserves manual toggles", async () => {
+test("desktop navigation groups daily activities, keeps settings last and preserves manual toggles", async () => {
   const page = await pageFor()
-  assert.equal(await page.locator(".sidebar-collapsed").count(), 1)
+  assert.equal(await page.locator(".sidebar-collapsed").count(), 0)
   assert.deepEqual(await page.locator(".lwy-nav button").evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))),
-    ["关系概览", "礼物商店", "心动记录", "纪念日", "专属称呼", "设置"])
-  assert.equal(await page.locator(".lwy-nav button:visible").count(), 6)
+    ["关系概览", "共同经历", "礼物商店", "心动记录", "纪念日", "专属称呼", "设置"])
+  assert.equal(await page.getByRole("group", { name: "日常相处", exact: true }).getByRole("button").count(), 3)
+  assert.equal(await page.getByRole("group", { name: "关系记录", exact: true }).getByRole("button").count(), 3)
+  assert.equal(await page.locator(".lwy-nav button:visible").count(), 7)
+  await page.getByRole("button", { name: "收起侧栏", exact: true }).click()
   await navigate(page, "纪念日")
   await page.evaluate(() => window.__uiTest.update({ host_online: false }))
   assert.equal(await page.locator(".sidebar-collapsed").count(), 1)
@@ -649,11 +785,11 @@ test("desktop navigation starts collapsed, orders the shop second and preserves 
 test("nickname edits survive navigation, character changes and background updates", async () => {
   const page = await pageFor()
   await navigate(page, "专属称呼")
-  await page.getByLabel("陌生", { exact: true }).fill("初见的称呼")
+  await editNickname(page, "陌生", "初见的称呼")
   await page.locator(".lwy-scope select").selectOption("茉子")
-  await page.getByLabel("陌生", { exact: true }).fill("另一个称呼")
+  await editNickname(page, "陌生", "另一个称呼")
   await page.locator(".lwy-scope select").selectOption("YUI")
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "初见的称呼")
+  assert.equal(await nickname(page, "陌生").inputValue(), "初见的称呼")
   await navigate(page, "关系概览")
   await navigate(page, "专属称呼")
   await page.evaluate(() => {
@@ -661,17 +797,17 @@ test("nickname edits survive navigation, character changes and background update
     state.scopes[0].nicknames.familiar = "后台更新的称呼"
     window.__uiTest.update({ scopes: state.scopes })
   })
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "初见的称呼")
+  assert.equal(await nickname(page, "陌生").inputValue(), "初见的称呼")
   await page.getByRole("button", { name: "撤销修改", exact: true }).click()
-  assert.equal(await page.getByLabel("熟悉", { exact: true }).inputValue(), "后台更新的称呼")
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "")
+  assert.equal(await nickname(page, "熟悉").inputValue(), "后台更新的称呼")
+  assert.equal(await page.getByRole("combobox", { name: "陌生", exact: true }).inputValue(), "inherit")
   await page.locator(".lwy-scope select").selectOption("茉子")
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "另一个称呼")
+  assert.equal(await nickname(page, "陌生").inputValue(), "另一个称呼")
   await page.getByRole("button", { name: "保存", exact: true }).click()
-  await page.waitForFunction(() => window.__uiTest.calls.some(call => call.action === "set_nicknames"))
-  const call = await page.evaluate(() => window.__uiTest.calls.find(call => call.action === "set_nicknames"))
+  await page.waitForFunction(() => window.__uiTest.calls.some(call => call.action === "set_addressing"))
+  const call = await page.evaluate(() => window.__uiTest.calls.find(call => call.action === "set_addressing"))
   assert.equal(call.args.scope, "茉子")
-  assert.equal(call.args.nicknames.stranger, "另一个称呼")
+  assert.equal(call.args.changes.stages.stranger.text, "另一个称呼")
   assert.deepEqual(page.uiErrors, [])
   await page.close()
 })
@@ -679,20 +815,20 @@ test("nickname edits survive navigation, character changes and background update
 test("nickname save merges background changes to untouched stages", async () => {
   const page = await pageFor()
   await navigate(page, "专属称呼")
-  await page.getByLabel("陌生", { exact: true }).fill("my draft")
+  await editNickname(page, "陌生", "my draft")
   await page.evaluate(() => {
     const state = window.__uiTest.snapshot()
     state.scopes[0].nicknames.familiar = "new friend"
     window.__uiTest.update({ scopes: state.scopes })
   })
-  assert.equal(await page.getByLabel("熟悉", { exact: true }).inputValue(), "new friend")
+  assert.equal(await nickname(page, "熟悉").inputValue(), "new friend")
   await page.getByRole("button", { name: "保存", exact: true }).click()
   await page.waitForFunction(() => window.__uiTest.snapshot().scopes[0].nicknames.stranger === "my draft")
   const saved = await page.evaluate(() => window.__uiTest.snapshot().scopes[0].nicknames)
   assert.equal(saved.familiar, "new friend")
-  const call = await page.evaluate(() => window.__uiTest.calls.find(call => call.action === "set_nicknames"))
-  assert.deepEqual(call.args.nicknames, { stranger: "my draft" })
-  assert.deepEqual(call.args.expected_nicknames, { stranger: "" })
+  const call = await page.evaluate(() => window.__uiTest.calls.find(call => call.action === "set_addressing"))
+  assert.deepEqual(call.args.changes, { stages: { stranger: { mode: "custom", text: "my draft" } } })
+  assert.deepEqual(call.args.expected, { stages: { stranger: { mode: "inherit", text: "" } } })
   assert.deepEqual(page.uiErrors, [])
   await page.close()
 })
@@ -700,10 +836,10 @@ test("nickname save merges background changes to untouched stages", async () => 
 test("nickname save preserves unrelated changes made while the request is pending", async () => {
   const page = await pageFor()
   await navigate(page, "专属称呼")
-  await page.getByLabel("陌生", { exact: true }).fill("my draft")
+  await editNickname(page, "陌生", "my draft")
   await page.evaluate(() => { window.__uiTest.delay = 350 })
   await page.getByRole("button", { name: "保存", exact: true }).click()
-  await page.waitForFunction(() => window.__uiTest.calls.some(call => call.action === "set_nicknames"))
+  await page.waitForFunction(() => window.__uiTest.calls.some(call => call.action === "set_addressing"))
   await page.evaluate(() => {
     const state = window.__uiTest.snapshot()
     state.scopes[0].nicknames.familiar = "new friend"
@@ -711,7 +847,7 @@ test("nickname save preserves unrelated changes made while the request is pendin
   })
   await page.waitForFunction(() => window.__uiTest.snapshot().scopes[0].nicknames.stranger === "my draft")
   assert.equal(await page.evaluate(() => window.__uiTest.snapshot().scopes[0].nicknames.familiar), "new friend")
-  assert.equal(await page.getByLabel("熟悉", { exact: true }).inputValue(), "new friend")
+  assert.equal(await nickname(page, "熟悉").inputValue(), "new friend")
   assert.deepEqual(page.uiErrors, [])
   await page.close()
 })
@@ -719,22 +855,22 @@ test("nickname save preserves unrelated changes made while the request is pendin
 test("nickname conflicts preserve drafts and allow refresh, discard and a new edit", async () => {
   const page = await pageFor()
   await navigate(page, "专属称呼")
-  await page.getByLabel("陌生", { exact: true }).fill("my draft")
+  await editNickname(page, "陌生", "my draft")
   await page.evaluate(() => { window.__uiTest.delay = 350 })
   await page.getByRole("button", { name: "保存", exact: true }).click()
-  await page.waitForFunction(() => window.__uiTest.calls.some(call => call.action === "set_nicknames"))
+  await page.waitForFunction(() => window.__uiTest.calls.some(call => call.action === "set_addressing"))
   await page.evaluate(() => {
     const state = window.__uiTest.snapshot()
     state.scopes[0].nicknames.stranger = "other panel"
     window.__uiTest.update({ scopes: state.scopes })
   })
   await page.getByRole("alert").filter({ hasText: "称呼已在其他位置更新" }).waitFor()
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "my draft")
+  assert.equal(await nickname(page, "陌生").inputValue(), "my draft")
   assert.equal(await page.evaluate(() => window.__uiTest.snapshot().scopes[0].nicknames.stranger), "other panel")
   await page.locator(".lwy-feedback-dock").getByRole("button", { name: "刷新", exact: true }).click()
   await page.getByRole("button", { name: "撤销修改", exact: true }).click()
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "other panel")
-  await page.getByLabel("陌生", { exact: true }).fill("revised")
+  assert.equal(await nickname(page, "陌生").inputValue(), "other panel")
+  await editNickname(page, "陌生", "revised")
   await page.getByRole("button", { name: "保存", exact: true }).click()
   await page.waitForFunction(() => window.__uiTest.snapshot().scopes[0].nicknames.stranger === "revised")
   assert.deepEqual(page.uiErrors, [])
@@ -744,17 +880,17 @@ test("nickname conflicts preserve drafts and allow refresh, discard and a new ed
 test("nickname save uses normalized server values even when refreshing fails", async () => {
   const page = await pageFor()
   await navigate(page, "专属称呼")
-  await page.getByLabel("陌生", { exact: true }).fill("hi  pal")
+  await editNickname(page, "陌生", "hi  pal")
   await page.evaluate(() => { window.__uiTest.failRefresh = true })
   await page.getByRole("button", { name: "保存", exact: true }).click()
   await page.getByText("称呼已保存 · 显示数据尚未更新，请刷新。", { exact: true }).waitFor()
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "hi pal")
+  assert.equal(await nickname(page, "陌生").inputValue(), "hi pal")
   assert.equal(await page.evaluate(() => window.__uiTest.snapshot().scopes[0].nicknames.stranger), "hi pal")
   assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true)
   await page.evaluate(() => { window.__uiTest.failRefresh = false })
   await page.locator(".lwy-feedback-dock").getByRole("button", { name: "刷新", exact: true }).click()
-  assert.equal(await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "set_nicknames").length), 1)
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "hi pal")
+  assert.equal(await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "set_addressing").length), 1)
+  assert.equal(await nickname(page, "陌生").inputValue(), "hi pal")
   assert.deepEqual(page.uiErrors, [])
   await page.close()
 })
@@ -762,16 +898,16 @@ test("nickname save uses normalized server values even when refreshing fails", a
 test("nickname save can retry a committed request whose response was lost", async () => {
   const page = await pageFor()
   await navigate(page, "专属称呼")
-  await page.getByLabel("陌生", { exact: true }).fill("saved name")
-  await page.evaluate(() => { window.__uiTest.failAfterAction = "set_nicknames" })
+  await editNickname(page, "陌生", "saved name")
+  await page.evaluate(() => { window.__uiTest.failAfterAction = "set_addressing" })
   await page.getByRole("button", { name: "保存", exact: true }).click()
   await page.getByRole("alert").filter({ hasText: "操作未完成" }).waitFor()
   assert.equal(await page.evaluate(() => window.__uiTest.snapshot().scopes[0].nicknames.stranger), "saved name")
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "saved name")
+  assert.equal(await nickname(page, "陌生").inputValue(), "saved name")
   await page.evaluate(() => { window.__uiTest.failAfterAction = "" })
   await page.getByRole("button", { name: "保存", exact: true }).click()
   await page.getByText("称呼已保存", { exact: true }).waitFor()
-  const calls = await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "set_nicknames"))
+  const calls = await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "set_addressing"))
   assert.equal(calls.length, 2)
   assert.deepEqual(calls[0].args, calls[1].args)
   assert.deepEqual(page.uiErrors, [])
@@ -781,16 +917,337 @@ test("nickname save can retry a committed request whose response was lost", asyn
 test("failed nickname save preserves the draft and supports retry", async () => {
   const page = await pageFor()
   await navigate(page, "专属称呼")
-  await page.getByLabel("陌生", { exact: true }).fill("还没保存")
-  await page.evaluate(() => { window.__uiTest.failAction = "set_nicknames" })
+  await editNickname(page, "陌生", "还没保存")
+  await page.evaluate(() => { window.__uiTest.failAction = "set_addressing" })
   await page.getByRole("button", { name: "保存", exact: true }).click()
   await page.getByRole("alert").filter({ hasText: "操作未完成，请稍后重试。" }).waitFor()
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), "还没保存")
+  assert.equal(await nickname(page, "陌生").inputValue(), "还没保存")
   await page.evaluate(() => { window.__uiTest.failAction = "" })
   await page.getByRole("button", { name: "保存", exact: true }).click()
   await page.waitForFunction(() => window.__uiTest.snapshot().scopes[0].nicknames.stranger === "还没保存")
   assert.deepEqual(page.uiErrors, [])
   await page.close()
+})
+
+test("address modes preview inheritance barriers, validate empty custom names and reset defaults", async () => {
+  const page = await pageFor()
+  await navigate(page, "专属称呼")
+  const row = stage => page.locator(`[data-stage="${stage}"]`)
+  await row("lover").getByText("生效：小可爱 · 自定义 · 好感", { exact: true }).waitFor()
+  await page.getByRole("combobox", { name: "好感", exact: true }).selectOption("persona")
+  await row("lover").getByText("生效：人设原称呼 · 角色人设 · 好感", { exact: true }).waitFor()
+  await page.getByRole("combobox", { name: "陌生", exact: true }).selectOption("custom")
+  await page.getByRole("alert").filter({ hasText: "自定义模式需要填写称呼" }).waitFor()
+  assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true)
+  await nickname(page, "陌生").fill("阁下")
+  await row("familiar").getByText("生效：朋友 · 自定义", { exact: true }).waitFor()
+  await page.getByRole("button", { name: "恢复陌生的阶段默认", exact: true }).click()
+  assert.equal(await page.getByRole("combobox", { name: "陌生", exact: true }).inputValue(), "auto")
+  assert.equal(await nickname(page, "陌生").count(), 0)
+  await page.getByRole("button", { name: "保存", exact: true }).click()
+  await page.getByText("称呼已保存", { exact: true }).waitFor()
+  const saved = await page.evaluate(() => window.__uiTest.snapshot().scopes[0].addressing)
+  assert.equal(saved.stages.fond.mode, "persona")
+  assert.equal(saved.stages.stranger.mode, "auto")
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("modern address defaults, preferred names and avoid-list conflicts are usable", async () => {
+  const page = await pageFor()
+  await page.evaluate(() => {
+    const state = window.__uiTest.snapshot()
+    state.scopes[0].confessed = true
+    state.scopes[0].addressing = { version: 1,
+      stages: Object.fromEntries(state.stages.map(({ key }) => [key, { mode: "auto", text: "" }])),
+      endearments: true, preferred_name: "", avoided: [] }
+    window.__uiTest.update({ scopes: state.scopes })
+  })
+  await navigate(page, "专属称呼")
+  const lover = page.locator('[data-stage="lover"]')
+  await lover.getByText(/人设称呼；可偶尔用「亲爱的」/).waitFor()
+  await page.getByLabel("恋爱确认后，允许偶尔使用通用亲昵称呼", { exact: true }).uncheck()
+  await lover.getByText("生效：人设原称呼 · 阶段默认", { exact: true }).waitFor()
+  await page.getByLabel("偏好名字", { exact: true }).fill("小林")
+  await lover.getByText("生效：小林 · 偏好名字", { exact: true }).waitFor()
+  await page.getByLabel("添加不接受的称呼", { exact: true }).fill("小林")
+  await page.getByRole("button", { name: "添加称呼禁用词", exact: true }).click()
+  await page.getByRole("alert").filter({ hasText: "所选名字与禁用词冲突" }).waitFor()
+  assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true)
+  await page.getByRole("button", { name: "解除禁用「小林」", exact: true }).click()
+  await page.getByLabel("添加不接受的称呼", { exact: true }).fill("宝贝")
+  await page.getByRole("button", { name: "添加称呼禁用词", exact: true }).click()
+  await page.getByRole("button", { name: "保存", exact: true }).click()
+  await page.getByText("称呼已保存", { exact: true }).waitFor()
+  const saved = await page.evaluate(() => window.__uiTest.snapshot().scopes[0].addressing)
+  assert.deepEqual(saved.avoided, ["宝贝"])
+  assert.equal(saved.preferred_name, "小林")
+  assert.equal(saved.endearments, false)
+  await page.locator(".lwy-workspace").evaluate(node => { node.scrollTop = 0 })
+  await page.screenshot({ path: resolve(artifacts, "addressing-desktop.png") })
+  await page.locator(".lwy-workspace").evaluate(node => { node.scrollTop = node.scrollHeight })
+  await page.screenshot({ path: resolve(artifacts, "addressing-preferences-desktop.png") })
+  await noHorizontalOverflow(page)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("address preferences survive concurrent character updates and reject conflicting preferred names", async () => {
+  const page = await pageFor()
+  await navigate(page, "专属称呼")
+  await page.getByLabel("偏好名字", { exact: true }).fill("my name")
+  await page.evaluate(() => { window.__uiTest.delay = 350 })
+  await page.getByRole("button", { name: "保存", exact: true }).click()
+  await page.waitForFunction(() => window.__uiTest.calls.some(call => call.action === "set_addressing"))
+  await page.evaluate(() => {
+    const state = window.__uiTest.snapshot()
+    const names = state.scopes[0].nicknames
+    state.scopes[0].addressing = { version: 1, stages: Object.fromEntries(state.stages.map(({ key }) => [
+      key, { mode: names[key] ? "custom" : "inherit", text: names[key] || "" },
+    ])), endearments: false, preferred_name: "chat name", avoided: ["宝贝"] }
+    window.__uiTest.update({ scopes: state.scopes })
+  })
+  await page.getByRole("alert").filter({ hasText: "称呼已在其他位置更新" }).waitFor()
+  assert.equal(await page.getByLabel("偏好名字", { exact: true }).inputValue(), "my name")
+  await page.getByRole("button", { name: "解除禁用「宝贝」", exact: true }).waitFor()
+  await page.getByRole("button", { name: "撤销修改", exact: true }).click()
+  assert.equal(await page.getByLabel("偏好名字", { exact: true }).inputValue(), "chat name")
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("one click restores all address defaults immediately and keeps the other role intact", async () => {
+  const page = await pageFor({}, "?page=nicknames")
+  const before = await page.evaluate(() => window.__uiTest.snapshot())
+  await editNickname(page, "陌生", "draft")
+  await page.getByLabel("偏好名字", { exact: true }).fill("draft name")
+  await page.getByLabel("添加不接受的称呼", { exact: true }).fill("draft avoid")
+  await page.getByRole("button", { name: "恢复全部默认", exact: true }).click()
+  await page.getByText("当前关系的称呼已全部恢复默认", { exact: true }).waitFor()
+  const saved = await page.evaluate(() => window.__uiTest.snapshot())
+  assert.deepEqual(saved.scopes[0].addressing, {
+    version: 1, stages: Object.fromEntries(saved.stages.map(({ key }) => [key, { mode: "auto", text: "" }])),
+    endearments: true, preferred_name: "", avoided: [],
+  })
+  assert.deepEqual(saved.scopes[0].nicknames, {})
+  assert.deepEqual(saved.scopes[1], before.scopes[1])
+  for (const key of ["affection", "stage", "history", "milestones"]) assert.deepEqual(saved.scopes[0][key], before.scopes[0][key])
+  assert.equal(await page.getByLabel("偏好名字", { exact: true }).inputValue(), "")
+  assert.equal(await page.getByLabel("添加不接受的称呼", { exact: true }).inputValue(), "")
+  assert.equal(await page.getByRole("button", { name: "恢复全部默认", exact: true }).isDisabled(), true)
+  await page.screenshot({ path: resolve(artifacts, "addressing-reset-defaults-desktop.png") })
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("restore defaults keeps drafts on failure and retries a lost response without overwriting changes", async () => {
+  const page = await pageFor({}, "?page=nicknames")
+  await page.getByLabel("偏好名字", { exact: true }).fill("my draft")
+  await page.evaluate(() => { window.__uiTest.failAction = "set_addressing" })
+  await page.getByRole("button", { name: "恢复全部默认", exact: true }).click()
+  await page.getByRole("alert").filter({ hasText: "操作未完成" }).waitFor()
+  assert.equal(await page.getByLabel("偏好名字", { exact: true }).inputValue(), "my draft")
+  await page.evaluate(() => { window.__uiTest.failAction = ""; window.__uiTest.failAfterAction = "set_addressing" })
+  await page.getByRole("button", { name: "恢复全部默认", exact: true }).click()
+  await page.getByRole("alert").filter({ hasText: "操作未完成" }).waitFor()
+  await page.evaluate(() => { window.__uiTest.failAfterAction = "" })
+  await page.getByRole("button", { name: "恢复全部默认", exact: true }).click()
+  await page.getByText("当前关系的称呼已全部恢复默认", { exact: true }).waitFor()
+  const calls = await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "set_addressing"))
+  assert.equal(calls.length, 3)
+  assert.deepEqual(calls[0].args, calls[1].args)
+  assert.deepEqual(calls[1].args, calls[2].args)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("a confirmed relationship remains a partnership when closeness falls", async () => {
+  const page = await pageFor()
+  await page.evaluate(() => {
+    const state = window.__uiTest.snapshot()
+    Object.assign(state.scopes[0], { confessed: true, stage: "fond", stage_index: 2,
+      affection: 42, next_stage: "ambiguous", points_to_next: 18 })
+    window.__uiTest.update({ scopes: state.scopes })
+  })
+  await page.getByText("恋人 · 近期较疏远", { exact: true }).waitFor()
+  await page.getByText("当前亲近程度：好感", { exact: true }).waitFor()
+  assert.equal(await page.getByText("再 18 点就是「暧昧」", { exact: true }).count(), 0)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+async function prepareRomance(page, affection = 90) {
+  await page.evaluate(affection => {
+    const state = window.__uiTest.snapshot()
+    Object.assign(state.scopes[0], {confessed:true,confessed_on:"2026-11-01",confession:"old romance",
+      affection,stage:affection ? "lover" : "stranger",stage_index:affection ? 4 : 0,
+      next_stage:affection ? null : "familiar",points_to_next:affection ? 0 : 20})
+    state.scopes[0].milestones.lover = "2026-11-01"
+    window.__uiTest.update({scopes:state.scopes})
+  }, affection)
+}
+
+test("zeroing affection explicitly keeps romance and canceling never changes data", async () => {
+  const page = await pageFor({}, "?page=settings")
+  await prepareRomance(page)
+  await page.getByRole("button", {name:"清零好感",exact:true}).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByText(/已确认的恋爱关系、在一起日期和历史保留/).waitFor()
+  await dialog.getByRole("button", {name:"取消",exact:true}).click()
+  assert.equal(await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "reset_affection").length), 0)
+  await page.getByRole("button", {name:"清零好感",exact:true}).click()
+  await dialog.getByRole("button", {name:"清零好感",exact:true}).click()
+  await page.getByText("好感已清零，已确认关系保留", {exact:true}).waitFor()
+  const state = await page.evaluate(() => window.__uiTest.snapshot())
+  assert.equal(state.scopes[0].affection, 0)
+  assert.equal(state.scopes[0].confessed, true)
+  assert.equal(state.scopes[0].milestones.lover, "2026-11-01")
+  await navigate(page, "关系概览")
+  await page.getByText("恋人 · 近期较疏远", {exact:true}).waitFor()
+  await page.getByText("当前亲近程度：陌生", {exact:true}).waitFor()
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("relationship restart clears zero-affection romance and dates while keeping history and assets", async () => {
+  const page = await pageFor({}, "?page=settings")
+  await prepareRomance(page, 0)
+  const before = await page.evaluate(() => window.__uiTest.snapshot())
+  await page.getByRole("button", {name:"重新开始关系",exact:true}).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByText(/将「YUI」的好感清零/).waitFor()
+  await page.screenshot({path:`${artifacts}/restart-confirm-desktop.png`})
+  await dialog.getByRole("button", {name:"取消",exact:true}).click()
+  assert.equal(await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "restart_relationship").length), 0)
+  await page.getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await dialog.getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.getByText("关系已重新开始，当前为陌生", {exact:true}).waitFor()
+  const state = await page.evaluate(() => window.__uiTest.snapshot())
+  assert.equal(state.scopes[0].confessed, false)
+  assert.equal(state.scopes[0].confessed_on, null)
+  assert.equal(state.scopes[0].milestones.lover, undefined)
+  assert.equal(state.scopes[0].first_met, before.scopes[0].first_met)
+  assert.equal(state.scopes[0].history[0].source, "restart")
+  assert.equal(state.scopes[0].history.length, before.scopes[0].history.length+1)
+  assert.deepEqual(state.scopes[0].nicknames, before.scopes[0].nicknames)
+  assert.deepEqual(state.scopes[1], before.scopes[1])
+  assert.deepEqual(state.shop, before.shop)
+  await navigate(page, "关系概览")
+  assert.equal(await page.locator(".lwy-stage-name").textContent(), "陌生")
+  assert.equal(await page.getByText("恋人 · 近期较疏远", {exact:true}).count(), 0)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("restart rejects changes made while confirmation is open and requires a fresh confirmation", async () => {
+  const page = await pageFor({}, "?page=settings")
+  await prepareRomance(page)
+  await page.getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.evaluate(() => {
+    const state = window.__uiTest.snapshot()
+    state.scopes[0].gain_revision += 1
+    state.scopes[0].affection = 95
+    window.__uiTest.update({scopes:state.scopes})
+  })
+  await page.getByRole("dialog").getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.getByRole("alert").filter({hasText:"关系已发生变化，请刷新后重新确认。"}).waitFor()
+  assert.equal(await page.getByRole("button", {name:"重新开始关系",exact:true}).isDisabled(), true)
+  assert.equal(await page.evaluate(() => window.__uiTest.snapshot().scopes[0].affection), 95)
+  await page.locator(".lwy-feedback-dock").getByRole("button", {name:"刷新",exact:true}).click()
+  await page.getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.getByRole("dialog").getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.getByText("关系已重新开始，当前为陌生", {exact:true}).waitFor()
+  const calls = await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "restart_relationship"))
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1].args.expected_revision, calls[0].args.expected_revision+1)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("failed restart keeps romance and retry needs explicit confirmation again", async () => {
+  const page = await pageFor({}, "?page=settings")
+  await prepareRomance(page)
+  await page.evaluate(() => { window.__uiTest.failAction = "restart_relationship" })
+  await page.getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.getByRole("dialog").getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.getByRole("alert").filter({hasText:"操作未完成"}).waitFor()
+  assert.equal(await page.evaluate(() => window.__uiTest.snapshot().scopes[0].confessed), true)
+  await page.evaluate(() => { window.__uiTest.failAction = ""; window.__uiTest.delay = 250 })
+  await page.getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.getByRole("dialog").getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.getByText("关系已重新开始，当前为陌生", {exact:true}).waitFor()
+  assert.equal(await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "restart_relationship").length), 2)
+  assert.equal(await page.evaluate(() => window.__uiTest.snapshot().scopes[0].history.filter(item => item.source === "restart").length), 1)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("restart confirmation stays with the selected relationship during a character change", async () => {
+  const page = await pageFor({}, "?page=settings")
+  await prepareRomance(page)
+  await page.getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.evaluate(() => {
+    const state = window.__uiTest.snapshot()
+    state.current_character = "茉子"
+    state.scopes.forEach(item => { item.is_current = item.label === "茉子" })
+    window.__uiTest.update({current_character:state.current_character,scopes:state.scopes})
+  })
+  await page.getByRole("dialog").getByRole("button", {name:"重新开始关系",exact:true}).click()
+  await page.getByText("关系已重新开始，当前为陌生", {exact:true}).waitFor()
+  const detail = await page.evaluate(() => ({state:window.__uiTest.snapshot(),
+    call:window.__uiTest.calls.find(call => call.action === "restart_relationship")}))
+  assert.equal(detail.call.args.scope, "YUI")
+  assert.equal(detail.state.scopes[0].confessed, false)
+  assert.equal(detail.state.scopes[1].affection, 23)
+  assert.deepEqual(page.uiErrors, [])
+  await page.close()
+})
+
+test("zeroing and restart confirmations fit all eight languages at 320px", async () => {
+  for (const locale of ["zh-CN","zh-TW","en","ja","ko","es","pt","ru"]) {
+    const messages = JSON.parse(readFileSync(resolve(pluginRoot, "i18n", `${locale}.json`), "utf8"))
+    const page = await pageFor({viewport:{width:320,height:640}}, `?page=settings&locale=${locale}`)
+    await prepareRomance(page)
+    for (const key of ["settings.reset","restart.confirm"]) {
+      await page.getByRole("button", {name:messages[key],exact:true}).click()
+      const dialog = page.getByRole("dialog")
+      await dialog.waitFor()
+      await noHorizontalOverflow(page)
+      const box = await dialog.boundingBox()
+      assert.ok(box.x >= 0 && box.y >= 0 && box.x+box.width <= 320 && box.y+box.height <= 640)
+      if (key === "restart.confirm" && ["zh-CN","en"].includes(locale))
+        await page.screenshot({path:`${artifacts}/restart-confirm-${locale}-mobile.png`})
+      await page.keyboard.press("Escape")
+      await dialog.waitFor({state:"hidden"})
+    }
+    assert.deepEqual(page.uiErrors, [])
+    await page.close()
+  }
+})
+
+test("addressing fits eight languages at 320px with all modes and preference controls", async () => {
+  for (const locale of ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "pt", "ru"]) {
+    const messages = JSON.parse(readFileSync(resolve(pluginRoot, "i18n", `${locale}.json`), "utf8"))
+    const page = await pageFor({ viewport: { width: 320, height: 800 } }, `?locale=${locale}`)
+    await navigate(page, messages["nav.nicknames"] || "Nicknames")
+    for (const control of await page.locator(".lwy-nick-controls select").all()) {
+      await control.selectOption("custom")
+    }
+    for (const input of await page.locator(".lwy-nick-custom input").all()) await input.fill("Alexandra💙")
+    await page.getByLabel(messages["nick.preferred"], { exact: true }).fill("Alex")
+    await page.getByLabel(messages["nick.avoidInput"], { exact: true }).fill("Darling")
+    await page.getByRole("button", { name: messages["nick.addAvoid"], exact: true }).click()
+    await noHorizontalOverflow(page)
+    const overflow = await page.locator(".lwy-nick-controls, .lwy-nick-custom, .lwy-address-prefs").evaluateAll(nodes =>
+      nodes.filter(node => node.scrollWidth > node.clientWidth + 2).map(node => node.className))
+    assert.deepEqual(overflow, [], locale)
+    await page.locator(".lwy-workspace").evaluate(node => { node.scrollTop = 0 })
+    await page.screenshot({ path: resolve(artifacts, `addressing-${locale}-mobile.png`) })
+    await page.locator(".lwy-workspace").evaluate(node => { node.scrollTop = node.scrollHeight })
+    await page.screenshot({ path: resolve(artifacts, `addressing-${locale}-preferences-mobile.png`) })
+    assert.deepEqual(page.uiErrors, [], locale)
+    await page.close()
+  }
 })
 
 test("successful save followed by refresh failure closes the modal and offers refresh only", async () => {
@@ -981,7 +1438,7 @@ test("first-met import fits narrow translated dialogs and supports shared relati
       state.scopes = [{ ...state.scopes[0], key: "shared", label: null }]
       window.__uiTest.update({ per_character: false, scopes: state.scopes })
     })
-    await page.locator(".lwy-nav button").nth(3).click()
+    await page.locator(".lwy-nav").getByRole("button", { name: locale === "en" ? "Dates" : "纪念日", exact: true }).click()
     await page.getByRole("button", { name: locale === "en" ? "Import From Host History" : "从宿主历史导入", exact: true }).click()
     const dialog = page.getByRole("dialog")
     await dialog.locator(".lwy-import-dates").waitFor()
@@ -1145,7 +1602,9 @@ test("first-met choices fit translated narrow dialogs including legacy restore n
         plugin_first_met_legacy: true, host_first_met: "2026-03-04" }]
       window.__uiTest.update({ per_character: false, scopes: state.scopes })
     })
-    await page.locator(".lwy-nav button").nth(3).click()
+    const dateLabel = await page.evaluate(() => window.__NEKO_PAYLOAD.i18n.messages[document.documentElement.lang]["nav.dates"]
+      || window.__NEKO_PAYLOAD.i18n.messages.en["nav.dates"])
+    await page.locator(".lwy-nav").getByRole("button", { name: dateLabel, exact: true }).click()
     await page.locator(".lwy-card-head .lwy-btns button").last().click()
     const dialog = page.getByRole("dialog")
     await dialog.locator(".lwy-met-options").waitFor()
@@ -1198,6 +1657,11 @@ test("short host panels keep navigation usable without horizontal or unnecessary
     if (height >= 300) assert.ok(sizes.scroll <= sizes.client + 1, `navigation fits at ${width}x${height}`)
     await navigate(page, "设置")
     await page.getByRole("heading", { name: "设置", exact: true }).waitFor()
+    await navigate(page, "共同经历")
+    await page.getByRole("heading", { name: "共同经历", exact: true }).waitFor()
+    const experienceBox = await page.locator('.lwy-nav button[aria-current="page"]').boundingBox()
+    assert.ok(experienceBox.y >= 0 && experienceBox.y + experienceBox.height <= height + 1)
+    await navigate(page, "设置")
     const settingsBox = await page.locator(".lwy-nav button").last().boundingBox()
     assert.ok(settingsBox.y >= 0 && settingsBox.y + settingsBox.height <= height + 1)
     await noHorizontalOverflow(page)
@@ -1462,7 +1926,7 @@ test("empty and artwork-off states recover without blank navigation", async () =
   await page.getByRole("button", { name: "刷新角色", exact: true }).click()
   assert.equal(await page.evaluate(() => window.__uiTest.calls.at(-1).action), "sync_characters")
   await navigate(page, "设置")
-  assert.equal(await page.locator(".lwy-nav button:visible").count(), 6)
+  assert.equal(await page.locator(".lwy-nav button:visible").count(), 7)
   assert.deepEqual(page.uiErrors, [])
   await page.close()
 })
@@ -1704,7 +2168,7 @@ test("feedback preserves page nodes and scroll, and stays readable across widths
       const box = await page.locator(".lwy-feedback-dock").boundingBox()
       assert.ok(box.x >= 56 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= 620)
       await page.locator(".lwy-workspace").evaluate(node => { node.scrollTop = node.scrollHeight })
-      const reset = page.getByRole("button", { name: locale === "en" ? "Reset" : "重置", exact: true })
+      const reset = page.getByRole("button", { name: locale === "en" ? "Zero affection" : "清零好感", exact: true })
       const resetBox = await reset.boundingBox()
       assert.ok(resetBox.y + resetBox.height <= box.y)
     }
@@ -1719,8 +2183,8 @@ test("name limits count Unicode characters without splitting emoji", async () =>
   const page = await pageFor()
   await navigate(page, "专属称呼")
   const nickname = "小".repeat(11) + "💙"
-  await page.getByLabel("陌生", { exact: true }).fill(nickname + "尾")
-  assert.equal(await page.getByLabel("陌生", { exact: true }).inputValue(), nickname)
+  await editNickname(page, "陌生", nickname + "尾")
+  assert.equal(await page.getByLabel("陌生的自定义称呼", { exact: true }).inputValue(), nickname)
   assert.equal(await page.locator(".lwy-nick-row").first().locator(".lwy-counter").textContent(), "12/12")
   await page.getByRole("button", { name: "保存", exact: true }).click()
   await page.waitForFunction(expected => window.__uiTest.snapshot().scopes[0].nicknames.stranger === expected, nickname)

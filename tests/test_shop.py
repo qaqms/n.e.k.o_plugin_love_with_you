@@ -30,8 +30,11 @@ def test_manual_claim_cannot_mint_more_coins(shop):
     state = shop.new_state()
     before = copy.deepcopy(state)
     for day in ["2026-11-07", "2026-11-06", "2026-11-08"]:
-        with pytest.raises(shop.ShopError, match="shop_income_automatic"):
+        with pytest.raises(shop.ShopError, match="shop_invalid_request"):
             shop.claim(state, day)
+        assert state == before
+        with pytest.raises(shop.ShopError, match="shop_reward_unavailable"):
+            shop.claim(state, day, "daily_1", day)
         assert state == before
 
 

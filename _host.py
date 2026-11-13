@@ -13,7 +13,6 @@ intercept loopback traffic.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
@@ -24,9 +23,19 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from typing import Any
 
+from . import _json as strict_json
+
 _DEFAULT_PORT = 48911
 _TIMEOUT_SECONDS = 3.0
-_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+_MAX_JSON_BYTES = 8 * 1024 * 1024
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 _port_cache: int | None = None
 
 
@@ -44,7 +53,7 @@ def main_server_port() -> int:
     port = _DEFAULT_PORT
     for key in ("NEKO_MAIN_SERVER_PORT", "MAIN_SERVER_PORT"):
         raw = (os.getenv(key) or "").strip()
-        if raw.isdigit() and 1 <= int(raw) <= 65535:
+        if len(raw) <= 5 and raw.isascii() and raw.isdigit() and 1 <= int(raw) <= 65535:
             port = int(raw)
             break
     _port_cache = port
@@ -52,6 +61,7 @@ def main_server_port() -> int:
 
 
 def _get_json(path: str, *, timeout: float = _TIMEOUT_SECONDS, max_bytes: int | None = None) -> Any | None:
+    limit = _MAX_JSON_BYTES if max_bytes is None else min(max_bytes, _MAX_JSON_BYTES)
     url = f"http://127.0.0.1:{main_server_port()}{path}"
     # zh-CN skips the host's persona auto-translation on /api/characters.
     request = urllib.request.Request(url, headers={"Accept": "application/json", "Accept-Language": "zh-CN"})
@@ -59,10 +69,10 @@ def _get_json(path: str, *, timeout: float = _TIMEOUT_SECONDS, max_bytes: int | 
         with _OPENER.open(request, timeout=timeout) as response:
             if response.status >= 400:
                 return None
-            raw = response.read() if max_bytes is None else response.read(max_bytes + 1)
-            if max_bytes is not None and len(raw) > max_bytes:
+            raw = response.read(limit + 1)
+            if len(raw) > limit:
                 return None
-            return json.loads(raw.decode("utf-8"))
+            return strict_json.loads(raw.decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError, RecursionError):
         return None
 
@@ -104,7 +114,7 @@ def fetch_recent_chat(character: str) -> list[Any]:
     if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
         raise HistoryError("host_history_unavailable")
     try:
-        rows = json.loads(payload["content"])
+        rows = strict_json.loads(payload["content"])
     except (ValueError, RecursionError) as exc:
         raise HistoryError("host_history_unavailable") from exc
     if not isinstance(rows, list):
@@ -141,7 +151,9 @@ def earliest_chat_date(rows: Any, now: float | None = None) -> str | None:
         if (
             metadata.get("source") in ("theater_numeric_v2", "avatar-drop", "tool", "agent")
             or "avatar-drop" in sources
-            or metadata.get("event_type") in ("gift_received", "relationship_context", "proactive_confession")
+            or metadata.get("event_type") in (
+                "gift_received", "relationship_context", "proactive_confession", "experience_note",
+            )
             or metadata.get("turn_type") in ("proactive_reply", "proactive_instruction")
         ):
             pending_user = False
@@ -215,7 +227,7 @@ def fetch_first_met(character: str | None = None) -> dict[str, Any]:
         if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
             return name, None, False
         try:
-            return name, earliest_chat_date(json.loads(payload["content"]), now), True
+            return name, earliest_chat_date(strict_json.loads(payload["content"]), now), True
         except (ValueError, TypeError, RecursionError):
             return name, None, False
 

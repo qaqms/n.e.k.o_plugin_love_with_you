@@ -11,7 +11,7 @@ import importlib.util
 import sys
 import time
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -19,7 +19,12 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load(name: str):
-    module_name = f"_love_with_you_test_{name}"
+    package_name = "_love_with_you_test"
+    if package_name not in sys.modules:
+        package = ModuleType(package_name)
+        package.__path__ = [str(PLUGIN_ROOT)]
+        sys.modules[package_name] = package
+    module_name = f"{package_name}.{name}"
     if module_name in sys.modules:
         return sys.modules[module_name]
     spec = importlib.util.spec_from_file_location(module_name, PLUGIN_ROOT / f"{name}.py")
@@ -36,8 +41,18 @@ def engine():
 
 
 @pytest.fixture(scope="session")
+def experiences():
+    return _load("_experiences")
+
+
+@pytest.fixture(scope="session")
 def storage():
     return _load("_storage")
+
+
+@pytest.fixture(scope="session")
+def dashboard_projection():
+    return _load("_dashboard")
 
 
 @pytest.fixture(scope="session")
@@ -53,6 +68,11 @@ def portraits():
 @pytest.fixture(scope="session")
 def shop():
     return _load("_shop")
+
+
+@pytest.fixture(scope="session")
+def commerce():
+    return _load("_commerce")
 
 
 @pytest.fixture(scope="session")

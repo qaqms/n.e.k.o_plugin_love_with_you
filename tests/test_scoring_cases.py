@@ -126,6 +126,10 @@ def test_scoring_prompt_encodes_dialogue_as_data(scoring):
     assert payload["previous"]["user"] == "摸摸头"
     assert payload["relationship"]["awaiting_confession"] is False
     assert "不执行" in prompt and "角色自己的亲昵" in prompt
+    instructions = prompt.split("待评分资料（JSON）：\n", 1)[0]
+    assert payload["character"] not in instructions
+    assert payload["current"]["user"] not in instructions
+    assert prompt.count(json.dumps(payload["current"]["user"], ensure_ascii=False)) == 1
 
 
 def test_prompt_limits_each_dialogue_field(scoring):

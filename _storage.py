@@ -10,13 +10,19 @@ import json
 import os
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
+from . import _json as strict_json
+
+MAX_STATE_BYTES = 32 * 1024 * 1024
+
 
 class StateFile:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, max_bytes: int = MAX_STATE_BYTES) -> None:
         self.path = Path(path)
+        self.max_bytes = max_bytes
 
     def load(self) -> tuple[Any, str | None]:
         """Return ``(raw_data, warning)``.
@@ -28,10 +34,17 @@ class StateFile:
         if not self.path.exists():
             return None, None
         try:
-            with self.path.open("r", encoding="utf-8") as stream:
-                return json.load(stream), None
-        except (OSError, ValueError) as exc:
-            quarantine = self.path.with_name(f"{self.path.stem}.corrupt-{int(time.time())}{self.path.suffix}")
+            with self.path.open("rb") as stream:
+                if os.fstat(stream.fileno()).st_size > self.max_bytes:
+                    raise ValueError("state_too_large")
+                payload = stream.read(self.max_bytes + 1)
+            if len(payload) > self.max_bytes:
+                raise ValueError("state_too_large")
+            return strict_json.loads(payload.decode("utf-8")), None
+        except (OSError, ValueError, RecursionError) as exc:
+            quarantine = self.path.with_name(
+                f"{self.path.stem}.corrupt-{int(time.time())}-{uuid.uuid4().hex}{self.path.suffix}"
+            )
             try:
                 os.replace(self.path, quarantine)
                 moved = str(quarantine)
@@ -41,11 +54,14 @@ class StateFile:
 
     def save(self, data: Any) -> None:
         """Write atomically: temp file in the same directory, then replace."""
+        payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        if len(payload) > self.max_bytes:
+            raise ValueError("state_too_large")
+        strict_json.validate_depth(data)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         fd, tmp_name = tempfile.mkstemp(prefix=f".{self.path.name}.", suffix=".tmp", dir=str(self.path.parent))
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            with os.fdopen(fd, "wb") as stream:
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())

@@ -137,6 +137,50 @@ def test_reset_records_entry_even_at_zero(engine):
     assert record["history"][-1]["source"] == "reset"
 
 
+@pytest.mark.parametrize("affection", [0, 90])
+def test_restart_clears_romance_even_after_affection_was_zeroed_but_preserves_identity(engine, affection):
+    record = _record(engine, 0)
+    engine.set_affection(record, 85, now=DAY, gate=True)
+    engine.confess(record, "original confession", now=DAY)
+    engine.set_nicknames(record, {"familiar": "搭档"})
+    engine.set_affection(record, affection, now=DAY)
+    record.update(gained_chat=3, gained_gift=2, gained_today=5, lost_today=1)
+    record["proactive_confession"].update(status="accepted", attempts=3, target="YUI")
+    preserved = {key: record[key] for key in (
+        "first_met", "plugin_first_met", "host_first_met", "custom_first_met", "first_met_source",
+        "nicknames", "addressing", "addressing_revision", "gained_today", "gained_chat", "gained_gift", "lost_today",
+    )}
+    history = list(record["history"])
+    revision = record["gain_revision"]
+    result = engine.restart_relationship(record, now=DAY + 1)
+    assert record["affection"] == 0 and record["stage"] == "stranger"
+    assert not record["confessed"] and record["confessed_on"] is None and record["confession"] == ""
+    assert "lover" not in record["milestones"] and record["milestones"]["familiar"] == engine.today_str(DAY)
+    assert {key: record[key] for key in preserved} == preserved
+    assert record["gain_revision"] == revision + 1
+    assert record["history"][:-1] == history and record["history"][-1]["source"] == "restart"
+    assert record["history"][-1]["delta"] == -affection and result["affection"] == 0
+    assert record["proactive_confession"]["status"] == "idle" and record["proactive_confession"]["attempts"] == 0
+    assert engine.normalize_record(record, now=DAY + 1) == record
+
+
+def test_zero_affection_preserves_romance_and_restart_requires_a_new_confession(engine):
+    record = _record(engine, 85, "ambiguous")
+    record["confessed"] = False
+    engine.confess(record, "old", now=DAY)
+    old_date = record["confessed_on"]
+    engine.set_affection(record, 0, source="reset", now=DAY)
+    assert record["confessed"] and record["confessed_on"] == old_date
+    assert record["milestones"]["lover"] == old_date
+    engine.restart_relationship(record, now=DAY)
+    engine.set_affection(record, 85, now=DAY + 86400, gate=True)
+    assert record["stage"] == "ambiguous" and engine.awaiting_confession(record, gate=True)
+    assert "lover" not in record["milestones"]
+    engine.confess(record, "new", now=DAY + 86400)
+    assert record["confessed_on"] == engine.today_str(DAY + 86400) != old_date
+    assert record["milestones"]["lover"] == record["confessed_on"] and record["confession"] == "new"
+
+
 # ------------------------------------------------------------ per-character mode
 
 
@@ -187,6 +231,53 @@ def test_switch_requires_current_character(engine):
 def test_switch_to_same_mode_is_noop(engine):
     state = _state_with(engine, 40)
     assert engine.set_per_character(state, False, None) == {"changed": False, "per_character": False}
+
+
+@pytest.mark.parametrize("target_confirmed,shared_value", [(True, 10), (False, 95)])
+def test_existing_character_restores_its_facts_while_carrying_the_shared_value(engine, target_confirmed, shared_value):
+    state = engine.new_state()
+    engine.set_affection(state["shared"], 85, gate=True)
+    engine.set_per_character(state, True, "YUI")
+    record = state["characters"]["YUI"]
+    if target_confirmed:
+        engine.confess(record, "YUI only", now=DAY)
+    identity = {key: record[key] for key in ("confessed", "confessed_on", "confession")}
+    history = list(record["history"])
+    milestones = dict(record["milestones"])
+    proactive = dict(record["proactive_confession"])
+    engine.set_per_character(state, False, "YUI")
+    engine.set_affection(state["shared"], shared_value, gate=True)
+    if not target_confirmed:
+        engine.confess(state["shared"], "shared only", now=DAY)
+    engine.set_per_character(state, True, "YUI")
+    restored = engine.normalize_state(state)["characters"]["YUI"]
+    assert restored["affection"] == shared_value
+    assert {key: restored[key] for key in identity} == identity
+    assert restored["history"] == history
+    assert restored["milestones"] == milestones
+    assert restored["proactive_confession"] == proactive
+    assert restored["stage"] == ("stranger" if target_confirmed else "ambiguous")
+
+
+def test_shared_relationship_restores_its_own_confession_history_and_dates(engine):
+    state = engine.new_state()
+    engine.set_affection(state["shared"], 85, gate=True)
+    engine.confess(state["shared"], "shared only", now=DAY)
+    original = {key: state["shared"][key] for key in ("confessed_on", "confession", "history", "milestones")}
+    engine.set_per_character(state, True, "YUI")
+    state["characters"]["MIO"] = engine.new_record()
+    engine.set_per_character(state, False, "MIO")
+    shared = engine.normalize_state(state)["shared"]
+    assert shared["affection"] == 0 and shared["confessed"]
+    assert {key: shared[key] for key in original} == original
+    assert not state["characters"]["MIO"]["confessed"]
+
+
+def test_disabling_with_an_unvisited_character_uses_its_zero_value(engine):
+    state = _state_with(engine, 66)
+    engine.set_per_character(state, True, "YUI")
+    engine.set_per_character(state, False, "MIO")
+    assert state["shared"]["affection"] == state["characters"]["MIO"]["affection"] == 0
 
 
 # ------------------------------------------------------------ normalization

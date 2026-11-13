@@ -26,16 +26,30 @@ def participate(shop, state, day=0, turns=8):
         shop.accrue(state, value, value["reply_at"])
 
 
-def test_daily_income_is_three_automatic_steps_and_bounded(shop):
+def claim_available(shop, state, day=0):
+    now = START + day * 86400 + 1000
+    today = datetime.fromtimestamp(now).date().isoformat()
+    for reward in shop._rewards(state, today):
+        if reward["ready"]:
+            shop.claim(state, today, reward["reward"], reward["period"], now)
+
+
+def test_daily_income_waits_for_three_independent_manual_claims_and_is_bounded(shop):
     state = shop.new_state()
     gains = []
     for index in range(12):
         value = event(index=index)
         gains.append(shop.accrue(state, value, value["reply_at"]))
-    assert gains == [10, 0, 10, 0, 0, 0, 0, 10, 0, 0, 0, 0]
-    assert state["coins"] == 130
+    assert gains == [0] * 12
+    assert state["coins"] == 100 and state["income_total"] == 0 and not state["ledger"]
     assert state["days"]["2026-11-02"]["count"] == 8
-    assert [entry["source"] for entry in state["ledger"]] == ["daily_1", "daily_3", "daily_8"]
+    for threshold in [8, 1, 3]:
+        assert shop.claim(state, "2026-11-02", f"daily_{threshold}", "2026-11-02", START + 1000)["credited"] == 10
+        state = shop.normalize(state)
+        with pytest.raises(shop.ShopError, match="shop_already_claimed"):
+            shop.claim(state, "2026-11-02", f"daily_{threshold}", "2026-11-02")
+    assert state["coins"] == 130 and state["income_total"] == 30
+    assert [entry["source"] for entry in state["ledger"]] == ["daily_8", "daily_1", "daily_3"]
 
 
 def test_replays_repeated_text_and_fast_exchanges_do_not_add_progress(shop):
@@ -57,6 +71,7 @@ def test_nonconsecutive_active_days_grant_weekly_reward_once(shop):
     state = shop.new_state()
     for day in [0, 2, 4, 6]:
         participate(shop, state, day, 3)
+        claim_available(shop, state, day)
     assert state["coins"] == 100 + 4 * 20 + 40
     assert state["weeks"]["2026-11-02"]["paid"]
     assert len([entry for entry in state["ledger"] if entry["source"] == "weekly"]) == 1
@@ -69,6 +84,7 @@ def test_full_week_budget_and_roundtrip_are_exact(shop):
     state = shop.new_state()
     for day in range(7):
         participate(shop, state, day)
+        claim_available(shop, state, day)
         state = shop.normalize(state, "2026-11-08")
     assert state["coins"] == 350
     assert state["income_total"] == 250
@@ -94,10 +110,10 @@ def test_out_of_order_events_still_obey_gap_against_all_counted_turns(shop):
         value = event(index=index, user_at=START + seconds)
         shop.accrue(state, value, START + 100)
     assert state["days"]["2026-11-02"]["count"] == 3
-    assert state["coins"] == 120
+    assert state["coins"] == 100
 
 
-def test_midnight_reply_credits_original_user_day(shop):
+def test_midnight_reply_makes_original_user_day_claimable(shop):
     state = shop.new_state()
     user_at = datetime(2026, 11, 8, 23, 59, 55).timestamp()
     value = event(user_at=user_at)
@@ -105,6 +121,10 @@ def test_midnight_reply_credits_original_user_day(shop):
     shop.accrue(state, value, value["reply_at"])
     assert state["days"]["2026-11-08"]["count"] == 1
     assert shop.view(state, "2026-11-09", value["reply_at"])["income"]["earned"] == 0
+    assert state["coins"] == 100 and not state["ledger"]
+    pending = shop.view(state, "2026-11-09", value["reply_at"])["income"]["pending"]
+    assert pending == [{"reward": "daily_1", "period": "2026-11-08", "coins": 10, "claimed": False, "ready": True}]
+    shop.claim(state, "2026-11-09", "daily_1", "2026-11-08", value["reply_at"])
     assert state["ledger"][-1]["day"] == "2026-11-08"
     before = state["coins"]
     shop.accrue(state, event(day=-5), START)
@@ -120,8 +140,12 @@ def test_late_sunday_can_complete_previous_week_without_reusing_new_week(shop):
         value = event(6, index, user_at=sunday + index * 21)
         value["reply_at"] = datetime(2026, 11, 9, 0, 1).timestamp()
         shop.accrue(state, value, value["reply_at"])
-    assert state["weeks"]["2026-11-02"]["paid"]
+    assert not state["weeks"]["2026-11-02"]["paid"] and state["coins"] == 100
     assert shop.view(state, "2026-11-09", value["reply_at"])["income"]["weekly_days"] == 0
+    result = shop.claim(state, "2026-11-09", "weekly", "2026-11-02", value["reply_at"])
+    assert result["credited"] == 40
+    assert state["weeks"]["2026-11-02"]["paid"]
+    assert "2026-11-09" not in state["weeks"]
 
 
 def test_legacy_claim_migration_preserves_assets_and_covers_daily_rewards(shop):
@@ -142,6 +166,7 @@ def test_legacy_claim_migration_preserves_assets_and_covers_daily_rewards(shop):
 def test_ledger_history_is_not_reward_authority(shop):
     state = shop.new_state()
     participate(shop, state)
+    claim_available(shop, state)
     for index in range(150):
         state["coins"] += 20
         shop.buy(state, "tea", START + index, f"purchase_{index:06}")
@@ -160,6 +185,75 @@ def test_untrusted_economy_namespaces_do_not_recreate_welcome_money(shop):
     ], "days": {"bad": []}, "weeks": {"bad": []}})
     assert state["coins"] == 0
     assert state["ledger"][0]["item_id"] == ""
+
+
+def test_upgrade_from_automatic_income_never_repays_completed_steps(shop):
+    state = shop.new_state()
+    participate(shop, state, turns=3)
+    progress = state["days"]["2026-11-02"]
+    del progress["claimed"]
+    progress.update(paid=2, earned=20)
+    state.update(coins=120, income_total=20)
+    state = shop.normalize(state)
+    assert state["days"]["2026-11-02"]["claimed"] == [1, 3]
+    assert not shop.view(state, "2026-11-02", START)["can_claim"]
+    before = copy.deepcopy(state)
+    with pytest.raises(shop.ShopError, match="shop_already_claimed"):
+        shop.claim(state, "2026-11-02", "daily_3", "2026-11-02")
+    assert state == before
+    participate(shop, state)
+    claim_available(shop, state)
+    assert state["coins"] == 130 and state["income_total"] == 30
+
+
+def test_claim_expiry_is_checked_without_new_chat_and_view_is_read_only(shop):
+    state = shop.new_state()
+    for day in range(4):
+        participate(shop, state, day)
+    before = copy.deepcopy(state)
+    view = shop.view(state, "2026-11-09", START + 7 * 86400)
+    assert view["income"]["pending"] == [{
+        "reward": "weekly", "period": "2026-11-02", "coins": 40, "claimed": False, "ready": True,
+    }]
+    assert state == before
+    for today, reward, period in [
+        ("2026-11-06", "daily_1", "2026-11-04"),
+        ("2026-11-16", "weekly", "2026-11-02"),
+        ("2026-11-05", "daily_8", "2026-11-06"),
+        ("2026-11-05", [], "2026-11-05"),
+        ("2026-11-05", "daily_1", []),
+    ]:
+        with pytest.raises(shop.ShopError, match="shop_invalid_request"):
+            shop.claim(state, today, reward, period)
+        assert state == before
+    assert not shop.view(state, "2026-11-16", START + 14 * 86400)["can_claim"]
+
+
+def test_unearned_and_clock_rollback_claims_cannot_change_state(shop):
+    state = shop.new_state()
+    participate(shop, state, turns=1)
+    before = copy.deepcopy(state)
+    for today, reward, period in [
+        ("2026-11-02", "daily_3", "2026-11-02"),
+        ("2026-11-02", "weekly", "2026-11-02"),
+        ("2026-11-01", "daily_1", "2026-11-02"),
+    ]:
+        with pytest.raises(shop.ShopError, match="shop_reward_unavailable"):
+            shop.claim(state, today, reward, period)
+        assert state == before
+
+
+def test_arbitrary_claim_order_stays_independent_after_normalization(shop):
+    state = shop.new_state()
+    participate(shop, state)
+    shop.claim(state, "2026-11-02", "daily_8", "2026-11-02", START + 500)
+    state = shop.normalize(state)
+    steps = shop.view(state, "2026-11-02", START + 501)["income"]["steps"]
+    assert [step["claimed"] for step in steps] == [False, False, True]
+    assert [step["ready"] for step in steps] == [True, True, False]
+    claim_available(shop, state)
+    assert state["coins"] == 130
+    assert state["days"]["2026-11-02"]["claimed"] == [1, 3, 8]
 
 
 def test_gesture_uses_inventory_without_gain_and_is_once_daily(shop):
@@ -231,6 +325,7 @@ def test_real_rules_reproduce_design_pacing(shop, engine, turns, chat, expected)
     record = engine.new_record(now=START)
     for day in range(60):
         participate(shop, state, day, turns)
+        claim_available(shop, state, day)
         now = START + day * 86400 + 1000
         today = datetime.fromtimestamp(now).date().isoformat()
         if chat:

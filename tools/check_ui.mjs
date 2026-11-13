@@ -22,9 +22,19 @@ if (diagnostics.length) {
 const localeFiles = readdirSync(join(pluginRoot, "i18n")).filter(name => name.endsWith(".json"))
 const en = JSON.parse(readFileSync(join(pluginRoot, "i18n/en.json"), "utf8"))
 const requiredKeys = ["common.affection", "common.saving", "common.unsaved", "common.discard",
+  "nav.daily", "nav.records", "overview.together", "overview.participant", "overview.allExperiences",
+  "overview.continue", "overview.viewFollowup", "overview.viewMemory",
+  ...Object.keys(en).filter(key => key.startsWith("xp.") || key.startsWith("error.experience_")),
+  ...Object.keys(en).filter(key => key.startsWith("nick.mode.") || key.startsWith("nick.source.") || key.includes("Addressing")),
+  ...["note", "reset", "customFor", "customPlaceholder", "effective", "optional", "personaValue", "preferred",
+    "endearments", "avoided", "avoidInput", "addAvoid", "removeAvoid", "confirmedLover", "currentCloseness",
+    "resetAll", "defaultsRestored"].map(key => `nick.${key}`),
+  "error.invalid_addressing", "error.nickname_required", "error.nickname_blocked",
   ...Object.keys(en).filter(key => key.startsWith("art.")),
   "error.portrait_invalid_image", "error.portrait_source_too_large", "error.portrait_library_full", "error.portrait_custom_only",
   "error.nickname_conflict", "error.invalid_first_met_source", "dates.dateChoice", "dates.pluginDate",
+  ...Object.keys(en).filter(key => key.startsWith("restart.") || key.startsWith("reset.") ||
+    ["settings.reset", "toast.reset", "source.restart", "source.reset", "error.relationship_changed"].includes(key)),
   "dates.savedHostDate", "dates.customDate", "dates.noSavedHostDate", "dates.legacyDate", "dates.legacyDateNote",
   ...Object.keys(en).filter(key => key.startsWith("dates.history") || ["dates.importMet", "dates.importDescription",
     "dates.confirmImport", "dates.currentMet", "error.first_met_conflict"].includes(key) || key.startsWith("error.host_history_")),

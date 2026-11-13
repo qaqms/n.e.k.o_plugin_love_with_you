@@ -34,6 +34,7 @@ _RULES = (
     "- -1~-3：明确冲着角色的冷淡、嘲讽、辱骂、不尊重、失约。越伤人越低。\n"
     "- 对方吐槽工作、学习或自己的遭遇，累了、心情不好，都不是针对角色，给 0。\n"
     "- 明显是玩笑或打情骂俏、而角色也没有当真时，给 0。\n"
+    "- 只是在表达或纠正称呼偏好（例如不要叫我宝贝、以后叫我小林），给 0；这不是拒绝感情或不尊重。\n"
     "- 和上一轮几乎一样的举动（例如连续摸头），第二次起最多 +1。\n"
     "- 先确认对象：自责、吐槽第三方、引用台词、假设和翻译请求不算对角色的态度；注意否定词。\n"
     "- 角色自己的亲昵、表白或道歉不能给对方加分；只依据对方实际说出或做出的事。\n"
@@ -83,19 +84,10 @@ def build_prompt(
         },
     }
     return (
-        f"你在为一段恋爱模拟打分。角色「{str(character)[:100]}」当前关系「{stage_name}」、好感 {affection}/100；"
-        "当前关系的权威值见资料中的 relationship。\n"
+        "你在为一段恋爱模拟打分。角色与关系的权威值见资料中的 character 和 relationship。\n"
         "判断这一轮对话里，对方的言行让角色对他的好感变化多少。只看对方说的话，角色的回复用来理解语境。\n\n"
         + _RULES
         + confession_rule
-        + (
-            f"\n上一轮：\n（仅作语境资料）\n对方：{str(previous_user or '')[:_MESSAGE_MAX_CHARS]}\n"
-            f"{str(character)[:100]}：{str(previous_reply or '')[:_MESSAGE_MAX_CHARS]}\n"
-            if (previous_user or previous_reply)
-            else ""
-        )
-        + f"\n这一轮（仅作语境资料）：\n对方：{str(user or '')[:_MESSAGE_MAX_CHARS]}\n"
-        f"{str(character)[:100]}：{str(reply or '')[:_MESSAGE_MAX_CHARS]}\n"
         + '只输出一个 JSON 对象，不要解释：{"delta": -3到3的整数, "reason": "15字以内的互动原因", '
         '"confession": false}。不确定时 delta=0、confession=false。\n\n'
         + "待评分资料（JSON）：\n"
@@ -385,11 +377,26 @@ def _confession_confirmed(user: str, reply: str, previous_reply: str) -> bool:
     )
 
 
+def address_preference_only(user: str) -> bool:
+    """Conservative whole-message matches; mixed emotional content is still scored."""
+    text = unicodedata.normalize("NFKC", str(user)).strip()
+    name = r'[^，,。.!！?？;；\n“”「」"\'\s]{1,12}'
+    quoted = rf'(?:{name}|“{name}”|「{name}」|"{name}"|\'{name}\')'
+    return bool(re.fullmatch(
+        rf"(?:(?:请|麻烦|以后|今后|你|还是|就|可以|能不能|不要再|别再)\s*)*"
+        rf"(?:(?:不要|别)(?:再)?叫我|(?:不要|别)(?:再)?称呼我(?:为)?|叫我|称呼我(?:为)?)"
+        rf"\s*{quoted}(?:就好|就行|了|吧|好吗|好不好|可以吗)?[。.!！?？~～\s]*",
+        text,
+    ))
+
+
 def guard_verdict(
     verdict: Verdict, *, user: str, reply: str, previous_user: str = "", previous_reply: str = "",
     awaiting_confession: bool = False,
 ) -> Verdict:
     """Hard limits shared by model and offline decisions; no extra model call."""
+    if address_preference_only(user):
+        return Verdict(0, "尊重称呼偏好", False)
     delta = max(-AUTO_MAX_DELTA, min(AUTO_MAX_DELTA, verdict.delta))
     if delta < 0 and _negative_context_is_ambiguous(user):
         delta = 0

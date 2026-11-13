@@ -16,6 +16,9 @@ const { bundleHostedTsxSource } = await import(pathToFileURL(join(hostedRoot, "h
 
 function fixture() {
   const day = new Date().toISOString().slice(0, 10)
+  const monday = new Date(`${day}T12:00:00Z`)
+  monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7)
+  const week = monday.toISOString().slice(0, 10)
   const now = Date.now() / 1000
   const catalog = JSON.parse(readFileSync(join(pluginRoot, "assets/portraits/catalog.json"), "utf8"))
   const items = catalog.items.map(item => ({ ...item, available: true, version: item.id }))
@@ -41,6 +44,7 @@ function fixture() {
     items,
     state: {
       today: day, per_character: true, current_character: "YUI", host_online: true,
+      experiences: { enabled:false, revision:0, characters:{} },
       scopes: [
         { ...structuredClone(base), key: "YUI", label: "YUI", is_current: true },
         { ...structuredClone(base), key: "茉子", label: "茉子", affection: 23, stage: "familiar", stage_index: 1,
@@ -53,9 +57,11 @@ function fixture() {
       appearance: { accent_color: "#7db9e8", color_scheme: "system" },
       known_characters: ["YUI", "茉子"],
       shop: {
-        coins: 100, revision: 0, daily_coins: 30, can_claim: false, gift_remaining: 4, gift_daily_cap: 4, inventory_limit: 99,
-        income_total: 20, can_gesture: true, bus_ok: true, income_error: "",
-        income: {count:3, earned:20, paid:2, steps:[{turns:1,coins:10},{turns:3,coins:10},{turns:8,coins:10}],
+        coins: 100, revision: 0, daily_coins: 30, can_claim: true, gift_remaining: 4, gift_daily_cap: 4, inventory_limit: 99,
+        income_total: 0, can_gesture: true, bus_ok: true, income_error: "",
+        income: {count:3, earned:0, paid:0, steps:[1,3,8].map(turns => ({
+          turns,coins:10,reward:`daily_${turns}`,period:day,claimed:false,ready:turns<=3,
+        })), weekly:{reward:"weekly",period:week,coins:40,claimed:false,ready:false},pending:[],
           weekly_days:2, weekly_goal:4, weekly_coins:40, weekly_paid:false, legacy_claimed:false, clock_error:false},
         ledger: [],
         catalog: [
@@ -105,14 +111,33 @@ try { savedAppearance = sessionStorage.getItem("lwy:preview-appearance"); } catc
 if (savedAppearance) state.appearance = JSON.parse(savedAppearance);
 if (query.get("empty")) state.scopes = [];
 if (query.get("art") === "off") state.portraits.settings.mode = "off";
+if (query.get("moments") === "1") state.experiences = {
+  enabled:true,revision:1,characters:{[state.current_character]:{
+    revision:1,
+    note:{id:"preview-draft",title:"留给今天的一句话",text:"今天忙完以后，想和你坐一会儿。",
+      created_at:Date.now()/1000,invitation:"submitted"},
+    memories:[{id:"preview-memory",title:"下雨的傍晚",text:"我们一起给那个下雨的傍晚起了个名字：慢一点也没关系。",
+      created_at:Date.now()/1000-3600,recall:true}],
+    followups:[{id:"preview-followup",summary:"忙完这周，聊聊那件期待的事",due:state.today,status:"pending",
+      outcome:"",pending_outcome:"",prompt_submitted:false}],
+  }},
+};
 const uiTest = window.__uiTest = {
   calls: [], failAction: "", failMessage: "Preview save failed", failRefresh: false, delay: 0, refreshDelay: 0,
-  failAfterAction: "", reaction: "submitted",
+  failAfterAction: "", reaction: "submitted", failCode: "",
+  responseOverrideAction: "", responseOverride: null,
   historyDate: "2026-03-04",
   update(next) { Object.assign(state, next); repaint(); },
   snapshot() { return structuredClone(state); },
 };
 const shopReceipts = new Map();
+const experienceReceipts = new Map();
+const addressStages = ["stranger", "familiar", "fond", "ambiguous", "lover"];
+function addressPrefs(current) {
+  return current.addressing || {version:1, stages:Object.fromEntries(addressStages.map(key => [
+    key,{mode:current.nicknames?.[key] ? "custom" : "inherit",text:current.nicknames?.[key] || ""},
+  ])),endearments:false,preferred_name:"",avoided:[]};
+}
 function refreshPortraits() {
   state.portraits.ids = fixture.items.map(item => item.id);
   state.portraits.count = fixture.items.length;
@@ -126,9 +151,60 @@ const previewApi = {
     repaint();
   },
   async call(action, args = {}) {
+    const result = await this.execute(action, args);
+    return uiTest.responseOverrideAction === action ? structuredClone(uiTest.responseOverride) : result;
+  },
+  async execute(action, args = {}) {
     uiTest.calls.push({action, args: structuredClone(args)});
     if (uiTest.delay) await new Promise(resolve => setTimeout(resolve, uiTest.delay));
-    if (uiTest.failAction === action) throw new Error(uiTest.failMessage);
+    if (uiTest.failAction === action) throw Object.assign(new Error(uiTest.failMessage), {code:uiTest.failCode});
+    if (action === "experience_action") {
+      if (experienceReceipts.has(args.request_id)) return structuredClone(experienceReceipts.get(args.request_id));
+      const experience = state.experiences;
+      const values = args.values;
+      let result = {operation:args.operation,id:values.id || args.request_id};
+      if (args.operation === "configure") {
+        if (args.revision !== experience.revision) throw new Error("experience_stale");
+        experience.enabled = values.enabled;
+        experience.revision += 1;
+        result.revision = experience.revision;
+      } else {
+        const record = experience.characters[args.character] || {revision:0,epoch:0,note:null,memories:[],followups:[]};
+        if (record.revision !== args.revision) throw new Error("experience_stale");
+        experience.characters[args.character] = record;
+        const item = record.followups.find(item => item.id === values.id);
+        const memory = record.memories.find(item => item.id === values.id);
+        if (args.operation === "start_note") record.note = {
+          id:result.id,title:values.title,text:values.text,status:"draft",invitation:"not_requested",created_at:Date.now()/1000,
+        };
+        if (args.operation === "invite") { record.note.invitation = "submitted"; result.invitation = "submitted"; }
+        if (args.operation === "draft_note") Object.assign(record.note, {
+          title: values.title ?? record.note.title, text: values.text,
+        });
+        if (args.operation === "save_note") {
+          record.memories.unshift({...record.note,title:values.title,text:values.text,status:"saved",recall:true});
+          record.note = null;
+        }
+        if (args.operation === "cancel_note") record.note = null;
+        if (args.operation === "edit_memory") Object.assign(memory,{title:values.title,text:values.text});
+        if (args.operation === "toggle_memory") memory.recall = values.recall;
+        if (args.operation === "delete_memory") record.memories = record.memories.filter(item => item.id !== values.id);
+        if (args.operation === "propose_followup") record.followups.unshift({
+          id:result.id,summary:values.summary,due:values.due,status:"pending",outcome:"",pending_outcome:"",prompt_submitted:false,
+        });
+        if (["confirm_followup","edit_followup"].includes(args.operation)) Object.assign(item,{
+          summary:values.summary,due:values.due,status:"active",prompt_submitted:false,
+        });
+        if (args.operation === "save_outcome") Object.assign(item,{outcome:values.outcome,pending_outcome:"",status:"closed"});
+        if (args.operation === "close_followup") Object.assign(item,{status:"closed",pending_outcome:""});
+        if (args.operation === "delete_followup") record.followups = record.followups.filter(item => item.id !== values.id);
+        record.revision += 1;
+        result.revision = record.revision;
+      }
+      experienceReceipts.set(args.request_id,structuredClone(result));
+      if (uiTest.failAfterAction === action) throw new Error("Preview response lost");
+      return result;
+    }
     const current = state.scopes.find(item => item.key === args.scope);
     if (action === "preview_first_met" && current) return {
       scope:args.scope, date:uiTest.historyDate, previous_date:current.first_met,
@@ -173,6 +249,28 @@ const previewApi = {
       refreshPortraits();
       return state.portraits;
     }
+    if (action === "set_addressing" && current) {
+      const prefs = structuredClone(addressPrefs(current));
+      const clean = value => Array.from(value.replace(/[\\x00-\\x1f\\x7f]/g, " ").replace(/\\s+/g, " ").trim()).slice(0,12).join("");
+      const changes = structuredClone(args.changes), expected = args.expected;
+      if (changes.stages) for (const item of Object.values(changes.stages)) item.text = item.mode === "custom" ? clean(item.text) : "";
+      if ("preferred_name" in changes) changes.preferred_name = clean(changes.preferred_name);
+      const equal = (a,b) => JSON.stringify(a) === JSON.stringify(b);
+      for (const [key,value] of Object.entries(changes)) {
+        const pairs = key === "stages" ? Object.entries(value).map(([stage,item]) => [prefs.stages[stage],expected.stages[stage],item])
+          : [[prefs[key],expected[key],value]];
+        if (pairs.some(([actual,old,next]) => !equal(actual,old) && !equal(actual,next))) throw new Error("nickname_conflict");
+        if (key === "stages") Object.assign(prefs.stages,value);
+        else prefs[key] = value;
+      }
+      const denied = new Set(prefs.avoided.map(name => name.toLowerCase()));
+      if ([prefs.preferred_name,...Object.values(prefs.stages).filter(item => item.mode === "custom").map(item => item.text)]
+        .some(name => name && denied.has(name.toLowerCase()))) throw new Error("nickname_blocked");
+      current.addressing = prefs;
+      current.nicknames = Object.fromEntries(Object.entries(prefs.stages).filter(([,item]) => item.mode === "custom").map(([key,item]) => [key,item.text]));
+      if (uiTest.failAfterAction === action) throw new Error("Preview response lost");
+      return {scope:args.scope,result:structuredClone(prefs)};
+    }
     if (action === "set_nicknames" && current) {
       const names = {...current.nicknames};
       const clean = value => Array.from(value.replace(/[\\x00-\\x1f\\x7f]/g, " ").replace(/\\s+/g, " ").trim()).slice(0, 12).join("");
@@ -192,7 +290,22 @@ const previewApi = {
       return {scope:args.scope, result:{...updated}};
     }
     if (action === "set_affection" && current) current.affection = args.value;
-    if (action === "reset_affection" && current) current.affection = 0;
+    if (["reset_affection","restart_relationship"].includes(action) && current) {
+      const previous = current.affection;
+      if (action === "restart_relationship") {
+        if (args.expected_revision !== current.gain_revision || args.expected_confessed !== (current.confessed === true))
+          throw new Error("relationship_changed");
+        current.confessed = false; current.confessed_on = null; current.confession = "";
+        delete current.milestones.lover;
+        current.proactive_confession = {status:"idle",attempts:0};
+      }
+      current.affection = 0; current.stage = "stranger"; current.stage_index = 0;
+      current.next_stage = "familiar"; current.points_to_next = 20; current.awaiting_confession = false;
+      current.gain_revision += 1;
+      current.history.unshift({ts:Date.now()/1000,delta:-previous,value:0,reason:"",
+        source:action === "restart_relationship" ? "restart" : "reset"});
+      if (uiTest.failAfterAction === action) throw new Error("Preview response lost");
+    }
     if (action === "set_first_met" && current) {
       if (args.expected_date && ![args.expected_date, args.date].includes(current.first_met)) throw new Error("first_met_conflict");
       if (args.source === "plugin" && args.date !== current.plugin_first_met) throw new Error("first_met_conflict");
@@ -212,12 +325,32 @@ const previewApi = {
     if (action === "remove_anniversary") state.anniversaries = state.anniversaries.filter(item => item.id !== args.id);
     if (action === "add_anniversary") state.anniversaries.push({...args,id:String(Date.now())});
     if (["claim_shop_coins", "buy_shop_item", "send_shop_gift"].includes(action)) {
-      if (shopReceipts.has(args.request_id)) return structuredClone(shopReceipts.get(args.request_id));
+      const signature = JSON.stringify([action,args]);
+      if (shopReceipts.has(args.request_id)) {
+        const receipt = shopReceipts.get(args.request_id);
+        if (receipt.signature !== signature) throw new Error("shop_invalid_request");
+        return structuredClone(receipt.result);
+      }
       if (args.revision !== state.shop.revision) throw new Error("shop_stale");
       const product = state.shop.catalog.find(item => item.id === args.item_id);
       let result;
       if (action === "claim_shop_coins") {
-        throw new Error("shop_income_automatic");
+        const income = state.shop.income;
+        const reward = [...income.steps,income.weekly,...income.pending]
+          .find(item => item.reward === args.reward && item.period === args.period);
+        if (!reward) throw new Error("shop_invalid_request");
+        if (reward.claimed) throw new Error("shop_already_claimed");
+        if (!reward.ready || income.clock_error) throw new Error("shop_reward_unavailable");
+        reward.claimed = true; reward.ready = false;
+        state.shop.coins += reward.coins;
+        state.shop.income_total += reward.coins;
+        if (income.steps.includes(reward)) { income.earned += reward.coins; income.paid += 1; }
+        if (reward === income.weekly) income.weekly_paid = true;
+        income.pending = income.pending.filter(item => item !== reward);
+        state.shop.can_claim = [...income.steps,income.weekly,...income.pending].some(item => item.ready);
+        state.shop.ledger.unshift({id:args.request_id,source:reward.reward,amount:reward.coins,
+          balance:state.shop.coins,ts:Date.now()/1000,item_id:"",day:reward.period});
+        result = {credited:reward.coins,coins:state.shop.coins,reward:reward.reward,period:reward.period};
       } else if (action === "buy_shop_item") {
         if (!product) throw new Error("shop_item_not_found");
         if (product.price > state.shop.coins) throw new Error("shop_insufficient_coins");
@@ -247,7 +380,7 @@ const previewApi = {
         result = {...gift, gift_id:gift.id};
       }
       state.shop.revision += 1;
-      shopReceipts.set(args.request_id, structuredClone(result));
+      shopReceipts.set(args.request_id, {signature,result:structuredClone(result)});
       if (uiTest.failAfterAction === action) throw new Error("Preview response lost");
       return result;
     }
@@ -264,7 +397,7 @@ function repaint() {
   window.NekoUiKit.render(window.NekoUiKit.h(__Panel, {
     ...window.__NEKO_PAYLOAD, state:structuredClone(state), api:previewApi,
     t:window.NekoUiKit.t, useLocalState:(key, initial) => window.NekoUiKit.useLocalState(key,
-      key === "lwy:section" && ["settings", "shop"].includes(query.get("page")) ? query.get("page") : initial),
+      key === "lwy:section" && ["settings", "shop", "nicknames", "experiences"].includes(query.get("page")) ? query.get("page") : initial),
   }), document.getElementById("root"));
 }
 repaint();

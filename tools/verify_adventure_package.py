@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import sys
 import tomllib
 import zipfile
+from pathlib import Path
 
 
 def main() -> None:
@@ -28,7 +28,17 @@ def main() -> None:
         "_adventure.py", "_adventure_skills.py", "static/adventure.mjs", "static/skills.json",
         "static/skills-v2.json", "static/skills.mjs", "static/combat.mjs", "static/frost.mjs",
         "static/study.mjs", "static/icons.mjs", "static/index.html", "static/adventure.css",
-        "docs/adventure-frost-2026-11-12.md",
+        "static/encounters.json", "static/encounters.mjs", "static/encounter-rules.mjs",
+        "docs/adventure-frost-2026-11-12.md", "docs/adventure-encounters-2026-11-13.md",
+        "static/actor-art.mjs", "static/forest-art.mjs", "static/battle-art.mjs",
+        "docs/adventure-visual-sample-2026-11-13.md",
+        "static/terrain-rules.mjs", "static/forest-map.mjs",
+        "static/engine/astar-0.4.1.js", "static/engine/ASTAR-LICENSE.txt",
+        "docs/adventure-map-2026-11-13.md",
+        "static/skills-expanded.json", "static/routes.json", "static/expanded-combat.mjs",
+        "docs/adventure-build-expansion-2026-11-13.md",
+        "static/build-mods.json", "static/buildcraft.mjs",
+        "docs/adventure-free-builds-2026-11-13.md",
     }
     compared = set()
     with zipfile.ZipFile(args.package) as archive:

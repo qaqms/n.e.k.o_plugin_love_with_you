@@ -1,4 +1,5 @@
 import { parameters } from "./skills.mjs"
+import { isBoss } from "./encounter-rules.mjs"
 
 // Status clocks use saved simulation time; pausing never advances them.
 export class FrostEffects {
@@ -24,7 +25,7 @@ export class FrostEffects {
     if (!mark.stacks || source === "companion") mark.source = source
     mark.stacks = Math.min(3, mark.stacks + (stacks ?? p.frostStacks))
     mark.expires_at = now + p.frostDuration
-    if (mark.stacks === 3 && now >= mark.freeze_at && enemy.getData("kind") !== "boss") {
+    if (mark.stacks === 3 && now >= mark.freeze_at && !isBoss(enemy)) {
       mark.frozen_until = now + 600; mark.freeze_at = now + 3500
     }
   }
@@ -32,16 +33,17 @@ export class FrostEffects {
     if (!enemy.active || this.s.outcome !== "playing") return 0
     const mark = this.marks.get(enemy.getData("id"))
     if (!mark?.stacks || mark.expires_at <= this.s.elapsed) return 0
-    const damage = damagePerStack * mark.stacks * (enemy.getData("kind") === "boss" ? .65 : 1)
+    const damage = damagePerStack * mark.stacks * (isBoss(enemy) ? .65 : 1)
     mark.stacks = 0; mark.frozen_until = 0
     return damage
   }
   strike(enemy, owner, skillId, amount) {
     if (!enemy.active || this.s.outcome !== "playing") return amount
     const now = this.s.elapsed, mark = this.marks.get(enemy.getData("id"))
-    if (owner !== "player" || !["slash", "guard", "dash"].includes(skillId) || now < this.shatterAt
+    const swords = this.s.meta?.rules >= 6 ? ["slash", "guard", "dash", "thrust", "whirl"] : ["slash", "guard", "dash"]
+    if (owner !== "player" || !swords.includes(skillId) || now < this.shatterAt
       || !mark?.stacks || mark.expires_at <= now || now < mark.break_at) return amount
-    const cross = mark.source === "companion", extra = this.consume(enemy, 12)
+    const cross = mark.source === "companion", extra = this.consume(enemy, 12 + (cross && this.c.s.encounters?.has("rime") ? 3 : 0))
     mark.break_at = now + 1800; this.shatterAt = now + 600
     this.c.stats.shatters++; if (cross) this.c.stats.cross_shatters++
     this.c.flash(enemy.x, enemy.y, 48, 0xc1f4ff, "shatter")
@@ -57,8 +59,9 @@ export class FrostEffects {
       if (!enemy) { this.marks.delete(id); continue }
       if (mark.expires_at <= now) mark.stacks = 0
       if (!mark.stacks && Math.max(mark.freeze_at, mark.break_at) <= now) { this.marks.delete(id); continue }
-      const factor = mark.stacks && mark.frozen_until > now ? 0
-        : 1 - mark.stacks * (enemy.getData("kind") === "boss" ? .04 : .12)
+      const boss = isBoss(enemy)
+      const factor = mark.stacks && mark.frozen_until > now && !boss ? 0
+        : 1 - mark.stacks * (boss ? .04 : .12)
       enemy.setVelocity(enemy.body.velocity.x * factor, enemy.body.velocity.y * factor)
     }
   }

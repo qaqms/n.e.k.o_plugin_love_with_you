@@ -1,0 +1,16 @@
+{
+  "foes": [
+    {"id":"charger","name":"疾角兽","hp":48,"speed":46,"damage":16,"windup":900,"recovery":2200},
+    {"id":"caster","name":"荆芽术士","hp":36,"speed":40,"damage":13,"windup":1100,"recovery":3000},
+    {"id":"sentinel","name":"苔甲卫士","hp":650,"speed":32,"damage":21,"windup":1100,"recovery":2500,"at":360000,"xp":45},
+    {"id":"oracle","name":"荆棘咏者","hp":1050,"speed":30,"damage":20,"windup":1200,"recovery":2600,"at":720000,"xp":70},
+    {"id":"boss","name":"林地守望者","hp":3200,"speed":34,"damage":26,"windup":1150,"recovery":2300,"at":1080000}
+  ],
+  "cooperations": [
+    {"id":"cadence","name":"并肩节律","icon":"Wind","description":"玩家主动技能冷却缩短10%。","requires":{}},
+    {"id":"warmth","name":"援护余温","icon":"Heart","description":"同行每次成功支援后，为玩家恢复4点生命。","requires":{}},
+    {"id":"escort","name":"同行专注","icon":"Swords","description":"同行造成的伤害提高12%。","requires":{}},
+    {"id":"embers","name":"风焰同调","icon":"Flame","description":"玩家焰环伤害提高15%，同行引风半径增加20。","requires":{"player":["flame"],"companion":["pull"]}},
+    {"id":"rime","name":"霜刃默契","icon":"Snowflake","description":"玩家消费同行凝霜时，碎冰每层追加基础伤害由12提高到15。","requires":{"player":["slash","guard","dash"],"companion":["ice"]}}
+  ]
+}

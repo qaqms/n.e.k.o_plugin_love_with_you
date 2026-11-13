@@ -5,7 +5,7 @@
   "scripts": {
     "preview": "node ui_preview.mjs",
     "preview:adventure": "python -B adventure_preview.py",
-    "test:adventure": "node --test test_adventure.mjs test_adventure_protocol.mjs test_adventure_skills.mjs",
+    "test:adventure": "node --test test_adventure.mjs test_adventure_protocol.mjs test_adventure_skills.mjs test_expanded_combat.mjs test_buildcraft.mjs test_encounter_rules.mjs test_terrain_rules.mjs",
     "test": "node --test test_ui.mjs test_theme.mjs test_experiences_ui.mjs test_overview_ui.mjs test_requests.mjs",
     "check": "node check_ui.mjs"
   },

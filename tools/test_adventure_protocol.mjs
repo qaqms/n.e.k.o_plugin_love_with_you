@@ -1,6 +1,12 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { readFileSync } from "node:fs"
 import { AdventureApi, decode, errorText } from "../static/bridge.mjs"
+import { installCatalog, installRoutes } from "../static/skills.mjs"
+
+const catalog = file => JSON.parse(readFileSync(new URL(`../static/${file}.json`, import.meta.url), "utf8"))
+installCatalog(catalog("skills"), catalog("skills-v2"), catalog("skills-expanded"))
+installRoutes(catalog("routes"))
 
 const runId = "adventure_run_0001"
 const shop = [
@@ -148,6 +154,31 @@ test("reads reject malformed wallets, catalogs and loadouts instead of replacing
     const api = apiWith(null), original = api.view
     const changed = structuredClone(original); change(changed)
     api.call = async () => changed
+    await assert.rejects(api.read())
+    assert.equal(api.view, original)
+  }
+})
+
+test("reads accept expanded routes and legacy runs while rejecting unknown future rules", async () => {
+  for (const rules of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    const api = apiWith(null), view = structuredClone(api.view)
+    view.rules = 7
+    view.run = { id: runId, rules, status: "active", settlement: null,
+      loadout: { levels: { ...levels }, bonuses: { ...levels } } }
+    if (rules === 6) Object.assign(view.run, { player_class: "guardian", companion_class: "mage", player_route: "blade", companion_route: "frost" })
+    api.call = async () => view
+    if (rules <= 7) assert.equal((await api.read()).run.rules, rules)
+    else await assert.rejects(api.read())
+  }
+})
+
+test("rule6 reads reject absent, unknown and class-mismatched routes without replacing the view", async () => {
+  for (const change of [{ player_route: undefined }, { player_route: "missing" }, { player_route: "thunder" }, { player_route: {} }]) {
+    const api = apiWith(null), original = api.view, view = structuredClone(original)
+    view.rules = 6
+    view.run = { rules: 6, status: "active", settlement: null, player_class: "guardian", companion_class: "mage",
+      player_route: "blade", companion_route: "frost", loadout: { levels: { ...levels }, bonuses: { ...levels } }, ...change }
+    api.call = async () => view
     await assert.rejects(api.read())
     assert.equal(api.view, original)
   }

@@ -1,12 +1,16 @@
+import { ACTOR_DEFAULTS, enemySprite } from "./actor-art.mjs"
+
 // Original SVG sprites; no third-party character art is used.
 const wrap = body => `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="72" viewBox="0 0 64 72">${body}</svg>`
 const shadow = '<ellipse cx="32" cy="63" rx="18" ry="6" fill="#101b1c" opacity=".4"/>'
-const head = '<path d="M21 21Q32 9 43 21L42 37Q32 46 22 37Z" fill="#edd3b4"/><path d="M20 26Q17 9 32 8Q49 9 45 29L39 20L24 25Z" fill="#443c49"/><path d="M26 30h3m7 0h3" stroke="#3f3c42" stroke-width="2"/>'
 export const TEXTURES = {
-  guardian: wrap(`${shadow}<path d="M20 39L44 39L49 61L15 61Z" fill="#b6c3d0" stroke="#536c79" stroke-width="2"/><path d="M27 39L37 39L40 60L24 60Z" fill="#6a8799"/><path d="M20 42L11 51L14 61L25 58L28 45Z" fill="#334d63" stroke="#c1d3dc" stroke-width="2"/><path d="M48 22L52 22L51 55L47 55Z" fill="#e0e9e9"/><path d="M43 49h14" stroke="#d8c27d" stroke-width="3"/>${head}<path d="M24 61L24 68M40 61L40 68" stroke="#353c4c" stroke-width="7"/>`),
-  mage: wrap(`${shadow}<path d="M22 36L42 36L51 63Q31 70 13 62Z" fill="#84799d" stroke="#514d70" stroke-width="2"/><path d="M29 36L35 36L39 64L25 64Z" fill="#c0b3d7"/>${head}<path d="M16 22L33 0L46 21Z" fill="#8b80a1"/><path d="M14 23Q31 16 49 23" stroke="#cec1e1" stroke-width="4"/><path d="M51 28L48 66" stroke="#a49170" stroke-width="4"/><path d="M52 17L59 25L51 34L44 25Z" fill="#9adbd7" stroke="#d4f5de" stroke-width="2"/>`),
-  slime: wrap(`${shadow}<path d="M10 55Q8 37 20 32Q30 10 44 33Q59 40 54 57Q36 70 10 55Z" fill="#9cc881" stroke="#4f7b5e" stroke-width="3"/><ellipse cx="24" cy="45" rx="3" ry="4" fill="#273e38"/><ellipse cx="41" cy="45" rx="3" ry="4" fill="#273e38"/><path d="M20 35Q27 26 34 31" stroke="#d8e6ac" stroke-width="4" fill="none"/>`),
-  wisp: wrap(`${shadow}<path d="M31 11Q44 28 43 39L57 48L43 51L34 65L23 52L8 46L21 38Q21 24 31 11Z" fill="#aac9df" stroke="#6084a3" stroke-width="3"/><path d="M24 41L29 43M37 41L33 43" stroke="#3c526c" stroke-width="3"/><path d="M31 23L35 36L29 36Z" fill="#e1f4ed"/>`),
+  ...ACTOR_DEFAULTS,
+  slime: enemySprite("slime"),
+  wisp: enemySprite("wisp"),
   brute: wrap(`${shadow}<path d="M9 60L14 27L26 19L36 23L49 19L56 59L43 65L19 65Z" fill="#a78391" stroke="#624b61" stroke-width="3"/><path d="M16 26L10 11L27 24M43 24L54 10L50 30" fill="#d9c9af"/><path d="M22 39L29 42M43 39L35 42" stroke="#f2d6ae" stroke-width="4"/><path d="M23 54L40 54" stroke="#483c4d" stroke-width="3"/>`),
   boss: wrap(`${shadow}<path d="M13 60L16 24L29 15L42 20L51 59L40 66L22 66Z" fill="#536e70" stroke="#b6b49a" stroke-width="3"/><path d="M16 31L5 17L8 6L20 24M44 28L58 10L57 3L39 23" fill="none" stroke="#c7c4a5" stroke-width="5"/><path d="M23 38L29 40M40 38L34 40" stroke="#e9c884" stroke-width="4"/><path d="M30 47L35 47L32 60Z" fill="#8bc6a3"/>`),
+  charger: wrap(`${shadow}<path d="M9 58L15 30L27 23L42 28L56 53L45 62L19 64Z" fill="#bc8e82" stroke="#684e58" stroke-width="3"/><path d="M23 28L12 12L25 22M43 28L56 12L49 34" fill="#ead0ad" stroke="#87685d" stroke-width="2"/><path d="M25 43L30 42M42 43L37 42" stroke="#492f43" stroke-width="4"/><path d="M14 55L4 60M52 53L61 57" stroke="#d2b089" stroke-width="3"/>`),
+  caster: wrap(`${shadow}<path d="M18 39L43 39L52 62L11 62Z" fill="#657b64" stroke="#485c50" stroke-width="2"/><path d="M16 24L32 3L48 24Z" fill="#788878" stroke="#c2d2ae" stroke-width="2"/><path d="M24 31L29 33M40 31L35 33" stroke="#d5dfae" stroke-width="3"/><path d="M53 24L50 66" stroke="#a59470" stroke-width="4"/><circle cx="52" cy="19" r="7" fill="#a8dcd3" stroke="#e4f5d2" stroke-width="2"/>`),
+  sentinel: wrap(`${shadow}<path d="M8 61L13 27L27 18L40 23L56 57L44 67L18 65Z" fill="#73886a" stroke="#c0c49f" stroke-width="3"/><path d="M16 27L5 11L24 23M43 25L59 9L52 34" fill="#bcc7a2" stroke="#66765f" stroke-width="2"/><path d="M22 40L29 42M42 40L35 42" stroke="#edda9b" stroke-width="4"/><path d="M23 53L42 53" stroke="#45564d" stroke-width="3"/>`),
+  oracle: wrap(`${shadow}<path d="M14 61L17 28L30 18L43 22L53 61L40 66L22 66Z" fill="#87799a" stroke="#d2c0de" stroke-width="3"/><path d="M15 29L8 7L24 23M44 24L57 5L53 34" fill="none" stroke="#c4b5d5" stroke-width="4"/><path d="M22 40L29 42M42 40L35 42" stroke="#b9eee2" stroke-width="4"/><path d="M31 20L34 35L29 35Z" fill="#a9e0dc"/>`),
 }

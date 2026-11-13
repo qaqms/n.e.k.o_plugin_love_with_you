@@ -30,7 +30,8 @@ if (!process.argv.includes("--game-only")) {
 }
 
 const gameNames = ["Coins", "ShoppingBag", "Undo2", "ArrowLeft", "Plus", "Check",
-  "Heart", "Footprints", "Swords", "Magnet", "Flame", "Wind", "Shield", "RotateCw", "Save", "BookOpen", "Snowflake"]
+  "Heart", "Footprints", "Swords", "Magnet", "Flame", "Wind", "Shield", "RotateCw", "Save", "BookOpen", "Snowflake",
+  "Pause", "Sparkles", "Zap", "Mountain", "Orbit", "Scan", "Lamp", "Ban"]
 const gameIcons = Object.fromEntries(gameNames.map(name => [name,
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${(icons[name][0] === "svg" ? icons[name][2] : icons[name]).map(([tag, attrs]) =>
     `<${tag} ${Object.entries(attrs).map(([key, value]) => `${key}="${value}"`).join(" ")}/>`).join("")}</svg>`]))

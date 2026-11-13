@@ -1,6 +1,6 @@
 # 模块职责与玩法扩展入口
 
-适用版本：0.7.7。本文描述当前结构；`DESIGN.md` 中的各版本章节保留设计沿革。
+结构覆盖至版本：0.8.5。本文描述当前结构；`DESIGN.md` 中的各版本章节保留设计沿革。
 
 ## 后端职责
 
@@ -18,9 +18,9 @@
 | `_storage.py`、`_json.py` | 原子文件替换、有界读写和严格 JSON | 判断玩法奖励、自动覆盖不支持的存档 | `tests/test_storage.py`、`test_host_transport.py` |
 | `_host.py` | 有界本机只读查询、宿主历史适配 | 修改宿主、冒用授权或把旧历史当新事件 | `tests/test_host_history.py`、`test_host_transport.py` |
 | `_portraits.py`、`_appearance.py` | 独立素材和外观文件、验证与偏好 | 关系评分代次或聊天内容 | `tests/test_portraits.py`、`test_appearance.py` |
-| `_adventure.py` | 独立冒险存档、全局修订、单局控制、检查点、新旧战斗规则绑定、v1/v2/v3 到 v4 的备份迁移、金币/终局/强化的原子保存和回执 | 修改关系/礼物金币、调用模型 | `tests/test_adventure.py`，再接运行时启停与隔离测试 |
+| `_adventure.py` | 独立冒险存档、全局修订、单局控制、检查点、新旧战斗规则绑定、v1–v7 到 v8 的备份迁移、规则 6 开局路线身份、规则 7 装束身份、金币/终局/强化的原子保存和回执 | 修改关系/礼物金币、调用模型 | `tests/test_adventure.py`，再接运行时启停与隔离测试 |
 | `_adventure_economy.py` | 冒险奖励公式、永久强化目录/上限/价格、购买/退款、钱包与效果校验 | SDK、网络、写文件、礼物经济 | 冒险规则与运行时经济隔离测试 |
-| `_adventure_skills.py` | 按战斗版本读取目录，校验双方槽位、分支、进化、候选、冷却、弹体形态、区域与凝霜快照 | 逐帧模拟、选择技能、写存档 | `tests/test_adventure.py` 的规则 2/3、异常快照与迁移测试 |
+| `_adventure_skills.py` | 按战斗版本读取目录，校验双方槽位、分支、进化、候选、冷却、弹体形态、区域、凝霜、敌人状态与协同快照；规则 7 增加选招阶段、四候选、类型改造、放逐与换招额度，遭遇校验在公共实体校验后执行 | 逐帧模拟、选择技能、写存档 | `tests/test_adventure.py` 的规则 2–7、异常快照与迁移测试 |
 
 `_commerce.settle()` 会修改传入状态，但不保证异常时自己回滚。调用方必须在同一状态锁和事务内调用并保存；返回 `replayed=True` 时不再保存或发布一次结算通知。送礼涉及关系、库存、额度与回执，保留整体回滚。
 
@@ -40,11 +40,18 @@
 | `ui/addressing.ts`、`ui/theme.ts` | 可单独验证的预览、草稿合并或配色算法；后端仍拥有最终规则 | 称呼浏览器测试、`tools/test_theme.mjs` |
 | `ui/interaction.ts`、`ui/scrollbars.ts` | 控件即时反馈和滚动状态 | `tools/test_ui.mjs` 中交互与滚动用例 |
 | `static/adventure.mjs`、`textures.mjs` | Phaser 战斗场景、原创素材、局内状态、暂停与升级；不修改关系、发模型消息或直接决定永久资产 | `tools/test_adventure.mjs` |
+| `static/actor-art.mjs`、`forest-art.mjs` | 原创原生角色帧与运行时图集、程序地表、独立场景物件和弹体纹理；装饰种子独立，不决定碰撞与伤害 | 冒险浏览器的素材像素、双方动作、碰撞尺寸与响应式截图 |
+| `static/terrain-rules.mjs`、`forest-map.mjs` | 规则 5 固定布局、脚底排序、遮挡淡化、静态碰撞体、扫掠截停、安全恢复及有预算的本地 A* 绕行；不消费战斗 RNG，不决定伤害、奖励或读写存档 | `tools/test_terrain_rules.mjs` 及冒险浏览器的实际移动、突进、冲锋、层次和恢复 |
+| `static/battle-art.mjs` | 按战斗时钟更新动作、有界装饰粒子、命中与范围视觉；不消费战斗随机数，不进入快照、不做伤害结算 | 冒险浏览器的随机数/快照不变性、预算、暂停和简化特效 |
 | `static/bridge.mjs` | 动作通信、严格回执核对与原请求；不自动抢占控制，通信失败不宣称保存完成 | 冒险浏览器的回执丢失与接管测试 |
 | `static/camp.mjs` | 营地钱包、商店与结果明细的显示及交互；不发放金币、决定价格或读写存档 | 冒险商店浏览器与协议回归 |
-| `static/skills.json`、`skills-v2.json`、`skills.mjs` | 规则 3 十招目录与冻结的规则 2 八招目录，纯构筑、候选、保底、分支与进化计算；不在重绘时重抽候选 | `tools/test_adventure_skills.mjs` |
-| `static/combat.mjs` | 规则 2/3 的技能施放、同行策略、有限接续、范围效果与贡献；场景保留实体和物理 | 冒险浏览器的技能、融合、终态与冷却恢复测试 |
+| `static/skills.json`、`skills-v2.json`、`skills-expanded.json`、`routes.json`、`build-mods.json`、`skills.mjs` | 版本化技能与旧路线目录，规则 7 类型改造与自由候选、纯构筑、保底、分支、进化和同槽换招计算；不在重绘时重抽候选 | `tools/test_adventure_skills.mjs`、`test_expanded_combat.mjs`、`test_buildcraft.mjs` |
+| `static/combat.mjs` | 规则 2–7 的技能施放、同行策略、有限接续、范围效果与贡献；通过地图服务取得突进与击退实际落点，场景保留实体和物理 | 冒险浏览器的技能、融合、终态、障碍与冷却恢复测试 |
+| `static/buildcraft.mjs` | 规则 7 起手选招、放逐、重选、战后换招及额度，先保存再恢复；保护融合与协同、保留冷却并清理替换角色的旧效果 | `tools/test_buildcraft.mjs` 与冒险浏览器的真实控件、重放和恢复 |
+| `static/expanded-combat.mjs` | 规则 6 雷链、岩弹命中、贯刺、刃环、伏印、震地、剑舞、天坠、治疗和灵灯；复用统一伤害与保存区域时钟，仅雷链线段是有界装饰，不拥有文件或奖励 | `tools/test_expanded_combat.mjs`、冒险浏览器的新招实际施放、密度与恢复 |
 | `static/frost.mjs` | 有界凝霜标记、减速、短冻结、免疫、直接剑技碎冰和同行贡献；时钟使用可保存的战斗时间 | 纯状态测试与浏览器命中、读档回归 |
+| `static/encounters.json`、`encounter-rules.mjs` | 共用敌人与协同目录，前置筛选、有限候选抽取、预警几何与安全出生点 | `tools/test_encounter_rules.mjs` 与后端快照校验 |
+| `static/encounters.mjs` | 首领时间线、敌人招式、预警与命中、战后协同选择、首领血条；通过控制器保存，不直接发放永久资产 | `tools/test_adventure.mjs` 的规则 4、重试、移动与触屏回归 |
 | `static/study.mjs` | 技能研习、图鉴、Q/E 按钮与冷却显示；不写存档、不发奖励 | 冒险浏览器的归属、触屏、升级响应丢失测试 |
 
 冒险原型使用第二个静态面板，不把游戏引擎塞进 Hosted TSX。`adventure_action` 使用已有素材 I/O 门控与启动代次，关系锁只用于读取开局身份/阶段；冒险文件另用服务锁与原子保存。停用会排空已接纳的 I/O，下一次启动重建会话代次并释放内存控制权。

@@ -1,6 +1,10 @@
 // Pure build rules. The scene supplies its saved RNG; rendering never draws choices.
 export const SKILLS = {}
 export const LEGACY_SKILLS = {}
+export const FROST_SKILLS = {}
+export const ROUTES = {}
+export const BUILD_MODS = {}
+export const SKILL_TAGS = {}
 export const TALENTS = {
   power: ["磨砺", "攻击强度 +8%", ["player", "companion"]],
   vitality: ["坚韧", "生命上限 +12，恢复等量生命", ["player"]],
@@ -9,24 +13,44 @@ export const TALENTS = {
   ward: ["守望", "同行护盾强度 +12%", ["companion"]],
 }
 export const LIMITS = { player: { auto: 3, manual: 2, support: 0 }, companion: { auto: 2, manual: 0, support: 1 } }
-export function installCatalog(items, legacy) {
+export function installCatalog(items, legacy, expanded = []) {
   const ids = ["fire", "slash", "wind", "guard", "flame", "dash", "pull", "armor"]
   const valid = (entries, keys) => Array.isArray(entries) && entries.length === keys.length
     && new Set(entries.map(s => s.id)).size === keys.length && entries.every(s => keys.includes(s.id))
   if (!valid(items, [...ids, "ice", "frost"]) || !valid(legacy, ids)) throw new Error("技能目录不完整")
+  if (expanded.length && !valid(expanded, ["spark", "stone", "thrust", "orbit", "rune", "quake", "whirl", "meteor", "heal", "beacon"])) throw new Error("扩展技能目录不完整")
   for (const item of items) SKILLS[item.id] = Object.freeze(item)
+  for (const item of items) FROST_SKILLS[item.id] = Object.freeze(item)
+  for (const item of expanded) SKILLS[item.id] = Object.freeze(item)
   for (const item of legacy) LEGACY_SKILLS[item.id] = Object.freeze(item)
 }
-export const buildRules = build => Object.hasOwn(build.misses, "ice") ? 3 : 2
-export const catalogFor = rules => rules === 2 ? LEGACY_SKILLS : SKILLS
+export function installRoutes(routes) {
+  if (!Array.isArray(routes) || routes.length !== 8 || new Set(routes.map(r => r.id)).size !== 8
+    || !routes.every(route => ["guardian", "mage"].includes(route.class)
+      && ["player", "companion"].every(owner => route[owner]?.length === 2 && route[owner].every(id => SKILLS[id])))) throw new Error("流派目录不完整")
+  for (const route of routes) ROUTES[route.id] = Object.freeze(route)
+}
+export function installBuildMods(data) {
+  const ids = ["fork", "piercing", "circuit", "edge", "field", "follow"]
+  if (!data?.tags || Object.keys(data.tags).length !== 20 || !Object.keys(data.tags).every(id => SKILLS[id])
+    || !Array.isArray(data.mods) || data.mods.length !== ids.length || new Set(data.mods.map(m => m.id)).size !== ids.length
+    || !data.mods.every(m => ids.includes(m.id) && m.cap >= 1 && m.cap <= 2
+      && m.owners.every(owner => ["player", "companion"].includes(owner)))) throw new Error("构筑改造目录不完整")
+  Object.assign(SKILL_TAGS, data.tags)
+  for (const spec of data.mods) BUILD_MODS[spec.id] = Object.freeze(spec)
+}
+export const buildRules = build => Object.hasOwn(build, "mods") ? 7 : Object.hasOwn(build.misses, "spark") ? 6 : Object.hasOwn(build.misses, "ice") ? 3 : 2
+export const catalogFor = rules => rules >= 6 ? SKILLS : rules === 2 ? LEGACY_SKILLS : FROST_SKILLS
 export const studyOwner = level => (level - 1) % 3 === 0 ? "companion" : "player"
 export function newSkill(id) { return { id, level: 1, focus: "", branch: "", evolution: "", ready_at: 0, react_at: 0 } }
-export function newBuild(owner, kind, rules = 3) {
+export function newBuild(owner, kind, rules = 3, route = kind) {
+  const starting = rules >= 7 ? [] : rules === 6 ? ROUTES[route]?.[owner] : null
   return {
-    skills: (owner === "player" ? kind === "mage" ? ["fire", "flame"] : ["slash", "dash"]
-      : kind === "mage" ? ["wind", "pull"] : ["guard", "armor"]).map(newSkill),
+    skills: (starting || (owner === "player" ? kind === "mage" ? ["fire", "flame"] : ["slash", "dash"]
+      : kind === "mage" ? ["wind", "pull"] : ["guard", "armor"])).map(newSkill),
     talents: Object.fromEntries(Object.keys(TALENTS).map(key => [key, 0])),
     misses: Object.fromEntries(Object.keys(catalogFor(rules)).map(key => [key, 0])),
+    ...(rules >= 7 ? { mods: Object.fromEntries(Object.keys(BUILD_MODS).map(key => [key, 0])), banished: [] } : {}),
   }
 }
 export function legalChoices(build, owner) {
@@ -34,7 +58,7 @@ export function legalChoices(build, owner) {
   for (const spec of Object.values(catalogFor(buildRules(build)))) {
     const skill = build.skills.find(s => s.id === spec.id)
     if (!skill) {
-      if (build.skills.filter(s => SKILLS[s.id].slot === spec.slot).length < LIMITS[owner][spec.slot]) result.push(`${spec.id}:learn`)
+      if (!build.banished?.includes(spec.id) && build.skills.filter(s => SKILLS[s.id].slot === spec.slot).length < LIMITS[owner][spec.slot]) result.push(`${spec.id}:learn`)
     } else if (skill.level === 1) result.push(`${spec.id}:power`, `${spec.id}:haste`)
     else if (skill.level === 2) result.push(...spec.branches.map(([branch]) => `${spec.id}:${branch}`))
     else if (skill.level === 3) result.push(`${spec.id}:deepen`)
@@ -47,9 +71,13 @@ export function legalChoices(build, owner) {
   for (const [key, [, , owners]] of Object.entries(TALENTS)) {
     if (owners.includes(owner) && build.talents[key] < 4) result.push(`talent:${key}`)
   }
+  if (buildRules(build) >= 7) for (const spec of Object.values(BUILD_MODS)) {
+    if (spec.owners.includes(owner) && build.mods[spec.id] < spec.cap && build.skills.some(s => SKILL_TAGS[s.id].includes(spec.tag))) result.push(`mod:${spec.id}`)
+  }
   return result
 }
 export function drawChoices(build, owner, rng, advance = true) {
+  if (buildRules(build) >= 7) return drawFreeChoices(build, owner, rng, advance)
   const pool = legalChoices(build, owner), chosen = []
   const take = candidates => {
     const available = candidates.filter(key => pool.includes(key) && !chosen.includes(key))
@@ -58,17 +86,46 @@ export function drawChoices(build, owner, rng, advance = true) {
   const branches = build.skills.filter(s => s.level === 2)
   take(branches.filter(s => build.misses[s.id] >= 2).flatMap(s => pool.filter(key => key.startsWith(`${s.id}:`))))
   take(pool.filter(key => !key.startsWith("talent:") && !key.endsWith(":learn")))
-  take(pool.filter(key => key.endsWith(":learn")))
+  const learning = pool.filter(key => key.endsWith(":learn"))
+  const catalysts = buildRules(build) >= 6 ? build.skills.flatMap(s => SKILLS[s.id].fusion?.[0] || []) : []
+  take([...learning, ...learning.filter(key => catalysts.includes(key.split(":")[0])), ...learning.filter(key => catalysts.includes(key.split(":")[0]))])
   while (chosen.length < Math.min(3, pool.length)) take(pool)
   if (advance) for (const skill of branches) {
     build.misses[skill.id] = chosen.some(key => key.startsWith(`${skill.id}:`)) ? 0 : Math.min(2, build.misses[skill.id] + 1)
   }
   return chosen
 }
+function drawFreeChoices(build, owner, rng, advance) {
+  const pool = legalChoices(build, owner), chosen = [], branches = build.skills.filter(s => s.level === 2)
+  const take = options => {
+    const available = options.filter(key => !chosen.includes(key))
+    if (available.length && chosen.length < 4) chosen.push(available[rng.between(0, available.length - 1)])
+  }
+  const growth = pool.filter(key => !key.startsWith("talent:") && !key.startsWith("mod:") && !key.endsWith(":learn"))
+  take(growth.filter(key => branches.some(s => build.misses[s.id] >= 2 && key.startsWith(`${s.id}:`))))
+  take(growth)
+  const learning = pool.filter(key => key.endsWith(":learn"))
+  const missing = owner === "player" ? "manual" : "support"
+  const opening = !build.skills.some(s => SKILLS[s.id].slot === missing) ? learning.filter(key => SKILLS[key.split(":")[0]].slot === missing) : []
+  take([...learning, ...opening])
+  take(pool.filter(key => key.startsWith("mod:")))
+  while (chosen.length < Math.min(4, pool.length)) take(pool)
+  if (advance) for (const skill of branches) build.misses[skill.id] =
+    chosen.some(key => key.startsWith(`${skill.id}:`)) ? 0 : Math.min(2, build.misses[skill.id] + 1)
+  return chosen
+}
+export const starterSkills = () => Object.values(catalogFor(7)).filter(s => s.slot === "auto")
+export function replacementChoices(build, id) {
+  if (buildRules(build) < 7 || !build.skills.some(s => s.id === id)) return []
+  if (build.skills.some(s => s.id !== id && s.evolution === "fusion" && SKILLS[s.id].fusion[0] === id)) return []
+  return Object.values(catalogFor(7)).filter(spec => spec.slot === SKILLS[id].slot
+    && !build.skills.some(s => s.id === spec.id) && !build.banished.includes(spec.id)).map(s => s.id)
+}
 export function applyChoice(build, owner, key) {
   if (!legalChoices(build, owner).includes(key)) return false
   const [id, action] = key.split(":")
   if (id === "talent") { build.talents[action]++; return true }
+  if (id === "mod") { build.mods[action]++; return true }
   if (action === "learn") { build.skills.push(newSkill(id)); return true }
   const skill = build.skills.find(s => s.id === id)
   if (skill.level === 1) skill.focus = action
@@ -104,7 +161,7 @@ export function nextStep(build, skill) {
     : `；复合需同角色${SKILLS[spec.fusion[0]].name}2级（当前${catalyst?.level || 0}级），每人限一项`}`
 }
 export function parameters(skill, build) {
-  const modern = buildRules(build) === 3, spec = catalogFor(buildRules(build))[skill.id]
+  const modern = buildRules(build) >= 3, spec = catalogFor(buildRules(build))[skill.id]
   let damage = spec.damage * (1 + (skill.level - 1) * .18) * (skill.focus === "power" ? 1.25 : 1)
     * (1 + build.talents.power * .08) * (skill.level === 5 ? 1.3 : 1)
   let cooldown = spec.cooldown * (skill.focus === "haste" ? .82 : 1) * (skill.level >= 4 ? .9 : 1)
@@ -159,13 +216,95 @@ export function parameters(skill, build) {
       if (skill.id === "frost") { radius = 145; frostStacks = 3 }
     }
   }
+  const extra = {}
+  if (buildRules(build) >= 6) {
+    const deep = skill.level >= 4, pure = skill.level === 5 && skill.evolution === "pure", branch = skill.branch
+    if (skill.id === "spark") {
+      Object.assign(extra, { jumps: branch === "relay" ? 5 + Number(deep) : branch === "charge" ? 2 : 3,
+        hop: branch === "relay" ? 185 : 145, decay: pure ? .84 : .72, first: branch === "charge" ? deep ? 1.85 : 1.6 : 1 })
+      if (branch === "relay") damage *= .9
+      if (pure) extra.jumps += 2
+    }
+    if (skill.id === "stone") {
+      Object.assign(extra, { speed: 245, splash: branch === "shrapnel" ? deep ? 78 : 65 : 0, splashDamage: .4 })
+      knockback = pure ? 48 : 32
+      if (branch === "lance") { pierce = 2 + Number(deep) + Number(pure); damage *= .85 }
+      if (pure && extra.splash) extra.splash = 90
+    }
+    if (skill.id === "thrust") {
+      width = 18 + (branch === "skewer" && deep ? 6 : 0) + (pure ? 4 : 0)
+      targets = branch === "skewer" ? 3 + Number(pure) : 1
+      if (branch === "duel") damage *= 1.6 * (deep ? 1.1 : 1) * (pure ? 1.2 : 1)
+      if (pure) range += 35
+    }
+    if (skill.id === "orbit") {
+      radius = pure ? 92 : 84; duration = 1600
+      Object.assign(extra, { blades: (branch === "twins" ? 2 : 1) + Number(pure),
+        band: branch === "broad" ? deep ? 36 : 30 : 16, rotation: branch === "twins" ? deep ? 2.6 : 2.1 : 1.8 })
+    }
+    if (skill.id === "rune") {
+      radius = (branch === "wide" ? deep ? 110 : 95 : 68) + (pure ? 15 : 0); duration = 8000
+      Object.assign(extra, { trigger: 30, cap: pure ? 4 : 3 })
+      if (branch === "quick") { cooldown *= deep ? .51 : .6; damage *= .8 }
+    }
+    if (skill.id === "quake") {
+      radius = pure ? 185 : 165; range = radius; duration = deep ? 4000 : 3000
+      knockback = pure ? 110 : 75
+      extra.echoDamage = deep ? .7 : .55
+    }
+    if (skill.id === "whirl") {
+      radius = pure ? 128 : 112; range = radius; duration = pure ? 4000 : 3000
+      Object.assign(extra, { stride: branch === "travel" ? deep ? .3 : .2 : 0, edge: branch === "edge" ? deep ? 1.85 : 1.6 : 1 })
+    }
+    if (skill.id === "meteor") {
+      radius = branch === "rain" ? 78 : branch === "impact" ? deep ? 145 : 132 : 110
+      Object.assign(extra, { waves: (branch === "rain" ? deep ? 4 : 3 : 1) + Number(pure), delay: 900 })
+      if (branch === "rain") damage *= .48
+      knockback = branch === "impact" ? 65 : 0
+    }
+    if (skill.id === "heal") {
+      extra.overflow = branch === "overflow" ? deep ? 1 : .7 : 0
+      extra.healBonus = branch === "follow" && deep ? 1.3 : 1
+      extra.ward = pure ? 6 : 0
+    }
+    if (skill.id === "beacon") {
+      radius = 260; duration = branch === "follow" && deep ? 7500 : 6000
+      Object.assign(extra, { lamps: pure ? 2 : 1, ward: branch === "ward" ? deep ? 4 : 2 : 0 })
+    }
+  }
+  if (buildRules(build) >= 7) {
+    const tags = SKILL_TAGS[skill.id], mods = build.mods
+    if (tags.includes("projectile")) {
+      if (mods.fork) { count++; damage *= .78 }
+      pierce = Math.min(5, pierce + mods.piercing)
+    }
+    if (tags.includes("chain")) extra.jumps = (extra.jumps ?? (skill.evolution === "fusion" ? 3 : 1)) + mods.circuit
+    if (mods.edge && tags.includes("melee")) {
+      if (["slash", "guard", "thrust"].includes(skill.id)) range += 20 * mods.edge
+      if (skill.id === "dash") width += 10 * mods.edge
+      if (skill.id === "orbit") extra.band += 6 * mods.edge
+      if (skill.id === "whirl") radius += 10 * mods.edge
+    }
+    if (mods.field && tags.includes("area")) {
+      radius = Math.min(skill.id === "beacon" ? 280 : 200, radius + 12 * mods.field)
+      if (skill.id === "quake") range = radius
+    }
+  }
   return { damage, cooldown: Math.max(250, Math.round(cooldown)), range, count, radius, duration, pierce,
     half, width, knockback, reactCooldown, targets, shieldBonus, followBonus, retaliateRange,
-    blastRadius, blastDuration, frostStacks, frostDuration, breakDamage }
+    blastRadius, blastDuration, frostStacks, frostDuration, breakDamage, ...extra }
 }
 export function choiceText(build, key, owner = "player") {
   const [id, action] = key.split(":")
-  if (id === "talent") return { name: TALENTS[action][0], type: "基础强化", detail: TALENTS[action][1], change: `${build.talents[action]} → ${build.talents[action] + 1} 阶`, icon: action === "vitality" ? "Heart" : "Plus" }
+  if (id === "talent") return { name: TALENTS[action][0], type: "基础强化",
+    detail: action === "ward" && buildRules(build) >= 6 ? "同行护盾与治疗强度 +12%" : TALENTS[action][1],
+    change: `${build.talents[action]} → ${build.talents[action] + 1} 阶`, icon: action === "vitality" ? "Heart" : "Plus" }
+  if (id === "mod") {
+    const spec = BUILD_MODS[action], affected = build.skills.filter(s => SKILL_TAGS[s.id].includes(spec.tag)).map(s => SKILLS[s.id].name)
+    return { name: spec.name, type: action === "follow" ? "双人协同" : "体系改造",
+      detail: `${spec.description} 当前适用：${affected.join("、")}；以后学到的同类技能也生效。`,
+      change: `${build.mods[action]} → ${build.mods[action] + 1} 阶`, icon: spec.icon }
+  }
   const spec = catalogFor(buildRules(build))[id], skill = build.skills.find(s => s.id === id)
   const slot = skillControl(build, id)
   if (action === "learn") return {

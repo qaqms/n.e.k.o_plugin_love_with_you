@@ -568,6 +568,25 @@ def frost_snapshot(module, rules=3, **changes):
         "frozen_until": 10400, "freeze_at": 13300, "break_at": 0,
     }])
     value["stats"].update(shatters=2, cross_shatters=1)
+    if rules >= 4:
+        value["enemies"].extend([
+            {"id": 5, "kind": "sentinel", "x": 550, "y": 500, "hp": 650},
+            {"id": 6, "kind": "charger", "x": 600, "y": 500, "hp": 48},
+        ])
+        value["next_id"] = 8
+        value["encounters"] = {
+            "milestones": {"sentinel": {"spawned": True, "defeated": False, "enemy": 5},
+                           "oracle": {"spawned": False, "defeated": False, "enemy": 0}},
+            "selected": [], "resolved": [], "pending": "", "choices": [], "rest_until": 0,
+        }
+        value["foes"] = [
+            {"target": 5, "state": "windup", "ready_at": 10800, "step": 1, "phase": 1},
+            {"target": 6, "state": "move", "ready_at": 11200, "step": 0, "phase": 1},
+        ]
+        value["threats"] = [{
+            "id": 7, "source": 6, "kind": "line", "x": 600, "y": 500, "ex": 900, "ey": 500,
+            "radius": 30, "damage": 16, "trigger_at": 10800, "expires_at": 11060, "fired": False,
+        }]
     value.update(changes)
     return value
 
@@ -577,7 +596,7 @@ def test_frost_checkpoint_restores_marks_zones_forms_and_counters_exactly(store,
     value = frost_snapshot(module)
     call(store, "release", "release_frost_save", snapshot=value)
     restored = module.AdventureStore(store.file)
-    assert restored.view()["rules"] == 3
+    assert restored.view()["rules"] == 7
     assert restored.view()["run"]["snapshot"] == value
     assert not restored.view("client_00000001")["owns_control"]
 
@@ -706,3 +725,454 @@ def test_rule3_settlement_retry_preserves_contribution_and_awards_once(store, mo
     assert call(store, "finish", "finish_frost_once", revision=revision, snapshot=final) == first
     assert store.view()["economy"]["balance"] == 42
     assert store.view()["run"]["snapshot"]["stats"]["cross_shatters"] == 1
+
+
+def test_rule4_encounter_snapshot_preserves_ai_warning_and_pending_reward(store, module):
+    call(store, rules=4)
+    value = frost_snapshot(module, rules=4)
+    value["encounters"]["milestones"]["sentinel"] = {"spawned": True, "defeated": True, "enemy": 0}
+    value["enemies"] = [enemy for enemy in value["enemies"] if enemy["kind"] != "sentinel"]
+    value["encounters"].update(pending="sentinel", choices=["cadence"])
+    value["foes"] = [value["foes"][1]]
+    value["threats"][0]["source"] = 6
+    value["choices"] = []
+    value["study_owner"] = ""
+    call(store, "release", "release_rule4_encounter", snapshot=value)
+    loaded = module.AdventureStore(store.file)
+    assert loaded.view()["run"]["rules"] == 4
+    assert loaded.view()["run"]["snapshot"] == value
+    assert loaded.view()["rules"] == 7
+
+
+@pytest.mark.parametrize("corruption", [
+    "missing", "unknown", "unowned_enemy", "missing_ai", "ai_timer", "phase", "milestone_id",
+    "pending_unearned", "duplicate_coop", "invalid_coop", "threat_source", "threat_id",
+    "threat_damage", "threat_expiry", "too_many_threats", "frozen_miniboss",
+    "selected_type", "resolved_type", "choices_type", "pending_type", "unspawned_enemy",
+    "bad_enemy", "bad_bullet", "bad_drop", "bad_zone", "bad_threat", "bad_ai", "threat_source_type",
+])
+def test_rule4_rejects_hostile_encounter_snapshots_without_writes(store, module, corruption):
+    call(store, rules=4)
+    value = frost_snapshot(module, rules=4)
+    if corruption == "missing":
+        del value["threats"]
+    elif corruption == "unknown":
+        value["encounters"]["extra"] = 1
+    elif corruption == "unowned_enemy":
+        value["enemies"].append({"id": 8, "kind": "sentinel", "x": 500, "y": 500, "hp": 500})
+        value["next_id"] = 9
+    elif corruption == "missing_ai":
+        value["foes"].pop()
+    elif corruption == "ai_timer":
+        value["foes"][0]["ready_at"] = 1000000
+    elif corruption == "phase":
+        value["foes"][0]["phase"] = 2
+    elif corruption == "milestone_id":
+        value["encounters"]["milestones"]["sentinel"]["enemy"] = 6
+    elif corruption == "pending_unearned":
+        value["encounters"].update(pending="sentinel", choices=["cadence"])
+    elif corruption == "duplicate_coop":
+        value["encounters"].update(pending="sentinel", choices=["cadence", "cadence"])
+        value["encounters"]["milestones"]["sentinel"] = {"spawned": True, "defeated": True, "enemy": 0}
+        value["enemies"] = [enemy for enemy in value["enemies"] if enemy["kind"] != "sentinel"]
+    elif corruption == "invalid_coop":
+        value["encounters"].update(pending="sentinel", choices=["rime"])
+        value["encounters"]["milestones"]["sentinel"] = {"spawned": True, "defeated": True, "enemy": 0}
+        value["enemies"] = [enemy for enemy in value["enemies"] if enemy["kind"] != "sentinel"]
+    elif corruption == "threat_source":
+        value["threats"][0]["source"] = 99
+    elif corruption == "threat_id":
+        value["threats"][0]["id"] = 5
+    elif corruption == "threat_damage":
+        value["threats"][0]["damage"] = 1000
+    elif corruption == "threat_expiry":
+        value["threats"][0]["expires_at"] = 1000000
+    elif corruption == "too_many_threats":
+        value["threats"] *= 33
+    elif corruption == "frozen_miniboss":
+        value["frosts"][0]["target"] = 5
+        value["frosts"][0]["frozen_until"] = 10500
+    elif corruption in ("selected_type", "resolved_type", "choices_type"):
+        value["encounters"][corruption.removesuffix("_type")] = [[]]
+    elif corruption == "pending_type":
+        value["encounters"]["pending"] = []
+    elif corruption == "unspawned_enemy":
+        value["encounters"]["milestones"]["sentinel"] = {"spawned": False, "defeated": False, "enemy": 0}
+    elif corruption.startswith("bad_"):
+        field = {"bad_enemy": "enemies", "bad_bullet": "bullets", "bad_drop": "drops",
+                 "bad_zone": "zones", "bad_threat": "threats", "bad_ai": "foes"}[corruption]
+        value[field] = [None]
+    elif corruption == "threat_source_type":
+        value["threats"][0]["source"] = []
+    before = copy.deepcopy(store.state)
+    persisted = store.file.path.read_bytes()
+    with pytest.raises(module.AdventureError):
+        call(store, "checkpoint", "invalid_encounter_snapshot", snapshot=value)
+    assert store.state == before
+    assert store.file.path.read_bytes() == persisted
+
+
+def test_v4_rule3_run_and_wallet_migrate_to_v5_without_enabling_encounters(store, module):
+    earn(store)
+    call(store, "buy", "buy_before_rule4", upgrade="power", level=0)
+    call(store, request="start_before_rule4", rules=3)
+    value = frost_snapshot(module, rules=3)
+    call(store, "checkpoint", "save_before_rule4", snapshot=value)
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 4
+    store.file.save(raw)
+    original = store.file.path.read_bytes()
+    migrated = module.AdventureStore(store.file)
+    assert migrated.view()["run"]["rules"] == 3
+    assert migrated.view()["run"]["snapshot"] == value
+    assert migrated.view()["economy"] == raw["economy"]
+    assert store.file.path.read_bytes() == original
+    call(migrated, "claim", "claim_rule4_migration", takeover=False)
+    backups = list(store.file.path.parent.glob("adventure.v4-*.backup.json"))
+    assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
+    assert store.file.load()[0]["version"] == 8
+
+
+def test_rule3_file_cannot_claim_rule4_and_rules_remain_fixed(store, module):
+    call(store, rules=3)
+    with pytest.raises(module.AdventureError, match="rules_unsupported"):
+        call(store, "checkpoint", "upgrade_old_run", snapshot=frost_snapshot(module, rules=4))
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 4
+    raw["run"].update(rules=4, snapshot=frost_snapshot(module, rules=4))
+    store.file.save(raw)
+    persisted = store.file.path.read_bytes()
+    with pytest.raises(module.AdventureError, match="recovery_required"):
+        module.AdventureStore(store.file).view()
+    assert store.file.path.read_bytes() == persisted
+
+
+def test_rule5_map_journey_keeps_rule_identity_and_full_snapshot_on_resume(store, module):
+    assert store.view()["rules"] == 7
+    call(store, rules=5)
+    value = frost_snapshot(module, rules=5)
+    call(store, "release", "release_rule5_map", snapshot=value)
+    restored = module.AdventureStore(store.file)
+    assert restored.view()["run"]["rules"] == 5
+    assert restored.view()["run"]["snapshot"] == value
+    call(restored, "claim", "claim_rule5_map", takeover=False)
+    with pytest.raises(module.AdventureError, match="rules_unsupported"):
+        call(restored, "checkpoint", "downgrade_rule5_map", snapshot=frost_snapshot(module, rules=4))
+
+
+def test_v5_migration_keeps_existing_unobstructed_journey_and_backs_up_before_write(store, module):
+    call(store, rules=4)
+    value = frost_snapshot(module, rules=4)
+    call(store, "checkpoint", "save_before_map5", snapshot=value)
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 5
+    store.file.save(raw)
+    original = store.file.path.read_bytes()
+    migrated = module.AdventureStore(store.file)
+    assert migrated.view()["rules"] == 7
+    assert migrated.view()["run"]["rules"] == 4
+    assert migrated.view()["run"]["snapshot"] == value
+    assert migrated.view()["economy"] == raw["economy"]
+    assert store.file.path.read_bytes() == original
+    call(migrated, "claim", "claim_map5_migration", takeover=False)
+    backups = list(store.file.path.parent.glob("adventure.v5-*.backup.json"))
+    assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
+    assert store.file.load()[0]["version"] == 8
+
+
+def test_v5_file_cannot_claim_future_solid_map_rules(store, module):
+    call(store, rules=5)
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 5
+    store.file.save(raw)
+    original = store.file.path.read_bytes()
+    with pytest.raises(module.AdventureError, match="recovery_required"):
+        module.AdventureStore(store.file).view()
+    assert store.file.path.read_bytes() == original
+
+
+def expanded_snapshot(module, **changes):
+    value = frost_snapshot(module, rules=6, frosts=[], shatter_at=0, zones=[], bullets=[])
+    for owner, route in (("player", "earth"), ("companion", "frost")):
+        value["builds"][owner]["skills"] = [
+            {"id": key, "level": 1, "focus": "", "branch": "", "evolution": "", "ready_at": 0, "react_at": 0}
+            for key in module.skills.ROUTES[route][owner]
+        ]
+        value["builds"][owner]["misses"] = dict.fromkeys(module.skills.CATALOGS[6], 0)
+    value.update(changes)
+    return value
+
+
+@pytest.mark.parametrize("route", ["guardian", "mage", "frost", "thunder", "earth", "blade", "trapper", "lancer"])
+def test_rule6_route_identity_defaults_and_persistence(store, module, route):
+    kind = module.skills.ROUTES[route]["class"]
+    call(store, rules=6, player_class=kind, companion_class=kind, player_route=route, companion_route=route)
+    restored = module.AdventureStore(store.file).view()["run"]
+    assert restored["player_route"] == restored["companion_route"] == route
+    assert restored["player_class"] == restored["companion_class"] == kind
+    assert restored["snapshot"] is None
+
+
+@pytest.mark.parametrize("change", [
+    {"player_route": "unknown"}, {"player_route": []}, {"player_route": True},
+    {"player_route": "thunder"}, {"companion_route": "blade"},
+    {"rules": 5, "player_route": "guardian"},
+])
+def test_invalid_or_legacy_route_start_is_atomic(store, module, change):
+    before = copy.deepcopy(store.state)
+    with pytest.raises(module.AdventureError):
+        call(store, rules=change.get("rules", 6), **{k: v for k, v in change.items() if k != "rules"})
+    assert store.state == before
+    assert store.owner is None
+
+
+def test_rule6_defaults_to_original_routes_and_saves_expanded_candidates_and_stone_projectiles(store, module):
+    call(store, rules=6, player_class="mage")
+    assert store.view()["run"]["player_route"] == "mage"
+    assert store.view()["run"]["companion_route"] == "mage"
+    value = expanded_snapshot(module, choices=["spark:learn", "meteor:learn", "stone:power"], study_owner="player")
+    value["bullets"] = [{
+        "id": 2, "x": 800, "y": 500, "vx": -245, "vy": 0, "life": 800, "damage": 48,
+        "owner": "player", "skill": "stone", "pierce": 0, "hit_ids": [], "form": "base",
+    }]
+    call(store, "release", "release_expanded_choices", snapshot=value)
+    restored = module.AdventureStore(store.file)
+    assert restored.view()["run"]["snapshot"] == value
+    assert len(restored.view()["run"]["snapshot"]["builds"]["player"]["misses"]) == 20
+    assert not restored.view("client_00000001")["owns_control"]
+
+
+@pytest.mark.parametrize("kind,owner,route,branch,radius", [
+    ("orbit", "player", "blade", "", 84), ("rune", "player", "trapper", "", 68),
+    ("whirl", "player", "blade", "", 112), ("quake", "player", "earth", "fault", 165),
+    ("meteor", "player", "thunder", "", 110), ("beacon", "companion", "thunder", "", 260),
+])
+def test_new_saved_effects_round_trip_without_extra_timers(store, module, kind, owner, route, branch, radius):
+    call(store, rules=6)
+    value = expanded_snapshot(module)
+    value["builds"][owner]["skills"] = [
+        {"id": key, "level": 3 if branch and key == kind else 1, "focus": "power" if branch and key == kind else "",
+         "branch": branch if key == kind else "", "evolution": "", "ready_at": 12500, "react_at": 0}
+        for key in module.skills.ROUTES[route][owner]
+    ]
+    value["zones"] = [{"id": 4, "kind": kind, "owner": owner, "x": 900, "y": 600,
+                       "radius": radius, "damage": 25, "expires_at": 11300, "tick_at": 10900, "targets": []}]
+    call(store, "checkpoint", "save_expanded_zone", snapshot=value)
+    assert module.AdventureStore(store.file).view()["run"]["snapshot"] == value
+
+
+@pytest.mark.parametrize("corruption", [
+    "missing_catalog_key", "old_catalog", "unowned_bullet", "unsupported_bullet", "foreign_zone",
+    "oversized_zone", "future_zone", "targeted_zone", "duplicate_ring", "too_many_mines", "unbranched_quake",
+])
+def test_rule6_rejects_malformed_new_effects_without_replacing_checkpoint(store, module, corruption):
+    call(store, rules=6)
+    value = expanded_snapshot(module)
+    call(store, "checkpoint", "save_valid_before_corruption", snapshot=value)
+    before = store.file.path.read_bytes()
+    invalid = copy.deepcopy(value)
+    invalid["zones"] = [{"id": 4, "kind": "quake", "owner": "player", "x": 900, "y": 600,
+                         "radius": 165, "damage": 25, "expires_at": 11300, "tick_at": 10900, "targets": []}]
+    quake = invalid["builds"]["player"]["skills"][1]
+    quake.update(level=3, focus="power", branch="fault")
+    if corruption == "missing_catalog_key":
+        del invalid["builds"]["player"]["misses"]["spark"]
+    elif corruption == "old_catalog":
+        invalid["builds"]["player"]["misses"] = dict.fromkeys(module.skills.CATALOGS[5], 0)
+    elif corruption in ("unowned_bullet", "unsupported_bullet"):
+        invalid["bullets"] = [{"id": 2, "x": 800, "y": 500, "vx": -245, "vy": 0, "life": 800, "damage": 48,
+                               "owner": "companion" if corruption == "unowned_bullet" else "player",
+                               "skill": "stone" if corruption == "unowned_bullet" else "spark",
+                               "pierce": 0, "hit_ids": [], "form": "base"}]
+    elif corruption == "foreign_zone":
+        invalid["zones"][0]["owner"] = "companion"
+    elif corruption == "oversized_zone":
+        invalid["zones"][0]["radius"] = 201
+    elif corruption == "future_zone":
+        invalid["zones"][0]["expires_at"] = invalid["elapsed"] + 4001
+    elif corruption == "targeted_zone":
+        invalid["zones"][0]["targets"] = [1]
+    elif corruption in ("duplicate_ring", "too_many_mines"):
+        kind = "orbit" if corruption == "duplicate_ring" else "rune"
+        invalid["builds"]["player"]["skills"][0]["id"] = kind
+        invalid["zones"] = [
+            {**invalid["zones"][0], "kind": kind, "id": index + 8}
+            for index in range(2 if kind == "orbit" else 4)
+        ]
+        invalid["next_id"] = 12
+    elif corruption == "unbranched_quake":
+        quake.update(level=1, focus="", branch="")
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "reject_expanded_corruption", snapshot=invalid)
+    assert store.file.path.read_bytes() == before
+    assert store.view()["run"]["snapshot"] == value
+
+
+def test_v6_migration_keeps_old_skill_pool_candidates_wallet_and_map_then_backs_up(store, module):
+    earn(store)
+    call(store, request="start_before_expansion", rules=5)
+    value = frost_snapshot(module, rules=5, choices=["fire:power", "wind:learn"], study_owner="player")
+    call(store, "checkpoint", "save_before_expansion", snapshot=value)
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 6
+    store.file.save(raw)
+    original = store.file.path.read_bytes()
+    migrated = module.AdventureStore(store.file)
+    view = migrated.view()
+    assert view["rules"] == 7
+    assert view["run"]["rules"] == 5
+    assert "player_route" not in view["run"]
+    assert view["run"]["snapshot"] == value
+    assert view["economy"] == raw["economy"]
+    assert store.file.path.read_bytes() == original
+    call(migrated, "claim", "claim_expansion_migration", takeover=False)
+    backups = list(store.file.path.parent.glob("adventure.v6-*.backup.json"))
+    assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
+    assert store.file.load()[0]["version"] == 8
+
+
+def test_old_file_cannot_claim_expanded_routes_and_current_run_cannot_switch_rules(store, module):
+    call(store, rules=6)
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 6
+    store.file.save(raw)
+    original = store.file.path.read_bytes()
+    with pytest.raises(module.AdventureError, match="recovery_required"):
+        module.AdventureStore(store.file).view()
+    assert store.file.path.read_bytes() == original
+    with pytest.raises(module.AdventureError, match="rules_unsupported"):
+        call(store, "checkpoint", "cannot_switch_expanded_rules", snapshot=frost_snapshot(module, rules=5))
+
+
+def free_snapshot(module, preparation=""):
+    value = expanded_snapshot(module, rules=7, preparation=preparation, swaps={"player": 0, "companion": 0})
+    for owner, build in value["builds"].items():
+        build.update(mods=dict.fromkeys(module.skills.MODS, 0), banished=[])
+        build["skills"] = build["skills"][:1]
+        if preparation and (preparation == "player" or owner == "companion"):
+            build["skills"] = []
+    if preparation:
+        value.update(elapsed=0, level=1, xp=0, kills=0, partner_kills=0, next_id=1, shield=0,
+                     enemies=[], bullets=[], drops=[], zones=[], frosts=[], foes=[], threats=[])
+        value["stats"] = dict.fromkeys(value["stats"], 0)
+        value["encounters"]["milestones"] = {
+            key: {"spawned": False, "defeated": False, "enemy": 0} for key in ("sentinel", "oracle")
+        }
+    return value
+
+
+@pytest.mark.parametrize("phase", ["player", "companion", ""])
+def test_free_build_preparation_and_empty_active_slots_survive_release_and_takeover(store, module, phase):
+    call(store, rules=7)
+    assert "player_route" not in store.view()["run"]
+    value = free_snapshot(module, phase)
+    call(store, "release", "release_free_preparation", snapshot=value)
+    loaded = module.AdventureStore(store.file)
+    call(loaded, "claim", "claim_free_preparation", client="client_00000002", takeover=True)
+    assert loaded.view()["run"]["snapshot"] == value
+    assert loaded.view()["run"]["rules"] == 7
+
+
+def test_free_build_four_choices_modifiers_bans_and_cooldowns_round_trip(store, module):
+    call(store, rules=7)
+    value = free_snapshot(module)
+    value.update(choices=["stone:power", "meteor:learn", "mod:fork", "mod:piercing"], study_owner="player", rerolls=1)
+    build = value["builds"]["player"]
+    build["banished"] = ["fire", "wind"]
+    build["mods"]["piercing"] = 1
+    build["skills"][0]["ready_at"] = 15000
+    call(store, "release", "release_free_four_choices", snapshot=value)
+    assert module.AdventureStore(store.file).view()["run"]["snapshot"] == value
+
+
+@pytest.mark.parametrize("corruption", [
+    "missing_mod", "unknown_mod", "boolean_rank", "over_cap", "wrong_owner", "empty_ready",
+    "duplicate_ban", "owned_ban", "foreign_ban", "third_ban", "stale_banned_choice",
+    "unmatched_mod_choice", "five_choices", "unearned_swap", "missing_preparation",
+])
+def test_free_build_rejects_invalid_decisions_atomically(store, module, corruption):
+    call(store, rules=7)
+    valid = free_snapshot(module)
+    call(store, "checkpoint", "save_valid_free_build", snapshot=valid)
+    before = store.file.path.read_bytes()
+    value = copy.deepcopy(valid)
+    build = value["builds"]["player"]
+    if corruption == "missing_mod":
+        del build["mods"]["fork"]
+    elif corruption == "unknown_mod":
+        build["mods"]["unknown"] = 0
+    elif corruption == "boolean_rank":
+        build["mods"]["fork"] = True
+    elif corruption == "over_cap":
+        build["mods"]["fork"] = 2
+    elif corruption == "wrong_owner":
+        build["mods"]["follow"] = 1
+    elif corruption == "empty_ready":
+        build["skills"] = []
+    elif corruption in ("duplicate_ban", "owned_ban", "foreign_ban", "third_ban"):
+        build["banished"] = {"duplicate_ban": ["fire", "fire"], "owned_ban": ["stone"],
+                             "foreign_ban": ["heal"], "third_ban": ["fire", "wind", "ice"]}[corruption]
+    elif corruption == "stale_banned_choice":
+        build["banished"] = ["fire"]
+        value.update(choices=["fire:learn"], study_owner="player")
+    elif corruption == "unmatched_mod_choice":
+        value.update(choices=["mod:field"], study_owner="player")
+    elif corruption == "five_choices":
+        value.update(choices=["stone:power", "stone:haste", "meteor:learn", "mod:fork", "mod:piercing"],
+                     study_owner="player")
+    elif corruption == "unearned_swap":
+        value["swaps"]["player"] = 1
+    elif corruption == "missing_preparation":
+        del value["preparation"]
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "reject_invalid_free_build", snapshot=value)
+    assert store.file.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("corruption", ["elapsed", "shield", "shatter_at", "boss_spawned", "next_id", "milestone", "modifier"])
+def test_preparation_cannot_contain_combat_progress(store, module, corruption):
+    call(store, rules=7)
+    value = free_snapshot(module, "player")
+    if corruption == "milestone":
+        value["encounters"]["milestones"]["sentinel"].update(spawned=True, defeated=True)
+    elif corruption == "modifier":
+        value["builds"]["companion"]["mods"]["follow"] = 1
+    elif corruption == "boss_spawned":
+        value[corruption] = True
+    else:
+        value[corruption] = 2
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "reject_combat_preparation", snapshot=value)
+
+
+def test_v7_migration_preserves_rule6_routes_choices_wallet_and_backup(store, module):
+    earn(store)
+    call(store, request="start_v7_route_save", rules=6, player_class="mage", player_route="thunder")
+    value = expanded_snapshot(module, choices=["stone:power", "meteor:learn"], study_owner="player")
+    call(store, "checkpoint", "save_v7_route_choices", snapshot=value)
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 7
+    store.file.save(raw)
+    original = store.file.path.read_bytes()
+    loaded = module.AdventureStore(store.file)
+    assert loaded.view()["rules"] == 7
+    assert loaded.view()["run"] == raw["run"]
+    assert loaded.view()["economy"] == raw["economy"]
+    assert store.file.path.read_bytes() == original
+    call(loaded, "claim", "claim_free_build_upgrade", takeover=False)
+    backups = list(store.file.path.parent.glob("adventure.v7-*.backup.json"))
+    assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
+    assert store.file.load()[0]["version"] == 8
+
+
+def test_rule7_rejects_route_metadata_and_v7_cannot_claim_free_rules(store, module):
+    with pytest.raises(module.AdventureError):
+        call(store, rules=7, player_route="guardian")
+    call(store, rules=7)
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 7
+    store.file.save(raw)
+    original = store.file.path.read_bytes()
+    with pytest.raises(module.AdventureError, match="recovery_required"):
+        module.AdventureStore(store.file).view()
+    assert store.file.path.read_bytes() == original

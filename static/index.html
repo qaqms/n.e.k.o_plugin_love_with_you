@@ -10,17 +10,19 @@
   <main id="app">
     <header class="topbar">
       <div class="brand"><span class="sigil" aria-hidden="true">✦</span><div><h1>边境林地</h1><span id="chapter-label">第一章 · 魔力回响</span></div></div>
-      <div class="head-actions"><span id="save-state" role="status">正在读取旅程</span><button id="pause" class="icon-button" title="暂停" aria-label="暂停" disabled>Ⅱ</button></div>
+      <div class="head-actions"><span id="save-state" role="status">正在读取旅程</span><button id="effects" class="icon-button" title="简化特效" aria-label="简化特效" aria-pressed="false"></button><button id="pause" class="icon-button" title="暂停" aria-label="暂停" disabled></button></div>
     </header>
     <section class="battlefield" aria-label="冒险战场">
       <div id="game"></div>
       <div id="hud" hidden>
+        <div class="hud-identity"><img id="player-avatar" alt="" width="38" height="43"><span id="player-role">玩家</span></div>
         <div class="health-line"><span id="health-text">生命 100 / 100</span><span id="ward-text"></span></div>
         <div class="health-track"><div id="health-fill"></div></div>
         <div class="battle-stats"><span id="clock">00:00 / 20:00</span><span id="kills">击败 0</span><span id="level">Lv.1</span></div>
         <div class="xp-track"><div id="xp-fill"></div></div>
       </div>
-      <div id="companion-line" hidden><span class="partner-dot"></span><span id="companion-text"></span></div>
+      <div id="companion-line" hidden><img id="companion-avatar" alt="" width="38" height="43"><span id="companion-text"></span></div>
+      <div id="encounter-status" hidden><span class="encounter-name"></span><span class="encounter-track"><i class="encounter-fill"></i></span></div>
       <div id="notice" role="status"></div>
       <div id="screen" class="screen">
         <div id="screen-body"><p class="muted">正在准备旅程。</p></div>
@@ -32,6 +34,7 @@
     <footer><span id="objective">林地边境 · 等待出发</span><span id="build-label"></span></footer>
   </main>
   <script src="./engine/phaser-3.90.0.min.js"></script>
+  <script src="./engine/astar-0.4.1.js"></script>
   <script type="module" src="./adventure.mjs"></script>
 </body>
 </html>

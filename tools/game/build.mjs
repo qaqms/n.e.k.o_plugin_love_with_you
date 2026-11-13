@@ -12,4 +12,7 @@ copyFileSync(join(phaserRoot, "dist/phaser.min.js"), join(output, "phaser-3.90.0
 copyFileSync(join(phaserRoot, "LICENSE.md"), join(output, "PHASER-LICENSE.md"))
 const emitterRoot = dirname(require.resolve("eventemitter3/package.json"))
 copyFileSync(join(emitterRoot, "LICENSE"), join(output, "EVENTEMITTER3-LICENSE.txt"))
-console.log("Bundled Phaser 3.90.0 and bundled dependency licenses.")
+const astarRoot = dirname(require.resolve("javascript-astar/package.json"))
+copyFileSync(join(astarRoot, "astar.js"), join(output, "astar-0.4.1.js"))
+copyFileSync(join(astarRoot, "LICENSE"), join(output, "ASTAR-LICENSE.txt"))
+console.log("Bundled Phaser 3.90.0, javascript-astar 0.4.1 and dependency licenses.")

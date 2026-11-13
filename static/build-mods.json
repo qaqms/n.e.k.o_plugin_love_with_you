@@ -1,0 +1,17 @@
+{
+  "tags": {
+    "fire":["projectile"], "wind":["projectile"], "ice":["projectile"], "stone":["projectile"],
+    "slash":["melee"], "guard":["melee"], "thrust":["melee"], "orbit":["melee"],
+    "dash":["melee"], "whirl":["melee","area"], "flame":["area"], "frost":["area"],
+    "quake":["area"], "meteor":["area"], "rune":["area"], "spark":["chain"],
+    "pull":["area","support"], "armor":["support"], "heal":["support"], "beacon":["area","chain","support"]
+  },
+  "mods": [
+    {"id":"fork","name":"分岔投射","tag":"projectile","cap":1,"owners":["player","companion"],"icon":"Wind","description":"自身所有投射物技能额外发射1枚弹体，每枚伤害降低22%；分散覆盖更多方向。"},
+    {"id":"piercing","name":"贯通术式","tag":"projectile","cap":2,"owners":["player","companion"],"icon":"Scan","description":"自身所有投射物技能增加1次贯穿，最高5次；适合拉成一列的敌群。"},
+    {"id":"circuit","name":"延展传导","tag":"chain","cap":2,"owners":["player","companion"],"icon":"Zap","description":"自身跃雷和灵灯每次攻击额外跳向1名邻近敌人，仍受距离、遮挡和衰减限制。"},
+    {"id":"edge","name":"延锋","tag":"melee","cap":2,"owners":["player","companion"],"icon":"Swords","description":"自身剑技扩大有效范围：扇斩/贯刺距离+20，突进宽度+10，刃环轨道宽度+6，剑舞半径+10；刃环仍有内圈盲区。"},
+    {"id":"field","name":"扩域刻印","tag":"area","cap":2,"owners":["player","companion"],"icon":"Orbit","description":"自身区域技能半径+12，上限200；灵灯上限280。伏印触发距离保持30，适合聚敌后扩大覆盖。"},
+    {"id":"follow","name":"接应默契","tag":"support","cap":1,"owners":["companion"],"icon":"Heart","description":"玩家任意主动技成功施放后，同行可用自己的支援接续；保留原分支、距离、目标和冷却条件。"}
+  ]
+}

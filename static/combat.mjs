@@ -1,5 +1,10 @@
 import { SKILLS, newBuild, studyOwner, drawChoices, applyChoice, parameters, skillName, skillControl } from "./skills.mjs"
 import { FrostEffects } from "./frost.mjs"
+import { ExpandedCombat } from "./expanded-combat.mjs"
+import { Buildcraft } from "./buildcraft.mjs"
+import { isBoss } from "./encounter-rules.mjs"
+import { paintCombat } from "./battle-art.mjs"
+import { DEPTH } from "./terrain-rules.mjs"
 
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
@@ -9,10 +14,10 @@ const COLORS = { fire: 0xefae76, wind: 0x8bd8ca, slash: 0xf2dda0, guard: 0xabcbe
 export class SkillCombat {
   constructor(scene, controller, snapshot) {
     this.s = scene; this.controller = controller
-    this.modern = scene.meta.rules === 3
+    this.modern = scene.meta.rules >= 3
     this.builds = snapshot ? structuredClone(snapshot.builds) : {
-      player: newBuild("player", scene.meta.player_class, scene.meta.rules),
-      companion: newBuild("companion", scene.meta.companion_class, scene.meta.rules),
+      player: newBuild("player", scene.meta.player_class, scene.meta.rules, scene.meta.player_route),
+      companion: newBuild("companion", scene.meta.companion_class, scene.meta.rules, scene.meta.companion_route),
     }
     this.studyOwner = snapshot?.study_owner || ""
     this.rerolls = snapshot?.rerolls ?? 2
@@ -20,27 +25,31 @@ export class SkillCombat {
     this.stats = snapshot ? { ...snapshot.stats } : { player_damage: 0, companion_damage: 0, supports: 0, followups: 0,
       ...(this.modern ? { shatters: 0, cross_shatters: 0 } : {}) }
     this.zones = snapshot ? structuredClone(snapshot.zones) : []
-    this.graphics = scene.add.graphics().setDepth(7)
+    this.graphics = scene.add.graphics().setDepth(DEPTH.effects)
     this.flashes = []
     this.frost = this.modern ? new FrostEffects(this, snapshot) : null
+    this.expanded = scene.meta.rules >= 6 ? new ExpandedCombat(this) : null
+    this.craft = scene.meta.rules >= 7 ? new Buildcraft(this, snapshot) : null
   }
-  destroy() { this.graphics.destroy(); this.zones = []; this.flashes = [] }
+  destroy() { this.graphics.destroy(); this.zones = []; this.flashes = []; if (this.expanded) this.expanded.lines = [] }
   skill(owner, id) { return this.builds[owner].skills.find(skill => skill.id === id) }
   talent(owner, id) { return this.builds[owner].talents[id] }
   actor(owner) { return owner === "player" ? this.s.player : this.s.companion }
   damage(owner, value) {
-    return value * (1 + this.s.meta.loadout.bonuses.power / 100) * (owner === "companion" ? .85 * (1 + this.s.meta.bonus / 100) : 1)
+    return value * (1 + this.s.meta.loadout.bonuses.power / 100)
+      * (owner === "companion" ? .85 * (1 + this.s.meta.bonus / 100) * (this.s.encounters?.has("escort") ? 1.12 : 1) : 1)
   }
   data() {
     return {
       builds: structuredClone(this.builds), study_owner: this.studyOwner, rerolls: this.rerolls,
       zones: structuredClone(this.zones), facing: { ...this.facing }, stats: { ...this.stats },
       ...(this.frost?.data() || {}),
+      ...(this.craft?.data() || {}),
     }
   }
   checkLevel() {
     const s = this.s
-    if (s.outcome !== "playing" || s.xp < s.xpNeeded() || s.choices.length || s.level >= 31) return
+    if (this.craft?.preparation || s.outcome !== "playing" || s.xp < s.xpNeeded() || s.choices.length || s.encounters?.state.pending || s.level >= 31) return
     s.xp -= s.xpNeeded(); s.level++
     this.studyOwner = studyOwner(s.level)
     s.choices = drawChoices(this.builds[this.studyOwner], this.studyOwner, s.rng)
@@ -59,6 +68,7 @@ export class SkillCombat {
       await this.controller.save()
       this.checkLevel()
       if (!s.choices.length) {
+        if (s.encounters?.openReward(true)) return
         this.controller.play()
         const skill = this.skill(owner, key.split(":")[0])
         if (skill) this.controller.notice(`${owner === "player" ? "玩家" : s.meta.character} · ${skillName(skill)} ${skill.level}级 · ${skillControl(this.builds[owner], skill.id)}`)
@@ -66,6 +76,7 @@ export class SkillCombat {
     })
   }
   reroll() {
+    if (this.craft) return this.craft.reroll()
     if (!this.rerolls || !this.studyOwner || this.controller.busy || this.controller.api.pending) return
     this.rerolls--
     this.s.choices = drawChoices(this.builds[this.studyOwner], this.studyOwner, this.s.rng, false)
@@ -78,11 +89,12 @@ export class SkillCombat {
     this.stats[`${owner}_damage`] = Math.min(1e9, this.stats[`${owner}_damage`] + damage)
     enemy.setData("hp", hp - amount)
     if (hp > amount) return
-    const kind = enemy.getData("kind"), x = enemy.x, y = enemy.y
-    this.frost?.marks.delete(enemy.getData("id"))
+    const kind = enemy.getData("kind"), id = enemy.getData("id"), x = enemy.x, y = enemy.y
+    this.frost?.marks.delete(id)
     enemy.destroy(); s.kills++
     if (owner === "companion") s.partnerKills++
     s.makeDrop({ id: s.next(), x, y, amount: kind === "brute" ? 12 : kind === "wisp" ? 5 : 4 })
+    s.encounters?.onKill(id, kind)
     if (kind === "boss") s.end("cleared")
   }
   hit(bolt, enemy) {
@@ -93,10 +105,13 @@ export class SkillCombat {
     hits.push(id)
     const owner = bolt.getData("owner"), skill = this.skill(owner, bolt.getData("skill"))
     const position = { x: bolt.x, y: bolt.y }, p = parameters(skill, this.builds[owner])
+    s.art?.impact(position.x, position.y, skill.id)
     this.deal(enemy, bolt.getData("damage"), owner)
     if (s.outcome !== "playing") return
     if (s.outcome === "playing") {
       if (skill.id === "ice") this.frost.apply(enemy, owner, skill)
+      if (skill.id === "stone") this.expanded?.stoneImpact(enemy, position, skill, owner, bolt.getData("damage"), hits.length === 1)
+      if (s.outcome !== "playing") return
       if (skill.id === "fire" && skill.branch === "blast") {
         this.addZone("flame", owner, position, p.blastRadius, bolt.getData("damage") * .22, p.blastDuration)
       }
@@ -114,20 +129,23 @@ export class SkillCombat {
   flash(x, y, radius, color, form = "base") {
     if (this.flashes.length >= 16) this.flashes.shift()
     this.flashes.push({ x, y, radius, color, form, until: this.s.elapsed + (form === "base" ? 150 : 320) })
+    this.s.art?.burst(x, y, radius, color, form)
   }
   melee(owner, skill, target, multiplier = 1) {
     if (this.s.outcome !== "playing") return
     const actor = this.actor(owner), p = parameters(skill, this.builds[owner])
     const angle = Math.atan2(target.y - actor.y, target.x - actor.x)
+    this.s.art?.cast(owner, skill.id, angle)
     const half = p.half
     for (const enemy of [...this.s.enemies.getChildren()]) {
       if (!enemy.active || distance(actor, enemy) > p.range) continue
+      if (!this.s.terrain.lineClear(actor, enemy)) continue
       const a = Math.atan2(enemy.y - actor.y, enemy.x - actor.x) - angle
       if (Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) > half) continue
       const amount = this.damage(owner, p.damage) * multiplier
       this.deal(enemy, this.frost?.strike(enemy, owner, skill.id, amount) ?? amount, owner)
       if (this.s.outcome !== "playing") return
-      if (enemy.active && skill.branch === "sweep" && enemy.getData("kind") !== "boss") {
+      if (enemy.active && skill.branch === "sweep" && !isBoss(enemy)) {
         this.push(enemy, actor, p.knockback)
       }
     }
@@ -149,14 +167,17 @@ export class SkillCombat {
   }
   push(enemy, source, amount) {
     const d = Math.max(1, distance(source, enemy))
-    enemy.setPosition(clamp(enemy.x + (enemy.x - source.x) / d * amount, 35, 1765),
-      clamp(enemy.y + (enemy.y - source.y) / d * amount, 35, 1165))
+    this.s.terrain.place(enemy, { x: clamp(enemy.x + (enemy.x - source.x) / d * amount, 35, 1765),
+      y: clamp(enemy.y + (enemy.y - source.y) / d * amount, 35, 1165) })
   }
   shoot(source, owner, selected) {
     if (this.s.outcome !== "playing") return false
     const skill = selected || this.builds[owner].skills.find(item => SKILLS[item.id].slot === "auto")
     if (!skill) return false
-    const p = parameters(skill, this.builds[owner]), target = this.s.nearest(source, p.range)
+    const p = parameters(skill, this.builds[owner])
+    const expanded = this.expanded?.auto(source, owner, skill, p)
+    if (expanded !== undefined && expanded !== null) return expanded
+    const target = this.s.nearest(source, p.range)
     if (!target) return false
     if (["slash", "guard"].includes(skill.id)) this.melee(owner, skill, target)
     else return this.emit(source, owner, skill, p, Math.atan2(target.y - source.y, target.x - source.x))
@@ -165,11 +186,13 @@ export class SkillCombat {
   }
   emit(source, owner, skill, p, angle) {
     if (this.s.bullets.countActive() + p.count > 160) return false
+    this.s.art?.cast(owner, skill.id, angle)
+    const speed = p.speed || 430
     for (let i = 0; i < p.count; i++) {
       const a = angle + (i - (p.count - 1) / 2) * .2
       this.s.makeBullet({
-        id: this.s.next(), x: source.x, y: source.y, vx: Math.cos(a) * 430, vy: Math.sin(a) * 430,
-        life: this.modern ? Math.min(3000, Math.ceil(p.range / 430 * 1000 + 180)) : 1400,
+        id: this.s.next(), x: source.x, y: source.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
+        life: this.modern ? Math.min(3000, Math.ceil(p.range / speed * 1000 + 180)) : 1400,
         damage: this.damage(owner, p.damage), owner, skill: skill.id, pierce: p.pierce, hit_ids: [],
         ...(this.modern ? { form: skill.evolution === "fusion" ? "fusion" : skill.level === 5 ? "awakened" : "base" } : {}),
       })
@@ -195,7 +218,8 @@ export class SkillCombat {
     return true
   }
   targetGroup(source, range) {
-    const targets = this.s.enemies.getChildren().filter(e => e.active && distance(source, e) <= range)
+    const targets = this.s.enemies.getChildren().filter(e => e.active && distance(source, e) <= range
+      && (!this.expanded || this.s.terrain.lineClear(source, e)))
     if (!targets.length) return null
     let best = targets[0], score = 0
     for (const enemy of targets) {
@@ -211,11 +235,15 @@ export class SkillCombat {
     if (!skill) return this.castFailure(`${slot === 0 ? "Q" : "E"} 尚未学习主动技能`)
     if (skill.ready_at > s.elapsed) return this.castFailure(`${skillName(skill)}冷却中 · ${((skill.ready_at - s.elapsed) / 1000).toFixed(1)}秒`)
     const p = parameters(skill, this.builds.player), followups = this.stats.followups
-    if (skill.id === "flame") {
+    const expanded = this.expanded?.manual(skill, p)
+    if (expanded === false) return false
+    if (expanded === true) {
+      if (s.outcome !== "playing") return true
+    } else if (skill.id === "flame") {
       const target = this.targetGroup(s.player, p.range)
       if (!target) return this.castFailure("焰环范围内没有敌人 · 未消耗冷却")
-      if (!this.addZone("flame", "player", target, p.radius, this.damage("player", p.damage), p.duration)) return this.castFailure("焰环暂无法落地 · 未消耗冷却")
-      skill.ready_at = s.elapsed + p.cooldown
+      if (!this.addZone("flame", "player", target, p.radius, this.damage("player", p.damage) * (s.encounters?.has("embers") ? 1.15 : 1), p.duration)) return this.castFailure("焰环暂无法落地 · 未消耗冷却")
+      skill.ready_at = s.elapsed + p.cooldown * (s.encounters?.has("cadence") ? .9 : 1)
       this.follow("flame", { x: target.x, y: target.y })
     } else if (skill.id === "frost") {
       const target = this.targetGroup(s.player, p.range)
@@ -224,7 +252,7 @@ export class SkillCombat {
       if (skill.branch === "mist" && !this.addZone("frost", "player", position, p.radius, this.damage("player", p.damage) * .2, p.duration)) {
         return this.castFailure("霜雾暂无法落地 · 未消耗冷却")
       }
-      skill.ready_at = s.elapsed + p.cooldown
+      skill.ready_at = s.elapsed + p.cooldown * (s.encounters?.has("cadence") ? .9 : 1)
       this.flash(position.x, position.y, p.radius, COLORS.ice, "frost")
       for (const enemy of [...s.enemies.getChildren()]) {
         if (!enemy.active || distance(enemy, position) > p.radius) continue
@@ -233,16 +261,17 @@ export class SkillCombat {
         if (s.outcome !== "playing") return true
         this.frost.apply(enemy, "player", skill)
       }
+      if (this.expanded) this.follow("frost", position)
     } else if (skill.id === "dash") {
       const start = { x: s.player.x, y: s.player.y }, d = this.facing
-      const end = { x: clamp(start.x + d.x * p.range, 35, 1765), y: clamp(start.y + d.y * p.range, 35, 1165) }
-      if (distance(start, end) < 8) return this.castFailure("前方已到地图边界 · 未消耗突进冷却")
-      s.player.setPosition(end.x, end.y); s.hurtUntil = Math.max(s.hurtUntil, s.elapsed + 250)
-      skill.ready_at = s.elapsed + p.cooldown
+      const end = s.terrain.endpoint(s.player, { x: clamp(start.x + d.x * p.range, 35, 1765), y: clamp(start.y + d.y * p.range, 35, 1165) })
+      if (distance(start, end) < 8) return this.castFailure("前方有障碍或已到地图边界 · 未消耗突进冷却")
+      s.terrain.place(s.player, end); s.hurtUntil = Math.max(s.hurtUntil, s.elapsed + 250)
+      skill.ready_at = s.elapsed + p.cooldown * (s.encounters?.has("cadence") ? .9 : 1)
       for (const enemy of [...s.enemies.getChildren()]) {
         const dx = end.x - start.x, dy = end.y - start.y
         const t = clamp(((enemy.x - start.x) * dx + (enemy.y - start.y) * dy) / (dx * dx + dy * dy), 0, 1)
-        if (distance(enemy, { x: start.x + t * dx, y: start.y + t * dy }) <= p.width) {
+        if (distance(enemy, { x: start.x + t * dx, y: start.y + t * dy }) <= p.width && s.terrain.lineClear(start, enemy)) {
           const amount = this.damage("player", p.damage)
           this.deal(enemy, this.frost?.strike(enemy, "player", skill.id, amount) ?? amount, "player")
           if (s.outcome !== "playing") return true
@@ -252,6 +281,7 @@ export class SkillCombat {
       this.flash(end.x, end.y, 55, COLORS.slash, this.modern && skill.level === 5 ? "awakened" : "base")
       this.follow("dash", end)
     } else return false
+    s.art?.cast("player", skill.id, Math.atan2(this.facing.y, this.facing.x))
     if (this.stats.followups === followups) this.controller.notice(`${skillName(skill)} · 已施放`)
     this.lastCastNotice = null
     s.updateHud()
@@ -266,6 +296,7 @@ export class SkillCombat {
   }
   follow(action, position) {
     if (this.s.outcome !== "playing") return
+    if (this.expanded) { this.expanded.follow(action, position); return }
     const id = action === "flame" ? "pull" : "armor", skill = this.skill("companion", id)
     if (skill?.branch !== "follow" || skill.ready_at > this.s.elapsed || distance(this.s.companion, position) > SKILLS[id].range) return
     if (this.support(skill, position, true)) {
@@ -275,12 +306,17 @@ export class SkillCombat {
   support(skill, position, follow = false) {
     const s = this.s, p = parameters(skill, this.builds.companion)
     if (skill.ready_at > s.elapsed || s.outcome !== "playing") return false
-    if (skill.id === "pull") {
+    const expanded = this.expanded?.support(skill, position, follow)
+    if (expanded === false) return false
+    if (expanded === true) {
+      // New support conditions share the same cooldown and statistics commitment.
+    } else if (skill.id === "pull") {
       const target = position || this.targetGroup(s.companion, p.range)
       if (!target) return false
-      const enemies = s.enemies.getChildren().filter(e => e.getData("kind") !== "boss" && distance(e, target) < p.radius)
+      const radius = p.radius + (s.encounters?.has("embers") ? 20 : 0)
+      const enemies = s.enemies.getChildren().filter(e => !isBoss(e) && distance(e, target) < radius)
         .sort((a, b) => distance(a, target) - distance(b, target)).slice(0, p.targets)
-      if (!enemies.length || !this.addZone("pull", "companion", target, p.radius, this.damage("companion", p.damage), 1000,
+      if (!enemies.length || !this.addZone("pull", "companion", target, radius, this.damage("companion", p.damage), 1000,
         enemies.map(e => e.getData("id")))) return false
     } else if (skill.id === "armor") {
       if (!follow && s.shield >= 8) return false
@@ -289,14 +325,16 @@ export class SkillCombat {
       this.flash(s.player.x, s.player.y, 55, COLORS.guard, this.modern && skill.level === 5 ? "awakened" : "base")
     } else return false
     skill.ready_at = s.elapsed + p.cooldown
+    s.art?.cast("companion", skill.id)
     this.stats.supports++
     if (follow) this.stats.followups++
+    s.encounters?.onSupport()
     if (skill.id === "armor" && skill.branch === "retaliate") for (const enemy of [...s.enemies.getChildren()]) {
       if (distance(s.player, enemy) < p.retaliateRange) this.deal(enemy, this.damage("companion", p.damage), "companion")
       if (s.outcome !== "playing") return true
     }
     if (skill.id === "armor" && this.modern && skill.level === 5) for (const enemy of s.enemies.getChildren()) {
-      if (enemy.getData("kind") !== "boss" && distance(s.player, enemy) < 130) this.push(enemy, s.player, 45)
+      if (!isBoss(enemy) && distance(s.player, enemy) < 130) this.push(enemy, s.player, 45)
     }
     return true
   }
@@ -319,13 +357,14 @@ export class SkillCombat {
     }
     for (const skill of this.builds.companion.skills) if (SKILLS[skill.id].slot === "support" && skill.ready_at <= s.elapsed) {
       // A brief grace window after readiness gives deliberate player casts priority.
-      if (skill.branch !== "follow" || s.elapsed >= skill.ready_at + 1500) this.support(skill)
+      if (!(skill.branch === "follow" || this.builds.companion.mods?.follow) || s.elapsed >= skill.ready_at + 1500) this.support(skill)
     }
     for (const zone of [...this.zones]) {
       if (s.outcome !== "playing") return
+      if (this.expanded?.updateZone(zone)) continue
       if (zone.expires_at <= s.elapsed) { this.zones.splice(this.zones.indexOf(zone), 1); continue }
       if (zone.kind === "pull") {
-        for (const enemy of s.enemies.getChildren()) if (zone.targets.includes(enemy.getData("id")) && enemy.getData("kind") !== "boss") {
+        for (const enemy of s.enemies.getChildren()) if (zone.targets.includes(enemy.getData("id")) && !isBoss(enemy)) {
           if (distance(enemy, zone) > 12) s.physics.moveTo(enemy, zone.x, zone.y, 150)
           else enemy.setVelocity(0)
         }
@@ -343,45 +382,7 @@ export class SkillCombat {
     this.paint()
   }
   paint() {
-    const g = this.graphics, now = this.s.elapsed
-    g.clear()
-    for (const zone of this.zones) {
-      const color = zone.kind === "flame" ? COLORS.fire : zone.kind === "frost" ? COLORS.ice : COLORS.wind
-      g.fillStyle(color, zone.kind === "flame" ? .2 : .1).fillCircle(zone.x, zone.y, zone.radius)
-      g.lineStyle(2, color, .7).strokeCircle(zone.x, zone.y, zone.radius)
-      if (zone.kind === "pull") {
-        g.lineBetween(zone.x - 16, zone.y, zone.x + 16, zone.y)
-        g.lineBetween(zone.x, zone.y - 16, zone.x, zone.y + 16)
-      }
-      if (zone.kind === "frost") {
-        g.lineStyle(1, color, .5)
-        for (let i = 0; i < 6; i++) {
-          const a = i * Math.PI / 3
-          g.lineBetween(zone.x, zone.y, zone.x + Math.cos(a) * zone.radius * .7, zone.y + Math.sin(a) * zone.radius * .7)
-        }
-      }
-    }
-    this.flashes = this.flashes.filter(flash => flash.until > now)
-    for (const flash of this.flashes) {
-      g.lineStyle(3, flash.color, .8).strokeCircle(flash.x, flash.y, flash.radius)
-      if (flash.form !== "base") {
-        g.lineStyle(1, flash.color, .6).strokeCircle(flash.x, flash.y, flash.radius * .65)
-        for (let i = 0; i < 6; i++) {
-          const a = i * Math.PI / 3 + (flash.form === "fusion" ? now / 160 : 0)
-          g.lineBetween(flash.x + Math.cos(a) * flash.radius * .65, flash.y + Math.sin(a) * flash.radius * .65,
-            flash.x + Math.cos(a) * flash.radius, flash.y + Math.sin(a) * flash.radius)
-        }
-      }
-    }
-    if (this.lastSlash?.until > now) {
-      const slash = this.lastSlash
-      g.lineStyle(3, slash.color, .7)
-      for (const line of slash.lines) g.lineBetween(slash.x, slash.y, line.x, line.y)
-      if (this.modern) {
-        g.beginPath().arc(slash.x, slash.y, slash.range, slash.angle - slash.half, slash.angle + slash.half).strokePath()
-      }
-    }
-    this.frost?.paint(g)
+    paintCombat(this)
   }
   labels() {
     return Object.fromEntries(["player", "companion"].map(owner => [owner,

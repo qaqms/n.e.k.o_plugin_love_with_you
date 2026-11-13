@@ -16,8 +16,8 @@ from . import _adventure_skills as skills
 from ._adventure_economy import AdventureError
 from ._storage import StateFile
 
-VERSION = 4
-RULES = 3
+VERSION = 8
+RULES = 7
 DURATION = 20 * 60 * 1000
 WORLD = (1800, 1200)
 CLASSES = ("guardian", "mage")
@@ -40,9 +40,11 @@ def _token(value: Any) -> bool:
 
 def validate_snapshot(value: Any) -> dict[str, Any]:
     """Validate the entire bounded checkpoint, including pending upgrade choices."""
-    if isinstance(value, dict) and type(value.get("rules")) is int and value["rules"] in (2, 3):
+    if isinstance(value, dict) and type(value.get("rules")) is int and value["rules"] in (2, 3, 4, 5, 6, 7):
         common = skills.validate_extra(value)
         validate_snapshot(common)
+        if value["rules"] >= 4:
+            skills.validate_encounters(value, value["builds"])
         return copy.deepcopy(value)
     if not isinstance(value, dict) or set(value) != {
         "rules", "elapsed", "rng", "player", "companion", "enemies", "bullets", "drops",
@@ -157,7 +159,7 @@ class AdventureStore:
         elif raw is not None:
             try:
                 source_version = raw.get("version") if isinstance(raw, dict) else None
-                if type(source_version) is not int or source_version not in (1, 2, 3, VERSION):
+                if type(source_version) is not int or source_version not in (1, 2, 3, 4, 5, 6, 7, VERSION):
                     raise AdventureError("adventure_recovery_required")
                 self._validate_file(raw, version=source_version)
                 migrated = copy.deepcopy(raw)
@@ -192,6 +194,8 @@ class AdventureStore:
                 "id", "sequence", "character", "player_class", "companion_class", "stage_index",
                 "bonus", "seed", "snapshot", "status",
             } | (set() if legacy else {"loadout", "settlement"}) | ({"rules"} if version >= 3 else set())
+            if isinstance(run, dict) and run.get("rules") == 6:
+                run_fields |= {"player_route", "companion_route"}
             if not isinstance(run, dict) or set(run) != run_fields:
                 raise AdventureError("adventure_recovery_required")
             if not _token(run["id"]) or not _integer(run["sequence"], 1, 10**12) or run["sequence"] != raw["sequence"]:
@@ -207,8 +211,16 @@ class AdventureStore:
             if not _token(run["seed"]) or run["status"] not in ("active", "ended"):
                 raise AdventureError("adventure_recovery_required")
             if version >= 3 and (type(run["rules"]) is not int or run["rules"] not in (
-                (1, 2) if version == 3 else (1, 2, 3)
+                (1, 2) if version == 3 else (1, 2, 3) if version == 4 else (1, 2, 3, 4) if version == 5
+                else (1, 2, 3, 4, 5) if version == 6 else (1, 2, 3, 4, 5, 6) if version == 7
+                else (1, 2, 3, 4, 5, 6, 7)
             )):
+                raise AdventureError("adventure_recovery_required")
+            if run.get("rules") == 6 and any(
+                not isinstance(run[f"{owner}_route"], str) or run[f"{owner}_route"] not in skills.ROUTES
+                or skills.ROUTES[run[f"{owner}_route"]]["class"] != run[f"{owner}_class"]
+                for owner in ("player", "companion")
+            ):
                 raise AdventureError("adventure_recovery_required")
             if run["snapshot"] is not None:
                 validate_snapshot(run["snapshot"])
@@ -327,11 +339,13 @@ class AdventureStore:
                     raise AdventureError("adventure_character_unknown")
                 if not _integer(stage_index, 0, 4):
                     raise AdventureError("adventure_invalid_request")
-                if set(values) not in ({"player_class", "companion_class", "character"},
-                                       {"player_class", "companion_class", "character", "rules"}) or (
+                base_fields = {"player_class", "companion_class", "character"}
+                allowed_fields = base_fields | {"rules"} | (
+                    {"player_route", "companion_route"} if values.get("rules") == 6 else set())
+                if not base_fields <= set(values) <= allowed_fields or (
                     values["player_class"] not in CLASSES or values["companion_class"] not in CLASSES
                     or values["character"] != character or not 1 <= len(character) <= 100
-                    or type(values.get("rules", 1)) is not int or values.get("rules", 1) not in (1, 2, 3)
+                    or type(values.get("rules", 1)) is not int or values.get("rules", 1) not in (1, 2, 3, 4, 5, 6, 7)
                 ):
                     raise AdventureError("adventure_invalid_request")
                 updated["sequence"] += 1
@@ -344,6 +358,14 @@ class AdventureStore:
                     "loadout": economy.loadout(updated["economy"]), "settlement": None,
                     "rules": values.get("rules", 1),
                 }
+                if run["rules"] == 6:
+                    for owner in ("player", "companion"):
+                        route = values.get(f"{owner}_route", run[f"{owner}_class"])
+                        if not isinstance(route, str) or route not in skills.ROUTES or (
+                            skills.ROUTES[route]["class"] != run[f"{owner}_class"]
+                        ):
+                            raise AdventureError("adventure_invalid_request")
+                        run[f"{owner}_route"] = route
                 updated["run"] = run
             else:
                 if run is None or run["status"] != "active" or values.get("run_id") != run["id"]:

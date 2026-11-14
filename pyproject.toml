@@ -1,6 +1,6 @@
 [project]
 name = "love_with_you"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = []
 
 # Editor-only: resolve the N.E.K.O SDK (`plugin.sdk.plugin`) from the sibling

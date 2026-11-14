@@ -1,4 +1,5 @@
 // Native sprite artwork, kept at the original frame size so physics stays unchanged.
+import { companionSprite } from "./companion-art.mjs"
 const svg = body => `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="72" viewBox="0 0 64 72">${body}</svg>`
 export const FRAME_COUNTS = { idle: 4, walk: 6, cast: 4, hurt: 2 }
 export const DIRECTIONS = ["down", "left", "right", "up"]
@@ -58,18 +59,36 @@ function actor(kind, direction, pose, frame, owner = "player") {
   return svg(body)
 }
 
+// The companion uses the default YUI look; the player keeps the original traveller.
+const sprite = (kind, direction, pose, frame, owner) => owner === "companion"
+  ? companionSprite(kind, direction, pose, frame, FRAME_COUNTS[pose]) : actor(kind, direction, pose, frame, owner)
+// Raster YUI frames: one 80x90 cell per frame, drawn at display size (sprite scale 1) so the game does not
+// resample them. Rows guardian then mage (each down/left/right/up), columns idle, walk, cast, hurt.
+// The vector frames above remain the fallback when the sheet fails to load.
+export const COMPANION_SHEET = { key: "companion-yui", url: "art/companion-yui.png", cell: [80, 90] }
+const COMPANION_AVATAR = /art\/companion-yui-(guardian|mage)\.png$/
+const COMPANION_CELLS = {}
 export const ACTOR_TEXTURES = {}
-for (const owner of ["player", "companion"]) for (const kind of ["guardian", "mage"]) for (const direction of DIRECTIONS) {
-  for (const [pose, count] of Object.entries(FRAME_COUNTS)) for (let frame = 0; frame < count; frame++) {
-    ACTOR_TEXTURES[`${owner === "companion" ? "companion-" : ""}${kind}-${direction}-${pose}-${frame}`] = actor(kind, direction, pose, frame, owner)
+for (const owner of ["player", "companion"]) for (const [row, kind] of ["guardian", "mage"].entries()) for (const [turn, direction] of DIRECTIONS.entries()) {
+  let column = 0
+  for (const [pose, count] of Object.entries(FRAME_COUNTS)) for (let frame = 0; frame < count; frame++, column++) {
+    const key = `${owner === "companion" ? "companion-" : ""}${kind}-${direction}-${pose}-${frame}`
+    ACTOR_TEXTURES[key] = sprite(kind, direction, pose, frame, owner)
+    if (owner === "companion") COMPANION_CELLS[key] = [column, row * DIRECTIONS.length + turn]
   }
 }
 export const ACTOR_DEFAULTS = Object.fromEntries(["player", "companion"].flatMap(owner =>
-  ["guardian", "mage"].map(kind => [`${owner === "companion" ? "companion-" : ""}${kind}`, actor(kind, "down", "idle", 0, owner)])))
+  ["guardian", "mage"].map(kind => [`${owner === "companion" ? "companion-" : ""}${kind}`, sprite(kind, "down", "idle", 0, owner)])))
+const vectorImage = key => `data:image/svg+xml,${encodeURIComponent(ACTOR_DEFAULTS[key] || ACTOR_DEFAULTS.guardian)}`
 export function actorImage(kind, owner = "player") {
-  const key = `${owner === "companion" ? "companion-" : ""}${kind}`
-  return `data:image/svg+xml,${encodeURIComponent(ACTOR_DEFAULTS[key] || ACTOR_DEFAULTS.guardian)}`
+  if (owner === "companion") return `art/companion-yui-${kind === "mage" ? "mage" : "guardian"}.png`
+  return vectorImage(kind)
 }
+// A raster avatar that fails to load falls back to the vector companion, so the slot never stays blank.
+globalThis.addEventListener?.("error", event => {
+  const image = event.target, match = image?.tagName === "IMG" && COMPANION_AVATAR.exec(image.getAttribute("src") || "")
+  if (match) image.src = vectorImage(`companion-${match[1]}`)
+}, true)
 
 export function directionFor(x, y, previous = "down") {
   if (Math.hypot(x, y) < 1) return previous
@@ -100,13 +119,34 @@ export const ENEMY_TEXTURES = Object.fromEntries(["slime", "wisp"].flatMap(kind 
 
 export function installActorAtlas(scene) {
   if (scene.textures.exists("actors-v2")) return
+  const sheet = scene.textures.exists(COMPANION_SHEET.key) && scene.textures.get(COMPANION_SHEET.key).getSourceImage()
   const frames = [...Object.keys(ACTOR_TEXTURES), ...Object.keys(ENEMY_TEXTURES)], columns = 16
-  const atlas = scene.textures.createCanvas("actors-v2", columns * 64, Math.ceil(frames.length / columns) * 72)
-  for (const [index, name] of frames.entries()) {
+  const vector = frames.filter(name => !(sheet && COMPANION_CELLS[name])), raster = frames.filter(name => sheet && COMPANION_CELLS[name])
+  const [cw, ch] = COMPANION_SHEET.cell, rasterColumns = Math.floor(columns * 64 / cw), top = Math.ceil(vector.length / columns) * 72
+  const atlas = scene.textures.createCanvas("actors-v2", columns * 64, top + Math.ceil(raster.length / rasterColumns) * ch)
+  for (const [index, name] of vector.entries()) {
     const x = index % columns * 64, y = Math.floor(index / columns) * 72
     atlas.context.drawImage(scene.textures.get(name).getSourceImage(), x, y)
     atlas.add(name, 0, x, y, 64, 72)
     scene.textures.remove(name)
   }
+  for (const [index, name] of raster.entries()) {
+    const x = index % rasterColumns * cw, y = top + Math.floor(index / rasterColumns) * ch, [column, row] = COMPANION_CELLS[name]
+    atlas.context.drawImage(sheet, column * cw, row * ch, cw, ch, x, y, cw, ch)
+    atlas.add(name, 0, x, y, cw, ch)
+    scene.textures.remove(name)
+  }
+  if (sheet) scene.textures.remove(COMPANION_SHEET.key)
   atlas.refresh()
+}
+
+// Show the companion on its atlas frame at the right scale: 1 for raster YUI frames, 0.66 for vector ones.
+// The world-space body stays 17.16 x 18.48, 8.58 left of and 0.66 above the sprite position, as before.
+export function fitCompanion(sprite, kind = "mage") {
+  sprite.setTexture("actors-v2", `companion-${kind === "guardian" ? "guardian" : "mage"}-down-idle-0`)
+  const scale = sprite.frame.width === COMPANION_SHEET.cell[0] ? 1 : .66
+  sprite.setScale(scale)
+  sprite.body?.setSize(17.16 / scale, 18.48 / scale)
+    .setOffset(sprite.frame.width / 2 - 8.58 / scale, sprite.frame.height / 2 - .66 / scale)
+  return sprite
 }

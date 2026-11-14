@@ -1,6 +1,6 @@
 import { AdventureApi, errorText } from "./bridge.mjs"
 import { TEXTURES } from "./textures.mjs"
-import { ACTOR_TEXTURES, ENEMY_TEXTURES, actorImage, installActorAtlas } from "./actor-art.mjs"
+import { ACTOR_TEXTURES, COMPANION_SHEET, ENEMY_TEXTURES, actorImage, fitCompanion, installActorAtlas } from "./actor-art.mjs"
 import { paintProjectiles } from "./forest-art.mjs"
 import { ForestMap } from "./forest-map.mjs"
 import { DEPTH } from "./terrain-rules.mjs"
@@ -47,9 +47,11 @@ class Forest extends Phaser.Scene {
     for (const [key, svg] of Object.entries({ ...TEXTURES, ...ACTOR_TEXTURES, ...ENEMY_TEXTURES })) {
       this.load.image(key, `data:image/svg+xml;base64,${btoa(svg)}`)
     }
+    this.load.image(COMPANION_SHEET.key, COMPANION_SHEET.url)
   }
   create() {
     this.controller = controller
+    if (!this.textures.exists(COMPANION_SHEET.key)) controller.notice("同行外观未能载入，已改用简化形象。")
     installActorAtlas(this)
     this.physics.world.setBounds(24, 24, W - 48, H - 48)
     this.cameras.main.setBounds(0, 0, W, H)
@@ -59,8 +61,7 @@ class Forest extends Phaser.Scene {
     this.drops = this.physics.add.group()
     this.player = this.physics.add.sprite(W / 2, H / 2, "guardian").setScale(.7).setDepth(10).setCollideWorldBounds(true)
     this.player.body.setSize(28, 30).setOffset(18, 34)
-    this.companion = this.physics.add.sprite(W / 2 - 55, H / 2 + 20, "mage").setScale(.66).setDepth(9).setCollideWorldBounds(true)
-    this.companion.body.setSize(26, 28).setOffset(19, 35)
+    this.companion = fitCompanion(this.physics.add.sprite(W / 2 - 55, H / 2 + 20, "actors-v2").setDepth(9).setCollideWorldBounds(true))
     this.ring = this.add.ellipse(this.player.x, this.player.y + 12, 42, 21).setStrokeStyle(2, 0xe8d296, .6).setDepth(8)
     this.partnerRing = this.add.ellipse(this.companion.x, this.companion.y + 12, 37, 19).setStrokeStyle(2, 0x9dbbdb, .65).setDepth(8)
     const projectile = this.make.graphics({ x: 0, y: 0, add: false })
@@ -112,7 +113,7 @@ class Forest extends Phaser.Scene {
     this.choices = []; this.spawnAt = 700; this.attackAt = 300; this.supportAt = 1500; this.hurtUntil = 0
     this.hp = this.maxHp(); this.shield = 0; this.bossSpawned = false; this.outcome = "playing"; this.lowHealth = false
     this.player.setTexture(run.player_class).setPosition(W / 2, H / 2).setVelocity(0)
-    this.companion.setTexture(run.companion_class).setPosition(W / 2 - 55, H / 2 + 20).setVelocity(0)
+    fitCompanion(this.companion, run.companion_class).setPosition(W / 2 - 55, H / 2 + 20).setVelocity(0)
     const s = run.snapshot
     if (s) {
       this.rng.state(s.rng); this.elapsed = s.elapsed; this.level = s.level; this.xp = s.xp

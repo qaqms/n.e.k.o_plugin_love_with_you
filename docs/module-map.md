@@ -40,7 +40,7 @@
 | `ui/addressing.ts`、`ui/theme.ts` | 可单独验证的预览、草稿合并或配色算法；后端仍拥有最终规则 | 称呼浏览器测试、`tools/test_theme.mjs` |
 | `ui/interaction.ts`、`ui/scrollbars.ts` | 控件即时反馈和滚动状态 | `tools/test_ui.mjs` 中交互与滚动用例 |
 | `static/adventure.mjs`、`textures.mjs` | Phaser 战斗场景、原创素材、局内状态、暂停与升级；不修改关系、发模型消息或直接决定永久资产 | `tools/test_adventure.mjs` |
-| `static/actor-art.mjs`、`forest-art.mjs` | 原创原生角色帧与运行时图集、程序地表、独立场景物件和弹体纹理；装饰种子独立，不决定碰撞与伤害 | 冒险浏览器的素材像素、双方动作、碰撞尺寸与响应式截图 |
+| `static/actor-art.mjs`、`companion-art.mjs`、`forest-art.mjs` | 原创原生角色帧与运行时图集；同行者采用 `static/art/companion-yui*.png` 的 YUI 外观，载入失败回退矢量版、程序地表、独立场景物件和弹体纹理；装饰种子独立，不决定碰撞与伤害 | 冒险浏览器的素材像素、双方动作、碰撞尺寸与响应式截图 |
 | `static/terrain-rules.mjs`、`forest-map.mjs` | 规则 5 固定布局、脚底排序、遮挡淡化、静态碰撞体、扫掠截停、安全恢复及有预算的本地 A* 绕行；不消费战斗 RNG，不决定伤害、奖励或读写存档 | `tools/test_terrain_rules.mjs` 及冒险浏览器的实际移动、突进、冲锋、层次和恢复 |
 | `static/battle-art.mjs` | 按战斗时钟更新动作、有界装饰粒子、命中与范围视觉；不消费战斗随机数，不进入快照、不做伤害结算 | 冒险浏览器的随机数/快照不变性、预算、暂停和简化特效 |
 | `static/bridge.mjs` | 动作通信、严格回执核对与原请求；不自动抢占控制，通信失败不宣称保存完成 | 冒险浏览器的回执丢失与接管测试 |

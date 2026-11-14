@@ -678,6 +678,20 @@ def test_shutdown_during_character_sync_cannot_save_or_publish_late_work(plugin,
     assert not plugin._state_file.path.exists()
 
 
+def test_first_maintenance_syncs_on_a_freshly_booted_machine(plugin, runtime, monkeypatch, module_clock):
+    # Linux monotonic time counts from boot; under a minute of uptime must not skip the first sync.
+    module_clock.monotonic = lambda: 5.0
+    monkeypatch.setattr(runtime, "time", module_clock)
+    plugin._sync_characters = AsyncMock()
+    plugin._verify_tools = AsyncMock()
+    plugin._poll_conversations = AsyncMock(return_value=True)
+    plugin._poll_recent_conversations = AsyncMock(return_value=True)
+    plugin._reconcile_tools = Mock()
+    assert isinstance(asyncio.run(plugin.maintain()), runtime.Ok)
+    plugin._sync_characters.assert_awaited_once()
+    plugin._verify_tools.assert_awaited_once()
+
+
 def test_state_query_after_stop_cannot_mark_activity_or_write_save(plugin, runtime):
     handler = plugin._make_state_handler("shared")
     plugin._stop_worker()
@@ -3519,7 +3533,7 @@ def test_reload_refreshes_state_tools_context_and_activity_for_the_new_session(p
     assert old_names <= names
     assert plugin._live_roles is None and not plugin._host_online
     assert not plugin._context and not plugin._latest_message_ts
-    assert plugin._last_character_sync == plugin._last_tool_verify == 0
+    assert plugin._last_character_sync == plugin._last_tool_verify == runtime._NEVER
     assert plugin._last_decay_day is None
 
 

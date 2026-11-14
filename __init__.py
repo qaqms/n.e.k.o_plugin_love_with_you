@@ -78,6 +78,8 @@ _SHARED_ADDRESS_TOOL = "love_address"
 
 _CHARACTER_SYNC_SECONDS = 60.0
 _TOOL_VERIFY_SECONDS = 120.0
+# time.monotonic() can start near zero (Linux counts from boot), so "never" must be -inf, not 0.
+_NEVER = float("-inf")
 _UI_HISTORY_LIMIT = 20
 
 # Relationship context is pushed again after this many user messages even when
@@ -181,8 +183,8 @@ class LoveWithYouPlugin(NekoPluginBase):
         self._live_roles: set[str] | None = None
         # tool name -> (role or None, description it was registered with)
         self._registered: dict[str, tuple[str | None, str]] = {}
-        self._last_character_sync = 0.0
-        self._last_tool_verify = 0.0
+        self._last_character_sync = _NEVER
+        self._last_tool_verify = _NEVER
         # image path -> (version, data URL); insertion-ordered for eviction
         self._art_cache: dict[str, tuple[str, str]] = {}
         self._portraits: portraits.PortraitLibrary | None = None
@@ -264,7 +266,7 @@ class LoveWithYouPlugin(NekoPluginBase):
                 self._tool_session = secrets.token_hex(16)
                 self._live_roles = None
                 self._host_online = False
-                self._last_character_sync = self._last_tool_verify = 0.0
+                self._last_character_sync = self._last_tool_verify = _NEVER
                 self._last_decay_day = None
                 self._context.clear()
                 self._latest_message_ts.clear()

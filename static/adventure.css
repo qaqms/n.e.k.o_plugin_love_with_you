@@ -219,3 +219,30 @@ footer { display: flex; align-items: center; justify-content: space-between; pad
 @media (max-height:560px) and (min-width:601px) {
   #auto-skills { left: 148px; bottom: 20px; width: min(380px,calc(100% - 388px)); }
 }
+
+.door { min-height: 210px; --skill-color: #c9d6b4; }
+.door[data-goal="clear"] { --skill-color: #e3c79a; }
+.door[data-goal="elite"], .door[data-goal="boss"] { --skill-color: #e0a8a0; }
+.door[data-hard] { border-color: #b9857f; background: #382f37; }
+.door[data-hard] .tag { color: #f0b9ab; }
+.door-reward { margin-top: auto; padding-top: 12px; display: flex; gap: 8px; align-items: center; font-size: 13px; color: #e6dcb8; border-top: 1px solid #78758066; width: 100%; overflow-wrap: anywhere; }
+.upgrade .door-reward svg { width: 16px; height: 16px; flex: none; }
+
+#ultimate { position: absolute; right: 20px; bottom: 132px; width: 196px; height: 44px; padding: 0 12px; display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; text-align: left; background: #292a33f2; border-color: #8f7a66; overflow: hidden; }
+#ultimate::before { content: ""; position: absolute; inset: 0; width: var(--charge,0); background: linear-gradient(90deg,#8a3b22aa,#e08a3caa); pointer-events: none; }
+#ultimate > span { position: relative; }
+#ultimate .ult-key { font-size: 11px; color: #d8c9a8; border: 1px solid #d8c9a877; border-radius: 3px; text-align: center; line-height: 18px; }
+#ultimate .ult-name { font-size: 14px; font-weight: 600; color: #f2e3c2; }
+#ultimate .ult-count { font-size: 12px; color: #e9d3b0; }
+#ultimate .ult-res { position: absolute; right: 8px; top: -19px; font-size: 11px; color: #ffcf8a; text-shadow: 0 1px 2px #000; white-space: nowrap; }
+.study-resonance { color: #f0c592; font-size: 13px; margin: 2px 0 10px; }
+#ultimate[data-state="ready"] { border-color: #ffcf8a; box-shadow: 0 0 0 2px #ffb45e55, 0 0 18px #ff8a3c88; animation: ult-pulse 1.1s ease-in-out infinite; }
+@keyframes ult-pulse { 50% { box-shadow: 0 0 0 3px #ffb45e99, 0 0 28px #ff8a3ccc; } }
+#cutin { position: absolute; z-index: 3; left: 0; right: 0; top: 50%; height: min(42%,340px); transform: translateY(-50%) skewY(-4deg); overflow: hidden; pointer-events: none; border-top: 3px solid #ffd79a; border-bottom: 3px solid #ffd79a; background: #1a0d0a; box-shadow: 0 0 60px #000c; animation: cutin-band .95s cubic-bezier(.2,.9,.2,1) both; }
+#cutin img { position: absolute; inset: -8% -4%; width: 108%; height: 116%; object-fit: cover; object-position: 50% 30%; transform: skewY(4deg); animation: cutin-art .95s cubic-bezier(.1,.8,.2,1) both; }
+#cutin strong { position: absolute; right: 6%; bottom: 12%; transform: skewY(4deg); font-size: clamp(28px,5vw,56px); letter-spacing: .18em; color: #fff3d6; text-shadow: 0 0 18px #ff7a2c, 0 3px 0 #7a2a12; animation: cutin-name .95s ease-out both; }
+@keyframes cutin-band { 0% { clip-path: inset(50% 0); } 18% { clip-path: inset(0); } 86% { clip-path: inset(0); opacity: 1; } 100% { clip-path: inset(50% 0); opacity: 0; } }
+@keyframes cutin-art { 0% { translate: 9% 0; scale: 1.12; } 100% { translate: -3% 0; scale: 1; } }
+@keyframes cutin-name { 0%,20% { opacity: 0; translate: 60px 0; } 40%,100% { opacity: 1; translate: 0 0; } }
+@media (max-width: 720px) { #ultimate { right: 12px; bottom: 114px; width: 160px; height: 36px; } }
+@media (prefers-reduced-motion: reduce) { #ultimate[data-state="ready"], #cutin, #cutin img, #cutin strong { animation: none; } }

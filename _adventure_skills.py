@@ -22,6 +22,14 @@ CATALOG = _catalog("skills-v2.json")
 CATALOGS = {2: CATALOG, **dict.fromkeys((3, 4, 5), _catalog("skills.json"))}
 CATALOGS[6] = {**CATALOGS[5], **_catalog("skills-expanded.json")}
 CATALOGS[7] = CATALOGS[6]
+CATALOGS[8] = CATALOGS[7]
+CATALOGS[9] = CATALOGS[8]
+CATALOGS[10] = CATALOGS[9]
+CATALOGS[11] = CATALOGS[10]
+CATALOGS[12] = CATALOGS[11]
+AFFIXES = ("swift", "armored", "split")
+LINE = json.loads((Path(__file__).parent / "static" / "fire-line.json").read_text(encoding="utf-8"))
+MASTERY = json.loads((Path(__file__).parent / "static" / "mastery.json").read_text(encoding="utf-8"))
 MODS = _catalog("build-mods.json", "mods")
 SKILL_TAGS = json.loads((Path(__file__).parent / "static" / "build-mods.json").read_text(encoding="utf-8"))["tags"]
 ROUTES = _catalog("routes.json")
@@ -70,6 +78,16 @@ def legal_choices(build: dict, owner: str, rules: int = 2) -> set[str]:
                 s["evolution"] == "fusion" for s in skills.values()
             ):
                 result.add(f"{skill_id}:fuse")
+        elif rules >= 10 and skill_id in MASTERY["skills"] and build["mastery"][skill_id] < MASTERY["cap"] and not (
+            rules >= 11 and skill_id == LINE["root"]
+        ):
+            result.add(f"{skill_id}:master")
+    if rules >= 11 and skills.get(LINE["root"], {}).get("level") == 5:
+        arts = build["arts"]
+        if arts and arts[-1]["level"] < LINE["cap"]:
+            result.add(f"art:{arts[-1]['id']}")
+        elif len(arts) < len(LINE["stages"]):
+            result.update(f"art:{key}" for key in LINE["stages"][len(arts)])
     allowed = {"power", "vitality", "stride", "reach"} if owner == "player" else {"power", "ward"}
     result.update(f"talent:{key}" for key in allowed if build["talents"][key] < 4)
     if rules >= 7:
@@ -90,13 +108,20 @@ def validate_extra(value: dict) -> dict:
         extra |= {"preparation", "swaps"}
     if encounter_rules:
         extra |= {"encounters", "foes", "threats"}
+    if value["rules"] >= 8:
+        extra |= {"journey"}
+    if value["rules"] >= 9:
+        extra |= {"ultimate"}
     common_fields = {
         "rules", "elapsed", "rng", "player", "companion", "enemies", "bullets", "drops",
         "level", "xp", "kills", "partner_kills", "next_id", "choices", "spawn_at",
         "attack_at", "support_at", "hurt_until", "shield", "boss_spawned", "outcome",
     }
     _check(set(value) == common_fields | extra)
-    _check(_int(value["level"], 1, 31) and _int(value["rerolls"], 0, 2))
+    _check(_int(value["level"], 1, 50 if value["rules"] >= 11 else 31) and _int(value["rerolls"], 0, 2))
+    if value["rules"] >= 9:
+        _check(isinstance(value["ultimate"], dict) and set(value["ultimate"]) == {"energy"}
+               and _int(value["ultimate"]["energy"], 0, 100))
     if free_build:
         _check(isinstance(value["preparation"], str) and value["preparation"] in ("", "player", "companion"))
         _check(isinstance(value["swaps"], dict) and set(value["swaps"]) == set(LIMITS)
@@ -107,7 +132,7 @@ def validate_extra(value: dict) -> dict:
     _check(isinstance(builds, dict) and set(builds) == set(LIMITS))
     for owner, build in builds.items():
         _check(isinstance(build, dict) and set(build) == {"skills", "talents", "misses"} | (
-            {"mods", "banished"} if free_build else set()))
+            {"mods", "banished"} if free_build else set()) | ({"mastery"} if value["rules"] >= 10 else set()) | ({"arts"} if value["rules"] >= 11 else set()))
         skills = build["skills"]
         minimum = 0 if free_build and value["preparation"] else 1 if free_build else 2
         _check(isinstance(skills, list) and minimum <= len(skills) <= (5 if owner == "player" else 3))
@@ -131,6 +156,22 @@ def validate_extra(value: dict) -> dict:
             _check(count <= limit and (slot != "auto" or free_build and value["preparation"] or count >= 1))
         if not free_build:
             _check(any(catalog[s["id"]]["slot"] == ("manual" if owner == "player" else "support") for s in skills))
+        if value["rules"] >= 10:
+            # Mastery only grows on a skill that is still held and has finished its five levels.
+            mastery = build["mastery"]
+            _check(isinstance(mastery, dict) and set(mastery) == set(MASTERY["skills"]))
+            _check(all(_int(rank, 0, MASTERY["cap"]) and (rank == 0 or any(
+                s["id"] == key and s["level"] == 5 for s in skills)) for key, rank in mastery.items()))
+        if value["rules"] >= 11:
+            # The fire line: one form per rank, in order, each finished before the next begins.
+            arts = build["arts"]
+            _check(isinstance(arts, list) and len(arts) <= len(LINE["stages"]))
+            for index, art in enumerate(arts):
+                _check(isinstance(art, dict) and set(art) == {"id", "level"} and isinstance(art["id"], str)
+                       and art["id"] in LINE["stages"][index] and _int(art["level"], 1, LINE["cap"]))
+                _check(index == len(arts) - 1 or art["level"] == LINE["cap"])
+            _check(not arts or any(s["id"] == LINE["root"] and s["level"] == 5 for s in skills))
+            _check(build["mastery"][LINE["root"]] == 0)
         fused = [s for s in skills if s["evolution"] == "fusion"]
         _check(len(fused) <= 1)
         for skill in fused:
@@ -176,6 +217,12 @@ def validate_extra(value: dict) -> dict:
                and all(isinstance(item, dict) for item in value[key])
                for key in ("enemies", "bullets", "drops")))
     common = copy.deepcopy({key: item for key, item in value.items() if key not in extra})
+    if value["rules"] >= 12:
+        # Elites: every enemy states its affix; only ordinary kinds may carry one.
+        for enemy in common["enemies"]:
+            _check(enemy.get("affix") == "" or enemy.get("affix") in AFFIXES
+                   and enemy.get("kind") in ("slime", "wisp", "brute"))
+            del enemy["affix"]
     if encounter_rules:
         for enemy in common["enemies"]:
             if enemy.get("kind") in ("charger", "caster", "sentinel", "oracle"):
@@ -194,8 +241,12 @@ def validate_extra(value: dict) -> dict:
         ))
         if modern:
             form = bullet.pop("form")
-            _check(form in ("base", "awakened", "fusion"))
             skill = next(s for s in builds[bullet["owner"]]["skills"] if s["id"] == bullet["skill"])
+            if form == "bird":
+                _check(value["rules"] >= 10 and bullet["skill"] == "fire"
+                       and builds[bullet["owner"]]["mastery"]["fire"] == MASTERY["cap"])
+                form = "base"
+            _check(form in ("base", "awakened", "fusion"))
             _check(form == "base" or skill["level"] == 5 and (
                 skill["evolution"] == ("fusion" if form == "fusion" else "pure")
             ))
@@ -362,7 +413,10 @@ def validate_encounters(value: dict, builds: dict) -> None:
                and target in alive and alive[target]["kind"] in enemy_specs)
         _check(isinstance(ai["state"], str) and ai["state"] in ("move", "windup", "recover"))
         _check(_num(ai["ready_at"], 0, now + 3000) and _int(ai["step"], 0, 5)
-               and _int(ai["phase"], 1, 2) and (ai["phase"] == 1 or alive[target]["kind"] == "boss"))
+               and _int(ai["phase"], 1, 3 if value["rules"] >= 12 else 2))
+        kind = alive[target]["kind"]
+        _check(ai["phase"] == 1 or kind == "boss" or value["rules"] >= 12 and ai["phase"] == 2
+               and kind in ("sentinel", "oracle"))
         ai_by_target[target] = ai
     _check(set(ai_by_target) == {key for key, enemy in alive.items() if enemy["kind"] in enemy_specs})
     threats = value["threats"]

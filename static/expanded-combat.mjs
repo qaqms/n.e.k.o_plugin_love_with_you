@@ -200,6 +200,11 @@ export class ExpandedCombat {
       this.erase(z)
       c.flash(z.x, z.y, z.radius, COLORS[z.kind], z.kind)
       this.pulse(z, z.radius, z.damage, z.owner, z.kind === "meteor" ? p.knockback : 25)
+      if (z.kind === "meteor" && s.outcome === "playing") {
+        for (const enemy of s.enemies.getChildren()) if (distance(z, enemy) <= z.radius) c.ignite(enemy, z.owner, z.damage)
+        // Mastery III: a wider wave of fire rolls out from the crater.
+        if (c.mastery(z.owner, "meteor") >= 3) c.splash(z, Math.min(200, z.radius * 1.5), z.damage * .5, z.owner, null, "meteor")
+      }
     } else if (z.kind === "beacon") {
       const target = s.nearest(z, z.radius)
       if (!target) return true
@@ -228,57 +233,9 @@ export class ExpandedCombat {
     }
     return true
   }
-  paint(g) {
-    const now = this.s.elapsed, reduced = this.s.art?.reduced
-    for (const z of this.c.zones) {
-      if (!this.isZone(z.kind)) continue
-      const p = this.p(z.owner, z.kind), color = COLORS[z.kind]
-      g.lineStyle(1.5, color, .65)
-      if (z.kind === "orbit") {
-        g.lineStyle(1, color, .2).strokeCircle(z.x, z.y, z.radius)
-        g.lineStyle(1, color, .1).strokeCircle(z.x, z.y, z.radius - p.band).strokeCircle(z.x, z.y, z.radius + p.band)
-        for (let i = 0; i < p.blades; i++) {
-          const a = now / 1000 * p.rotation + i * TAU / p.blades, x = z.x + Math.cos(a) * z.radius, y = z.y + Math.sin(a) * z.radius
-          g.lineStyle(p.band === 16 ? 4 : 7, color, .9).beginPath().arc(z.x, z.y, z.radius, a - .22, a + .22).strokePath()
-          g.fillStyle(0xf4f2d8, .9).fillTriangle(x, y - 9, x - 5, y + 7, x + 5, y + 7)
-        }
-      } else if (z.kind === "rune") {
-        const armed = now >= z.tick_at
-        g.lineStyle(2, color, armed ? .9 : .3).strokeRect(z.x - 16, z.y - 16, 32, 32)
-        g.lineBetween(z.x - 20, z.y, z.x + 20, z.y).lineBetween(z.x, z.y - 20, z.x, z.y + 20)
-        g.lineStyle(1, color, .25).strokeCircle(z.x, z.y, p.trigger)
-      } else if (z.kind === "beacon") {
-        g.lineStyle(1, color, .12).strokeCircle(z.x, z.y, z.radius)
-        g.fillStyle(0x304353, .9).fillEllipse(z.x, z.y + 7, 28, 12)
-        g.lineStyle(2, color, .9).strokeTriangle(z.x, z.y - 24, z.x - 9, z.y - 10, z.x + 9, z.y - 10)
-        g.lineBetween(z.x, z.y - 10, z.x, z.y + 5).strokeEllipse(z.x, z.y + 5, 28, 10)
-      } else if (z.kind === "meteor") {
-        g.fillStyle(color, .06).fillCircle(z.x, z.y, z.radius).strokeCircle(z.x, z.y, z.radius)
-        const progress = 1 - Math.max(0, Math.min(p.delay, z.tick_at - now)) / p.delay
-        g.lineStyle(2, color, .7).strokeCircle(z.x, z.y, z.radius * progress)
-        g.lineBetween(z.x - 12, z.y, z.x + 12, z.y).lineBetween(z.x, z.y - 12, z.x, z.y + 12)
-        g.fillStyle(color, .8).fillEllipse(z.x, z.y - (1 - progress) * 150 - 12, 10 + progress * 12, 16 + progress * 14)
-      } else if (z.kind === "whirl") {
-        const angle = now / 140
-        g.lineStyle(4, color, .65).beginPath().arc(z.x, z.y, z.radius, angle, angle + Math.PI * 1.5).strokePath()
-        g.lineStyle(2, 0xf5f2de, .7).beginPath().arc(z.x, z.y, z.radius * .8, -angle, -angle + 2).strokePath()
-      } else {
-        g.lineStyle(1, color, .4).strokeCircle(z.x, z.y, z.radius)
-        for (let i = 0; i < (reduced ? 6 : 12); i++) {
-          const a = i * TAU / (reduced ? 6 : 12), x = z.x + Math.cos(a) * z.radius * .72, y = z.y + Math.sin(a) * z.radius * .72
-          g.fillStyle(color, .5).fillTriangle(x - 7, y + 5, x, y - 15, x + 7, y + 5)
-        }
-      }
-    }
+  // Zones and beams are drawn by zone-art.mjs; this only retires finished beams.
+  paint() {
+    const now = this.s.elapsed
     this.lines = this.lines.filter(line => line.until > now)
-    for (const line of this.lines) {
-      g.lineStyle(line.width, line.color, (line.until - now) / 220 * .9)
-      for (let i = 1; i < line.points.length; i++) {
-        const a = line.points[i - 1], b = line.points[i], dx = b.x - a.x, dy = b.y - a.y, d = Math.max(1, Math.hypot(dx, dy))
-        if (line.width > 3 || reduced) { g.lineBetween(a.x, a.y, b.x, b.y); continue }
-        const side = i % 2 ? 7 : -7, x = (a.x + b.x) / 2 - dy / d * side, y = (a.y + b.y) / 2 + dx / d * side
-        g.lineBetween(a.x, a.y, x, y).lineBetween(x, y, b.x, b.y)
-      }
-    }
   }
 }

@@ -5,6 +5,45 @@ export const FROST_SKILLS = {}
 export const ROUTES = {}
 export const BUILD_MODS = {}
 export const SKILL_TAGS = {}
+// Rule 10: growth past level 5 (mastery) and a per-build school resonance.
+export const MASTERY = {}
+export const NUMERALS = ["Ⅰ", "Ⅱ", "Ⅲ"]
+export function installMastery(data) {
+  if (data?.cap !== 3 || !data.skills || !Object.keys(data.skills).every(id => SKILLS[id] && data.skills[id].length === data.cap)
+    || data.resonance?.tiers?.length !== 3 || !data.resonance.skills.every(id => SKILLS[id])) throw new Error("精通目录不完整")
+  Object.assign(MASTERY, structuredClone(data))
+}
+// Rule 11: a skill line. A finished root skill advances into a new form of the next rank;
+// earlier forms keep casting at a slower pace, so the screen fills up rank by rank.
+export const LINE = {}
+export function installLine(data) {
+  if (!SKILLS[data?.root] || data.stages?.length !== 3 || data.ranks?.length !== 4 || !data.stages.flat().every(id => data.arts?.[id])) throw new Error("技能线目录不完整")
+  Object.assign(LINE, structuredClone(data))
+}
+export const artOf = (build, id) => build.arts?.find(art => art.id === id) || null
+export const levelCap = build => build.arts ? 50 : 31
+function artChoices(build) {
+  const arts = build.arts, root = build.skills.find(skill => skill.id === LINE.root)
+  if (!arts || root?.level !== 5) return []
+  const last = arts.at(-1)
+  if (last && last.level < LINE.cap) return [`art:${last.id}`]
+  return (LINE.stages[arts.length] || []).map(id => `art:${id}`)
+}
+export function artStats(build, id) {
+  const art = artOf(build, id), spec = LINE.arts[id], level = art?.level || 1
+  const later = build.arts.findIndex(item => item.id === id) < build.arts.length - 1
+  return { damage: spec.damage * (1 + (level - 1) * .2) * (1 + build.talents.power * .08),
+    cooldown: Math.round(spec.cooldown * (1 - (level - 1) * .04) * (later && art ? LINE.slow : 1)), range: spec.range }
+}
+export const masteryOf = (build, id) => build.mastery?.[id] || 0
+// Points: one per school skill, one more once awakened or fused, one per mastery rank.
+export function resonance(build) {
+  if (!build.mastery) return { points: 0, tier: 0 }
+  const points = build.skills.filter(skill => MASTERY.resonance.skills.includes(skill.id))
+    .reduce((sum, skill) => sum + 1 + Number(skill.level === 5) + masteryOf(build, skill.id), 0)
+    + (build.arts || []).reduce((sum, art) => sum + 1 + Number(art.level === LINE.cap), 0)
+  return { points, tier: MASTERY.resonance.tiers.filter(([need]) => points >= need).length }
+}
 export const TALENTS = {
   power: ["磨砺", "攻击强度 +8%", ["player", "companion"]],
   vitality: ["坚韧", "生命上限 +12，恢复等量生命", ["player"]],
@@ -39,7 +78,7 @@ export function installBuildMods(data) {
   Object.assign(SKILL_TAGS, data.tags)
   for (const spec of data.mods) BUILD_MODS[spec.id] = Object.freeze(spec)
 }
-export const buildRules = build => Object.hasOwn(build, "mods") ? 7 : Object.hasOwn(build.misses, "spark") ? 6 : Object.hasOwn(build.misses, "ice") ? 3 : 2
+export const buildRules = build => Object.hasOwn(build, "arts") ? 11 : Object.hasOwn(build, "mastery") ? 10 : Object.hasOwn(build, "mods") ? 7 : Object.hasOwn(build.misses, "spark") ? 6 : Object.hasOwn(build.misses, "ice") ? 3 : 2
 export const catalogFor = rules => rules >= 6 ? SKILLS : rules === 2 ? LEGACY_SKILLS : FROST_SKILLS
 export const studyOwner = level => (level - 1) % 3 === 0 ? "companion" : "player"
 export function newSkill(id) { return { id, level: 1, focus: "", branch: "", evolution: "", ready_at: 0, react_at: 0 } }
@@ -51,6 +90,8 @@ export function newBuild(owner, kind, rules = 3, route = kind) {
     talents: Object.fromEntries(Object.keys(TALENTS).map(key => [key, 0])),
     misses: Object.fromEntries(Object.keys(catalogFor(rules)).map(key => [key, 0])),
     ...(rules >= 7 ? { mods: Object.fromEntries(Object.keys(BUILD_MODS).map(key => [key, 0])), banished: [] } : {}),
+    ...(rules >= 10 ? { mastery: Object.fromEntries(Object.keys(MASTERY.skills).map(key => [key, 0])) } : {}),
+    ...(rules >= 11 ? { arts: [] } : {}),
   }
 }
 export function legalChoices(build, owner) {
@@ -66,8 +107,10 @@ export function legalChoices(build, owner) {
       result.push(`${spec.id}:awaken`)
       if (spec.fusion && build.skills.some(s => s.id === spec.fusion[0] && s.level >= 2)
         && !build.skills.some(s => s.evolution === "fusion")) result.push(`${spec.id}:fuse`)
-    }
+    } else if (build.mastery && MASTERY.skills[spec.id] && build.mastery[spec.id] < MASTERY.cap
+      && !(build.arts && spec.id === LINE.root)) result.push(`${spec.id}:master`)
   }
+  result.push(...artChoices(build))
   for (const [key, [, , owners]] of Object.entries(TALENTS)) {
     if (owners.includes(owner) && build.talents[key] < 4) result.push(`talent:${key}`)
   }
@@ -126,7 +169,14 @@ export function applyChoice(build, owner, key) {
   const [id, action] = key.split(":")
   if (id === "talent") { build.talents[action]++; return true }
   if (id === "mod") { build.mods[action]++; return true }
+  if (id === "art") {
+    const art = artOf(build, action)
+    if (art) art.level++
+    else build.arts.push({ id: action, level: 1 })
+    return true
+  }
   if (action === "learn") { build.skills.push(newSkill(id)); return true }
+  if (action === "master") { build.mastery[id]++; return true }
   const skill = build.skills.find(s => s.id === id)
   if (skill.level === 1) skill.focus = action
   else if (skill.level === 2) skill.branch = action
@@ -134,8 +184,9 @@ export function applyChoice(build, owner, key) {
   skill.level++
   return true
 }
-export function skillName(skill) {
-  const spec = SKILLS[skill.id]
+export function skillName(skill, build = null) {
+  const spec = SKILLS[skill.id], rank = build ? masteryOf(build, skill.id) : 0
+  if (rank) return `${skill.evolution === "fusion" ? spec.fusion[1] : spec.name} · 精通${NUMERALS[rank - 1]}`
   return skill.evolution === "fusion" ? spec.fusion[1] : `${spec.name}${skill.level === 5 ? " · 觉醒" : ""}`
 }
 export function skillControl(build, id) {
@@ -150,6 +201,16 @@ export function nextStep(build, skill) {
   const spec = catalogFor(buildRules(build))[skill.id]
   const branch = spec.branches.find(([key]) => key === skill.branch)
   const selected = branch ? `已选${branch[1]} · ` : ""
+  if (skill.level === 5 && build.arts && skill.id === LINE.root) {
+    const last = build.arts.at(-1), next = LINE.stages[build.arts.length]
+    if (last && last.level < LINE.cap) return `${selected}${LINE.arts[last.id].name} ${last.level}级 · 升满 ${LINE.cap} 级后进阶`
+    return next ? `${selected}下次：进阶${LINE.ranks[build.arts.length + 1]} · ${next.map(id => LINE.arts[id].name).join(" / ")}`
+      : `${selected}${LINE.ranks[build.arts.length]}已满，这条线已经走到尽头`
+  }
+  if (skill.level === 5 && build.mastery && MASTERY.skills[skill.id]) {
+    const rank = build.mastery[skill.id]
+    return rank >= MASTERY.cap ? `${selected}精通已满` : `${selected}下次：精通${NUMERALS[rank]} · ${MASTERY.skills[skill.id][rank][0]}`
+  }
   if (skill.level === 5) return `${selected}${skill.evolution === "fusion" ? "复合进化完成，前置技能保留" : "本系觉醒完成"}`
   if (skill.level === 1) return "下次：凝练 / 节律"
   if (skill.level === 2) return `下次：${spec.branches.map(([, name]) => name).join(" / ")}`
@@ -290,6 +351,15 @@ export function parameters(skill, build) {
       if (skill.id === "quake") range = radius
     }
   }
+  const rank = masteryOf(build, skill.id)
+  if (rank) {
+    damage *= 1 + MASTERY.power * rank
+    if (skill.id === "fire" && rank >= 2) count++
+    if (skill.id === "flame" && rank >= 2) radius = Math.min(200, radius + 15)
+    if (skill.id === "meteor") { damage *= 1.25; radius = Math.min(200, radius + 15); if (rank >= 2) knockback += 45 }
+  }
+  if (build.mastery && MASTERY.resonance.skills.includes(skill.id) && resonance(build).tier >= 3) cooldown *= .88
+  if (build.arts?.length && skill.id === LINE.root) cooldown *= LINE.slow
   return { damage, cooldown: Math.max(250, Math.round(cooldown)), range, count, radius, duration, pierce,
     half, width, knockback, reactCooldown, targets, shieldBonus, followBonus, retaliateRange,
     blastRadius, blastDuration, frostStacks, frostDuration, breakDamage, ...extra }
@@ -299,6 +369,18 @@ export function choiceText(build, key, owner = "player") {
   if (id === "talent") return { name: TALENTS[action][0], type: "基础强化",
     detail: action === "ward" && buildRules(build) >= 6 ? "同行护盾与治疗强度 +12%" : TALENTS[action][1],
     change: `${build.talents[action]} → ${build.talents[action] + 1} 阶`, icon: action === "vitality" ? "Heart" : "Plus" }
+  if (id === "art") {
+    const spec = LINE.arts[action], art = artOf(build, action), after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const next = artStats(after, action), rank = LINE.ranks[spec.rank]
+    if (!art) return { name: `进阶${rank} · ${spec.name}`, type: `进阶 / 自动攻击`, detail: `${spec.text} ${spec.link}`,
+      change: `${LINE.ranks[spec.rank - 1]} → ${rank} · 强度 ${Math.round(next.damage)} · 间隔 ${(next.cooldown / 1000).toFixed(2)} 秒`, icon: spec.icon }
+    const before = artStats(build, action)
+    return { name: `${spec.name} · ${rank}`, type: "强化 / 自动攻击",
+      detail: art.level + 1 === LINE.cap && LINE.stages[spec.rank] ? `${spec.text} 升满后可进阶${LINE.ranks[spec.rank + 1]}。` : spec.text,
+      change: `${art.level} → ${art.level + 1} 级 · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 间隔 ${(before.cooldown / 1000).toFixed(2)} → ${(next.cooldown / 1000).toFixed(2)} 秒`,
+      icon: spec.icon }
+  }
   if (id === "mod") {
     const spec = BUILD_MODS[action], affected = build.skills.filter(s => SKILL_TAGS[s.id].includes(spec.tag)).map(s => SKILLS[s.id].name)
     return { name: spec.name, type: action === "follow" ? "双人协同" : "体系改造",
@@ -311,6 +393,15 @@ export function choiceText(build, key, owner = "player") {
     name: `学会 · ${spec.name}`, type: `学招 / ${slot}`,
     detail: `${spec.description} ${spec.slot === "auto" ? "学会后立即加入自动攻击栏，不占 Q / E。" : spec.slot === "manual" ? `学会后进入 ${slot[0]} 槽。` : "学会后由同行自动支援。"}`,
     change: "未学习 → 1 级", icon: spec.icon,
+  }
+  if (action === "master") {
+    const rank = build.mastery[id], [title, detail] = MASTERY.skills[id][rank], after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const before = parameters(skill, build), next = parameters(after.skills.find(s => s.id === id), after)
+    return { name: `${spec.name} · 精通${NUMERALS[rank]} ${title}`, type: `精通 / ${slot}`,
+      detail: `${detail} 威力另 +${Math.round(MASTERY.power * 100)}%。`,
+      change: `精通 ${rank} → ${rank + 1} · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 间隔 ${(before.cooldown / 1000).toFixed(2)} → ${(next.cooldown / 1000).toFixed(2)} 秒`,
+      icon: spec.icon }
   }
   const branch = spec.branches.find(([value]) => value === action)
   const after = structuredClone(build)

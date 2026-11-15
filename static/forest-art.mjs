@@ -1,4 +1,5 @@
 import { DEPTH, groundDepth } from "./terrain-rules.mjs"
+import { drawProjectile } from "./fx-art.mjs"
 
 // Decorative artwork has its own fixed seed; it never consumes the run's RNG.
 function canvasTexture(scene, key, width, height, draw) {
@@ -171,10 +172,31 @@ function paintProp(ctx, kind, rng, variant) {
   }
 }
 
-export function paintForest(scene, width, height, props) {
+// Outside an arena the floor falls into deep shade, so the treeline reads as a wall.
+function paintShade(ctx, width, height, b) {
+  const right = b.x + b.width, bottom = b.y + b.height
+  ctx.fillStyle = "#132b2cd9"
+  ctx.fillRect(0, 0, width, b.y); ctx.fillRect(0, bottom, width, height - bottom)
+  ctx.fillRect(0, b.y, b.x, b.height); ctx.fillRect(right, b.y, width - right, b.height)
+  for (const [x0, y0, x1, y1, rx, ry, rw, rh] of [[0, b.y, 0, b.y + 70, b.x, b.y, b.width, 70],
+    [0, bottom, 0, bottom - 70, b.x, bottom - 70, b.width, 70], [b.x, 0, b.x + 70, 0, b.x, b.y, 70, b.height],
+    [right, 0, right - 70, 0, right - 70, b.y, 70, b.height]]) {
+    const fade = ctx.createLinearGradient(x0, y0, x1, y1)
+    fade.addColorStop(0, "#132b2c9c"); fade.addColorStop(1, "#132b2c00")
+    ctx.fillStyle = fade; ctx.fillRect(rx, ry, rw, rh)
+  }
+}
+
+export function paintForest(scene, width, height, props, arena = "", bounds = null) {
   const seed = key => new Phaser.Math.RandomDataGenerator([`border-forest-v3-${key}`])
-  canvasTexture(scene, "forest-ground-v3", width, height, ctx => paintGround(ctx, width, height, seed("floor"), props))
-  scene.add.image(0, 0, "forest-ground-v3").setOrigin(0).setDepth(DEPTH.ground)
+  const ground = arena ? `forest-ground-v3-${arena}` : "forest-ground-v3"
+  canvasTexture(scene, ground, width, height, ctx => {
+    paintGround(ctx, width, height, seed("floor"), props.filter(prop => !prop.decor))
+    if (bounds) paintShade(ctx, width, height, bounds)
+  })
+  const floor = scene.children.getByName("forest-ground")
+    || scene.add.image(0, 0, ground).setOrigin(0).setDepth(DEPTH.ground).setName("forest-ground")
+  floor.setTexture(ground)
   const visuals = []
   for (const prop of props) {
     const { kind, variant, x, y, scale } = prop
@@ -198,42 +220,6 @@ export function paintForest(scene, width, height, props) {
 
 export function paintProjectiles(scene) {
   for (const name of ["fire", "wind", "ice", "stone", "awakened", "fusion"]) {
-    canvasTexture(scene, `bolt-${name}`, 32, 32, ctx => {
-      if (name === "stone") {
-        ellipse(ctx, 16, 18, 13, 10, "#293f4544")
-        ctx.fillStyle = "#7e958d"; ctx.beginPath()
-        ctx.moveTo(5, 9); ctx.lineTo(19, 4); ctx.lineTo(28, 12); ctx.lineTo(26, 24)
-        ctx.lineTo(12, 28); ctx.lineTo(3, 20); ctx.closePath(); ctx.fill()
-        ctx.fillStyle = "#c8d0b9"; ctx.beginPath()
-        ctx.moveTo(5, 9); ctx.lineTo(19, 4); ctx.lineTo(23, 13); ctx.lineTo(12, 17); ctx.closePath(); ctx.fill()
-        ctx.strokeStyle = "#e4e4cd"; ctx.lineWidth = 1.5; ctx.beginPath()
-        ctx.moveTo(8, 10); ctx.lineTo(18, 7); ctx.lineTo(21, 12); ctx.stroke()
-      } else if (name === "ice") {
-        ctx.fillStyle = "#75b9cf"; ctx.beginPath()
-        ctx.moveTo(31, 16); ctx.lineTo(10, 8); ctx.lineTo(1, 16); ctx.lineTo(10, 23); ctx.closePath(); ctx.fill()
-        ctx.fillStyle = "#ddf9ef"; ctx.beginPath(); ctx.moveTo(31, 16); ctx.lineTo(10, 10); ctx.lineTo(12, 16); ctx.closePath(); ctx.fill()
-        ctx.strokeStyle = "#a7dfeb"; ctx.beginPath(); ctx.moveTo(28, 16); ctx.lineTo(2, 16); ctx.stroke()
-      } else if (name === "wind") {
-        ctx.strokeStyle = "#81cbbf"; ctx.lineWidth = 5; ctx.beginPath()
-        ctx.moveTo(8, 3); ctx.quadraticCurveTo(31, 16, 8, 29); ctx.stroke()
-        ctx.strokeStyle = "#e4f1d2"; ctx.lineWidth = 2; ctx.beginPath()
-        ctx.moveTo(10, 5); ctx.quadraticCurveTo(32, 16, 10, 27); ctx.stroke()
-      } else {
-        const fill = ctx.createRadialGradient(20, 16, 1, 18, 16, 13)
-        fill.addColorStop(0, "#fff6d2"); fill.addColorStop(.35, "#ffe5a2")
-        fill.addColorStop(.7, name === "fusion" ? "#76d5c1" : "#ef9a69")
-        fill.addColorStop(1, "#d8586200")
-        ctx.fillStyle = fill; ctx.beginPath()
-        ctx.moveTo(1, 9); ctx.quadraticCurveTo(14, 14, 20, 4)
-        ctx.bezierCurveTo(36, 7, 35, 26, 19, 29); ctx.quadraticCurveTo(10, 21, 1, 24)
-        ctx.lineTo(7, 17); ctx.closePath(); ctx.fill()
-        ctx.fillStyle = "#fff4c9"; ctx.beginPath()
-        ctx.moveTo(11, 16); ctx.quadraticCurveTo(23, 5, 27, 15); ctx.quadraticCurveTo(26, 23, 11, 16); ctx.fill()
-        if (name !== "fire") {
-          ctx.strokeStyle = name === "fusion" ? "#b7f1de" : "#f3de91"
-          ctx.lineWidth = 1.2; ctx.beginPath(); ctx.ellipse(18, 16, 13, 10, -.3, .2, 5.5); ctx.stroke()
-        }
-      }
-    })
+    canvasTexture(scene, `bolt-${name}`, 48, 48, ctx => drawProjectile(ctx, name))
   }
 }

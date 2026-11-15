@@ -29,6 +29,9 @@ def main() -> None:
         "static/skills-v2.json", "static/skills.mjs", "static/combat.mjs", "static/frost.mjs",
         "static/study.mjs", "static/icons.mjs", "static/index.html", "static/adventure.css",
         "static/encounters.json", "static/encounters.mjs", "static/encounter-rules.mjs",
+        "static/journey.json", "static/journey.mjs", "static/journey-rules.mjs", "_adventure_journey.py",
+        "static/mastery.json", "static/fire-art.mjs", "static/fire-line.json", "static/fire-line.mjs", "static/art/fx-fire-slash.jpg", "static/art/fx-lava-pool.png", "static/art/fx-hellfire.png", "static/art/fx-fire-bird.jpg", "static/ultimate.mjs", "static/art/ultimate-fire-cutin.jpg", "static/art/ult-fire-blast.jpg",
+        "static/art/ult-fire-rune.jpg", "static/art/ult-fire-sun.jpg",
         "docs/adventure-frost-2026-11-12.md", "docs/adventure-encounters-2026-11-13.md",
         "static/actor-art.mjs", "static/companion-art.mjs", "static/art/companion-yui.png",
         "static/art/companion-yui-guardian.png", "static/art/companion-yui-mage.png", "static/forest-art.mjs", "static/battle-art.mjs",
@@ -40,6 +43,13 @@ def main() -> None:
         "docs/adventure-build-expansion-2026-11-13.md",
         "static/build-mods.json", "static/buildcraft.mjs",
         "docs/adventure-free-builds-2026-11-13.md",
+        "static/fx-art.mjs", "static/zone-art.mjs", "static/foe-art.mjs",
+        "static/art/foe-slime.png", "static/art/foe-wisp.png", "static/art/foe-brute.png",
+        "static/art/foe-charger.png", "static/art/foe-caster.png", "static/art/foe-sentinel.png",
+        "static/art/foe-oracle.png", "static/art/foe-boss.png",
+        "static/art/player-traveller.png", "static/art/player-traveller-guardian.png", "static/art/player-traveller-mage.png",
+        "docs/adventure-foe-sprites-2026-11-15.md",
+        "docs/adventure-combat-feedback-2026-11-14.md",
     }
     compared = set()
     with zipfile.ZipFile(args.package) as archive:

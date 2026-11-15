@@ -1,23 +1,28 @@
 import { AdventureApi, errorText } from "./bridge.mjs"
 import { TEXTURES } from "./textures.mjs"
-import { ACTOR_TEXTURES, COMPANION_SHEET, ENEMY_TEXTURES, actorImage, fitCompanion, installActorAtlas } from "./actor-art.mjs"
+import { ACTOR_TEXTURES, COMPANION_SHEET, ENEMY_TEXTURES, PLAYER_SHEET, actorImage, fitCompanion, fitPlayer, installActorAtlas } from "./actor-art.mjs"
 import { paintProjectiles } from "./forest-art.mjs"
 import { ForestMap } from "./forest-map.mjs"
+import { fitFoe, loadFoes } from "./foe-art.mjs"
 import { DEPTH } from "./terrain-rules.mjs"
 import { BattleArt } from "./battle-art.mjs"
 import { icon } from "./icons.mjs"
 import { button, element, loadoutSummary, renderShop, settlementDetails, wallet } from "./camp.mjs"
-import { installCatalog, installRoutes, installBuildMods, ROUTES, SKILLS } from "./skills.mjs"
+import { installLine, installMastery, installCatalog, installRoutes, installBuildMods, ROUTES, SKILLS } from "./skills.mjs"
 import { SkillCombat } from "./combat.mjs"
 import { Encounters } from "./encounters.mjs"
-import { installEncounters, FOES } from "./encounter-rules.mjs"
+import { installEncounters, FOES, AFFIXES } from "./encounter-rules.mjs"
+import { installJourney, nodeAt } from "./journey-rules.mjs"
+import { Journey } from "./journey.mjs"
+import { Ultimate, ULTIMATE_ART } from "./ultimate.mjs"
+import { FireArt } from "./fire-art.mjs"
 import { renderStudy, renderStarter, renderRefit, renderCodex, mountSkillHud, updateSkillHud, buildDetails } from "./study.mjs"
 
 try {
-  const responses = await Promise.all(["skills.json", "skills-v2.json", "encounters.json", "skills-expanded.json", "routes.json", "build-mods.json"].map(file => fetch(new URL(file, import.meta.url))))
+  const responses = await Promise.all(["skills.json", "skills-v2.json", "encounters.json", "skills-expanded.json", "routes.json", "build-mods.json", "journey.json", "mastery.json", "fire-line.json"].map(file => fetch(new URL(file, import.meta.url))))
   if (responses.some(response => !response.ok)) throw new Error("技能资源读取失败")
-  const [current, legacy, encounters, expanded, routes, mods] = await Promise.all(responses.map(response => response.json()))
-  installCatalog(current, legacy, expanded); installRoutes(routes); installBuildMods(mods); installEncounters(encounters)
+  const [current, legacy, encounters, expanded, routes, mods, journey, mastery, line] = await Promise.all(responses.map(response => response.json()))
+  installCatalog(current, legacy, expanded); installRoutes(routes); installBuildMods(mods); installEncounters(encounters); installJourney(journey); installMastery(mastery); installLine(line)
 } catch (error) {
   document.getElementById("screen-body").textContent = "技能资源未能载入，请重新打开冒险面板。"
   throw error
@@ -48,19 +53,22 @@ class Forest extends Phaser.Scene {
       this.load.image(key, `data:image/svg+xml;base64,${btoa(svg)}`)
     }
     this.load.image(COMPANION_SHEET.key, COMPANION_SHEET.url)
+    this.load.image(PLAYER_SHEET.key, PLAYER_SHEET.url)
+    loadFoes(this)
+    for (const [key, url] of Object.entries(ULTIMATE_ART)) this.load.image(key, url)
+    this.load.image("fx-fire-bird", "art/fx-fire-bird.jpg")
+    this.load.image("fx-fire-slash", "art/fx-fire-slash.jpg"); this.load.image("fx-lava-pool", "art/fx-lava-pool.png")
+    this.load.image("fx-hellfire", "art/fx-hellfire.png")
   }
   create() {
     this.controller = controller
     if (!this.textures.exists(COMPANION_SHEET.key)) controller.notice("同行外观未能载入，已改用简化形象。")
     installActorAtlas(this)
-    this.physics.world.setBounds(24, 24, W - 48, H - 48)
-    this.cameras.main.setBounds(0, 0, W, H)
     this.terrain = new ForestMap(this)
     this.enemies = this.physics.add.group()
     this.bullets = this.physics.add.group()
     this.drops = this.physics.add.group()
-    this.player = this.physics.add.sprite(W / 2, H / 2, "guardian").setScale(.7).setDepth(10).setCollideWorldBounds(true)
-    this.player.body.setSize(28, 30).setOffset(18, 34)
+    this.player = fitPlayer(this.physics.add.sprite(W / 2, H / 2, "actors-v2").setDepth(10).setCollideWorldBounds(true))
     this.companion = fitCompanion(this.physics.add.sprite(W / 2 - 55, H / 2 + 20, "actors-v2").setDepth(9).setCollideWorldBounds(true))
     this.ring = this.add.ellipse(this.player.x, this.player.y + 12, 42, 21).setStrokeStyle(2, 0xe8d296, .6).setDepth(8)
     this.partnerRing = this.add.ellipse(this.companion.x, this.companion.y + 12, 37, 19).setStrokeStyle(2, 0x9dbbdb, .65).setDepth(8)
@@ -70,6 +78,7 @@ class Forest extends Phaser.Scene {
     projectile.generateTexture("bolt", 20, 20); projectile.destroy()
     paintProjectiles(this)
     this.art = new BattleArt(this)
+    this.fireArt = new FireArt(this)
     this.terrain.bind()
     $("effects").setAttribute("aria-pressed", String(this.art.reduced))
     const crystal = this.make.graphics({ x: 0, y: 0, add: false })
@@ -86,6 +95,7 @@ class Forest extends Phaser.Scene {
     this.input.keyboard.on("keydown-ESC", () => controller.pause())
     this.input.keyboard.on("keydown-Q", event => { if (!event.repeat) this.combat?.castManual(0) })
     this.input.keyboard.on("keydown-E", event => { if (!event.repeat) this.combat?.castManual(1) })
+    this.input.keyboard.on("keydown-R", event => { if (!event.repeat) this.ultimate?.cast() })
     this.cameras.main.startFollow(this.player, true, .12, .12)
     // Panel bounds can change before the engine gets its next resize tick.
     const viewport = new ResizeObserver(([entry]) => {
@@ -104,15 +114,19 @@ class Forest extends Phaser.Scene {
     this.art.reset()
     this.combat?.destroy(); this.combat = null
     this.encounters?.destroy(); this.encounters = null
+    this.journey = null
+    this.ultimate?.destroy(); this.ultimate = null
+    this.fireArt.reset()
     for (const group of [this.enemies, this.bullets, this.drops]) group.clear(true, true)
     this.meta = run
+    this.terrain.load(run.rules >= 8 ? nodeAt(run.snapshot?.journey.node ?? 0).arena : "")
     this.terrain.reset(run.rules >= 5)
     this.rng = new Phaser.Math.RandomDataGenerator([run.seed])
     this.elapsed = 0; this.level = 1; this.xp = 0; this.kills = 0; this.partnerKills = 0
     this.nextId = 1; this.ranks = Object.fromEntries(Object.keys(UPGRADES).map(key => [key, 0]))
     this.choices = []; this.spawnAt = 700; this.attackAt = 300; this.supportAt = 1500; this.hurtUntil = 0
     this.hp = this.maxHp(); this.shield = 0; this.bossSpawned = false; this.outcome = "playing"; this.lowHealth = false
-    this.player.setTexture(run.player_class).setPosition(W / 2, H / 2).setVelocity(0)
+    fitPlayer(this.player, run.player_class).setPosition(W / 2, H / 2).setVelocity(0)
     fitCompanion(this.companion, run.companion_class).setPosition(W / 2 - 55, H / 2 + 20).setVelocity(0)
     const s = run.snapshot
     if (s) {
@@ -128,6 +142,8 @@ class Forest extends Phaser.Scene {
     }
     if (run.rules >= 2) this.combat = new SkillCombat(this, controller, s)
     if (run.rules >= 4) this.encounters = new Encounters(this, controller, s)
+    if (run.rules >= 8) { this.journey = new Journey(this, controller, s); this.journey.arrive() }
+    if (run.rules >= 9) this.ultimate = new Ultimate(this, controller, s)
     for (const actor of [this.player, this.companion, ...this.enemies.getChildren()]) this.terrain.restoreActor(actor)
     this.terrain.updateDepth()
     mountSkillHud(this)
@@ -148,14 +164,23 @@ class Forest extends Phaser.Scene {
   xpNeeded() { return this.combat ? 14 + this.level * 7 : 10 + this.level * 5 }
   setPaused(value) {
     this.paused = value
+    this.art?.release()
+    if (value) this.ultimate?.cancel()
     this.player?.setVelocity(0); this.companion?.setVelocity(0); this.touch = { x: 0, y: 0 }
     this.input.keyboard.resetKeys()
     if (value) this.physics.world.pause()
     else this.physics.world.resume()
     $("joystick").hidden = value || !matchMedia("(pointer:coarse)").matches
     $("skill-bar").hidden = value || !this.combat
+    if (value || !this.ultimate) $("ultimate").hidden = true
     $("auto-skills").hidden = value || !this.combat
     if (value) $("encounter-status").hidden = true
+  }
+  enterArena() {
+    this.player.setPosition(W / 2, H / 2).setVelocity(0); this.companion.setPosition(W / 2 - 55, H / 2 + 20).setVelocity(0)
+    for (const actor of [this.player, this.companion]) this.terrain.restoreActor(actor)
+    this.ring.setPosition(this.player.x, this.player.y + 14); this.partnerRing.setPosition(this.companion.x, this.companion.y + 14)
+    this.cameras.main.centerOn(this.player.x, this.player.y)
   }
   next() { return this.nextId++ }
   makeEnemy(e) {
@@ -167,9 +192,12 @@ class Forest extends Phaser.Scene {
     if (e.kind === "sentinel") enemy.setTint(0xabc69d)
     if (e.kind === "oracle") enemy.setTint(0xb9a8cb)
     enemy.body.setCircle(19, 13, 29)
+    fitFoe(enemy, e.kind)
     if (this.terrain.enabled) enemy.setCollideWorldBounds(true)
     this.terrain.restoreActor(enemy)
-    enemy.setData({ id: e.id, kind: e.kind, hp: e.hp })
+    enemy.setData({ id: e.id, kind: e.kind, hp: e.hp, affix: e.affix || "" })
+    // Rule 12 elites are larger and tinted; the hurt flash restores this tint.
+    if (e.affix) enemy.setScale(enemy.scaleX * 1.28).setTint(AFFIXES[e.affix].color)
     this.encounters?.track(enemy)
     return enemy
   }
@@ -183,9 +211,15 @@ class Forest extends Phaser.Scene {
       bolt.setTint(b.skill === "fire" ? 0xefae76 : 0x8bd8ca)
       if (this.meta.rules >= 3) {
         bolt.setData("form", b.form)
+        // 48px artwork around the same centred 7px collision circle.
         bolt.setTexture(`bolt-${b.skill === "stone" || b.form === "base" ? b.skill : b.form}`).clearTint()
-        bolt.body.setCircle(7, 9, 9); bolt.setRotation(Math.atan2(b.vy, b.vx))
+        bolt.body.setCircle(7, 17, 17); bolt.setRotation(Math.atan2(b.vy, b.vx))
         if (b.form !== "base") bolt.setScale(1.15)
+        // Mastery III flame bird: a 320px additive picture around a 16px collision circle.
+        if (b.form === "bird" && this.textures.exists("fx-fire-bird")) {
+          bolt.setTexture("fx-fire-bird").setScale(.44).setBlendMode(Phaser.BlendModes.ADD)
+          bolt.body.setCircle(36, 124, 124)
+        } else if (b.form === "bird") bolt.setTexture("bolt-awakened").setScale(1.8)
       }
     }
     bolt.setVelocity(b.vx, b.vy)
@@ -195,12 +229,13 @@ class Forest extends Phaser.Scene {
     if (this.drops.countActive() >= 160) {
       const drop = this.drops.getFirstAlive()
       drop.setData("amount", drop.getData("amount") + d.amount)
-      return
+      return null
     }
     const point = this.terrain.safePoint(d)
     const drop = this.drops.create(point.x, point.y, "xp").setScale(.65).setDepth(DEPTH.floor)
     drop.body.setCircle(9)
     drop.setData({ id: d.id, amount: d.amount })
+    return drop
   }
   spawn() {
     if (this.encounters) return this.encounters.spawnRegular()
@@ -239,30 +274,31 @@ class Forest extends Phaser.Scene {
   hit(bolt, enemy) {
     if (this.combat) return this.combat.hit(bolt, enemy)
     if (this.paused || !bolt.active || !enemy.active) return
-    enemy.setData("hp", enemy.getData("hp") - bolt.getData("damage"))
-    const owner = bolt.getData("owner")
+    const before = enemy.getData("hp"), owner = bolt.getData("owner")
+    enemy.setData("hp", before - bolt.getData("damage"))
+    this.art.impact(bolt.x, bolt.y, owner === "companion" ? "guard" : "slash")
+    this.art.strike(enemy, Math.min(before, bolt.getData("damage")), owner, enemy.getData("hp") <= 0)
     bolt.destroy()
     if (enemy.getData("hp") > 0) return
     const kind = enemy.getData("kind")
     const x = enemy.x, y = enemy.y
     enemy.destroy(); this.kills++
     if (owner === "companion") this.partnerKills++
-    this.makeDrop({ id: this.next(), x, y, amount: kind === "brute" ? 12 : kind === "wisp" ? 5 : 4 })
+    this.art.drop(this.makeDrop({ id: this.next(), x, y, amount: kind === "brute" ? 12 : kind === "wisp" ? 5 : 4 }))
     if (kind === "boss") this.end("cleared")
   }
   hurt(enemy) {
     if (!enemy.active) return
     const kind = enemy.getData("kind"), amount = this.encounters && FOES[kind] ? FOES[kind].damage
       : kind === "boss" ? 28 : kind === "brute" ? 18 : 9
-    this.takeDamage(amount, enemy)
+    this.takeDamage(amount * (AFFIXES[enemy.getData("affix")]?.damage ?? 1), enemy)
   }
   takeDamage(amount, enemy) {
     if (this.paused || this.outcome !== "playing" || this.elapsed < this.hurtUntil || !enemy?.active) return false
     const blocked = Math.min(this.shield, amount)
     this.shield -= blocked; amount -= blocked
     this.hp = Math.max(0, this.hp - amount); this.hurtUntil = this.elapsed + 700
-    this.art.burst(this.player.x, this.player.y, 25, blocked ? 0xb4d8e4 : 0xe6a7a0, "hurt")
-    this.art.hurt()
+    this.art.hurt(amount, blocked)
     if (this.hp / this.maxHp() <= .3 && !this.lowHealth) {
       this.lowHealth = true; controller.notice(`${this.meta.character}：先拉开距离，我在你身边。`)
     }
@@ -314,6 +350,7 @@ class Forest extends Phaser.Scene {
       companion: { x: clampX(this.companion.x), y: clampY(this.companion.y) },
       enemies: this.enemies.getChildren().map(e => ({
         id: e.getData("id"), kind: e.getData("kind"), x: clampX(e.x), y: clampY(e.y), hp: e.getData("hp"),
+        ...(this.meta.rules >= 12 ? { affix: e.getData("affix") } : {}),
       })),
       bullets: this.bullets.getChildren().map(b => ({
         id: b.getData("id"), x: clampX(b.x), y: clampY(b.y), vx: b.body.velocity.x, vy: b.body.velocity.y,
@@ -334,6 +371,8 @@ class Forest extends Phaser.Scene {
       Object.assign(snapshot, { rules: this.meta.rules }, this.combat.data())
     }
     if (this.encounters) Object.assign(snapshot, this.encounters.data())
+    if (this.journey) Object.assign(snapshot, this.journey.data())
+    if (this.ultimate) Object.assign(snapshot, this.ultimate.data())
     return snapshot
   }
   updateHud() {
@@ -341,18 +380,23 @@ class Forest extends Phaser.Scene {
     $("health-fill").style.width = `${Math.max(0, this.hp / this.maxHp()) * 100}%`
     $("hud").classList.toggle("low-health", this.hp / this.maxHp() <= .3)
     $("ward-text").textContent = this.shield > 0 ? `护盾 ${Math.ceil(this.shield)}` : ""
-    $("clock").textContent = `${timeText(this.elapsed)} / 20:00`
+    $("clock").textContent = this.journey ? `${timeText(this.elapsed)} · ${this.journey.stage()}` : `${timeText(this.elapsed)} / 20:00`
     $("kills").textContent = `击败 ${this.kills}`
     $("level").textContent = `Lv.${this.level}`
     $("xp-fill").style.width = `${Math.min(100, this.xp / this.xpNeeded() * 100)}%`
     const milestone = this.encounters && Object.entries(this.encounters.state.milestones).find(([_, mark]) => mark.spawned && !mark.defeated)
-    $("objective").textContent = this.bossSpawned ? "击败林地守望者" : milestone ? `击败 ${FOES[milestone[0]].name}`
+    $("objective").textContent = this.journey ? this.journey.objective() : this.bossSpawned ? "击败林地守望者" : milestone ? `击败 ${FOES[milestone[0]].name}`
       : this.encounters && this.elapsed < 720000 ? "抵御来袭 · 击败首领取得协同" : this.elapsed < 180000 ? "抵御来袭 · 收集魔力结晶" : "深入林地 · 形成你的构筑"
     updateSkillHud(this)
     this.encounters?.updateHud()
+    this.ultimate?.hud()
   }
   update(_, rawDelta) {
     if (!this.activeRun || this.paused) return
+    // Hit-stop holds the simulation clock; no time is skipped or replayed afterwards.
+    this.ultimate?.frame()
+    if (this.paused || this.outcome !== "playing") return
+    if (this.art.stall()) return
     const delta = Math.min(50, Math.max(0, Math.round(rawDelta)))
     this.elapsed = Math.min(END, this.elapsed + delta)
     this.terrain.beginFrame()
@@ -375,8 +419,9 @@ class Forest extends Phaser.Scene {
     this.ring.setPosition(this.player.x, this.player.y + 14)
     this.partnerRing.setPosition(this.companion.x, this.companion.y + 14)
     this.player.setAlpha(this.elapsed < this.hurtUntil ? .6 : 1)
-    if (this.elapsed >= this.spawnAt && (!this.encounters || this.elapsed >= this.encounters.state.rest_until)) {
-      this.spawn(); this.spawnAt = this.elapsed + Math.max(210, 1000 - this.elapsed / 1200)
+    if (this.elapsed >= this.spawnAt && (!this.encounters || this.elapsed >= this.encounters.state.rest_until)
+      && (!this.journey || this.journey.fighting)) {
+      this.spawn(); this.spawnAt = this.elapsed + (this.journey ? this.journey.interval() : Math.max(210, 1000 - this.elapsed / 1200))
     }
     this.encounters?.spawn()
     if (!this.encounters && !this.bossSpawned && this.elapsed >= 1080000) {
@@ -396,19 +441,25 @@ class Forest extends Phaser.Scene {
     }
     for (const enemy of this.enemies.getChildren()) {
       const kind = enemy.getData("kind")
-      const speed = (kind === "wisp" ? 76 : kind === "boss" ? 44 : FOES[kind]?.speed || 33) * (1 + Math.min(.6, this.elapsed / 1500000))
+      const speed = (kind === "wisp" ? 76 : kind === "boss" ? 44 : FOES[kind]?.speed || 33)
+        * (1 + Math.min(.6, (this.journey ? this.journey.pace() : this.elapsed) / 1500000)) * (AFFIXES[enemy.getData("affix")]?.speed ?? 1)
       if (!this.encounters?.foes.has(enemy.getData("id"))) this.terrain.move(enemy, this.player, speed)
     }
     this.encounters?.update()
     if (this.outcome !== "playing" || this.paused) return
     this.combat?.update(delta)
     if (this.outcome !== "playing" || this.paused) return
+    this.journey?.update()
     this.checkLevel()
     if (this.paused || this.outcome !== "playing") return
     if (this.encounters?.openReward()) return
+    if (this.journey?.openDoors()) return
+    const area = this.terrain.geometry.area
     for (const bolt of [...this.bullets.getChildren()]) {
       bolt.setData("life", bolt.getData("life") - delta)
-      if (bolt.getData("life") <= 0 || bolt.x < 0 || bolt.x > W || bolt.y < 0 || bolt.y > H) bolt.destroy()
+      if (bolt.getData("form") === "bird") this.art.spray("fx-tongue", bolt.x, bolt.y, 1, { speed: 40, lift: -30, life: 380, tint: 0xff9a4d, from: .9, to: .1 })
+      if (bolt.getData("life") <= 0 || bolt.x < 0 || bolt.x > W || bolt.y < 0 || bolt.y > H
+        || this.journey && (bolt.x < area.left - 40 || bolt.x > area.right + 40 || bolt.y < area.top - 40 || bolt.y > area.bottom + 40)) bolt.destroy()
     }
     for (const drop of this.drops.getChildren()) {
       if (Phaser.Math.Distance.Between(this.player.x, this.player.y, drop.x, drop.y) < this.pickupRange()) {
@@ -417,6 +468,8 @@ class Forest extends Phaser.Scene {
     }
     this.updateHud()
     this.art.update()
+    this.ultimate?.paint()
+    this.fireArt.paint()
     this.terrain.updateDepth()
     if (this.elapsed >= END) this.end("timeout")
     else controller.autosave()
@@ -465,6 +518,7 @@ class Controller {
     body.append(wallet(view.economy))
     body.append(element("p", active
       ? `${view.run.character} · ${partyLabel(view.run)} · ${timeText(view.run.snapshot?.elapsed || 0)}`
+      : view.rules >= 8 ? "三片林地，九段路程。每清完一段，由你选择下一段的目标与奖励。"
       : "守住林地边境，在魔力回响中找到彼此的战斗节奏。", "lead"))
     if (active) {
       const actions = element("div", "", "actions")
@@ -595,6 +649,7 @@ class Controller {
   }
   play() {
     if (this.scene.combat?.craft?.preparation) { this.initialStudy(); return }
+    if (this.scene.journey && !this.scene.journey.fighting && this.scene.outcome === "playing") { this.doors(); return }
     if (document.hidden || !document.hasFocus()) { this.pause(true); return }
     $("screen").hidden = true; this.scene.setPaused(false)
     mountSkillHud(this.scene); $("skill-bar").hidden = !this.scene.combat
@@ -624,7 +679,8 @@ class Controller {
     if (this.scene.combat?.craft?.preparation) { this.initialStudy(); return }
     if (this.scene.choices.length) { this.upgrades(); return }
     if (this.scene.encounters?.state.pending) { this.cooperation(); return }
-    const body = this.screen("稍作休息", `${timeText(this.scene.elapsed)} / 20:00`)
+    if (this.scene.journey && !this.scene.journey.fighting) { this.doors(); return }
+    const body = this.screen("稍作休息", this.scene.journey ? `${timeText(this.scene.elapsed)} · ${this.scene.journey.stage()}` : `${timeText(this.scene.elapsed)} / 20:00`)
     const actions = element("div", "", "actions")
     actions.append(button("继续", () => this.play(), "primary"),
       button("保存并返回", () => this.action(async () => { await this.save(true); this.scene.activeRun = false; await this.refresh() })),
@@ -691,6 +747,14 @@ class Controller {
     this.scene.setPaused(true)
     const body = this.screen("并肩研习", `${timeText(this.scene.elapsed)} / 首领战后成长`)
     this.scene.encounters.render(body)
+    if (checkpoint) this.save().catch(error => this.failure(error))
+  }
+  doors(checkpoint = false) {
+    const journey = this.scene?.journey
+    if (!journey || journey.fighting || this.scene.choices.length || this.scene.encounters.state.pending) return
+    this.scene.setPaused(true)
+    const body = this.screen("选择去路", journey.title())
+    journey.render(body)
     if (checkpoint) this.save().catch(error => this.failure(error))
   }
   async save(exit = false, finish = false) {
@@ -771,7 +835,8 @@ class Controller {
     const title = { cleared: "林地的回响归于平静", defeated: "这次旅程暂告一段落", retreated: "平安归来", timeout: "留待下一次挑战" }[snapshot.outcome]
     const body = this.screen(title, `${run.character} · 与你同行`)
     const stats = element("div", "", "result-stats")
-    for (const [label, value] of [["旅途时间", timeText(snapshot.elapsed)], ["击败敌人", snapshot.kills], ["同行击败", snapshot.partner_kills]]) {
+    for (const [label, value] of [["旅途时间", timeText(snapshot.elapsed)], ["击败敌人", snapshot.kills], ["同行击败", snapshot.partner_kills],
+      ...(run.settlement?.formula === 2 ? [["走过路程", `${run.settlement.nodes} / 9 段`]] : [])]) {
       const item = element("div", label, "muted"); item.append(element("strong", String(value))); stats.append(item)
     }
     body.append(stats, settlementDetails(run.settlement), buildDetails(snapshot))
@@ -792,6 +857,7 @@ $("effects").addEventListener("click", () => {
   $("effects").setAttribute("aria-pressed", String(art.reduced))
 })
 $("pause").addEventListener("click", () => controller.pause())
+$("ultimate").addEventListener("click", () => controller.scene?.ultimate?.cast())
 document.addEventListener("visibilitychange", () => { if (document.hidden) controller.pause(true) })
 window.addEventListener("blur", () => controller.pause(true))
 const joystick = $("joystick")

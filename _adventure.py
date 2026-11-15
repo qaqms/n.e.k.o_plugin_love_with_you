@@ -12,12 +12,13 @@ import threading
 from typing import Any
 
 from . import _adventure_economy as economy
+from . import _adventure_journey as journey
 from . import _adventure_skills as skills
 from ._adventure_economy import AdventureError
 from ._storage import StateFile
 
-VERSION = 8
-RULES = 7
+VERSION = 13
+RULES = 12
 DURATION = 20 * 60 * 1000
 WORLD = (1800, 1200)
 CLASSES = ("guardian", "mage")
@@ -38,13 +39,19 @@ def _token(value: Any) -> bool:
     return isinstance(value, str) and bool(TOKEN.fullmatch(value))
 
 
-def validate_snapshot(value: Any) -> dict[str, Any]:
+def settle(snapshot: dict[str, Any]) -> dict[str, int]:
+    return journey.settlement(snapshot) if snapshot["rules"] >= 8 else economy.settlement(snapshot)
+
+
+def validate_snapshot(value: Any, *, nodes: bool = False) -> dict[str, Any]:
     """Validate the entire bounded checkpoint, including pending upgrade choices."""
-    if isinstance(value, dict) and type(value.get("rules")) is int and value["rules"] in (2, 3, 4, 5, 6, 7):
+    if isinstance(value, dict) and type(value.get("rules")) is int and value["rules"] in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
         common = skills.validate_extra(value)
-        validate_snapshot(common)
+        validate_snapshot(common, nodes=value["rules"] >= 8)
         if value["rules"] >= 4:
             skills.validate_encounters(value, value["builds"])
+        if value["rules"] >= 8:
+            journey.validate(value)
         return copy.deepcopy(value)
     if not isinstance(value, dict) or set(value) != {
         "rules", "elapsed", "rng", "player", "companion", "enemies", "bullets", "drops",
@@ -123,7 +130,8 @@ def validate_snapshot(value: Any) -> dict[str, Any]:
         raise AdventureError("adventure_invalid_snapshot")
     if value["outcome"] == "defeated" and value["player"]["hp"] != 0:
         raise AdventureError("adventure_invalid_snapshot")
-    if value["outcome"] == "cleared" and (not value["boss_spawned"] or value["elapsed"] < 18 * 60 * 1000):
+    # Rule 8 reaches the boss by clearing nodes, which its journey validator checks instead.
+    if value["outcome"] == "cleared" and (not value["boss_spawned"] or not nodes and value["elapsed"] < 18 * 60 * 1000):
         raise AdventureError("adventure_invalid_snapshot")
     if value["outcome"] == "timeout" and value["elapsed"] != DURATION:
         raise AdventureError("adventure_invalid_snapshot")
@@ -159,7 +167,7 @@ class AdventureStore:
         elif raw is not None:
             try:
                 source_version = raw.get("version") if isinstance(raw, dict) else None
-                if type(source_version) is not int or source_version not in (1, 2, 3, 4, 5, 6, 7, VERSION):
+                if type(source_version) is not int or source_version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, VERSION):
                     raise AdventureError("adventure_recovery_required")
                 self._validate_file(raw, version=source_version)
                 migrated = copy.deepcopy(raw)
@@ -213,7 +221,10 @@ class AdventureStore:
             if version >= 3 and (type(run["rules"]) is not int or run["rules"] not in (
                 (1, 2) if version == 3 else (1, 2, 3) if version == 4 else (1, 2, 3, 4) if version == 5
                 else (1, 2, 3, 4, 5) if version == 6 else (1, 2, 3, 4, 5, 6) if version == 7
-                else (1, 2, 3, 4, 5, 6, 7)
+                else (1, 2, 3, 4, 5, 6, 7) if version == 8 else (1, 2, 3, 4, 5, 6, 7, 8) if version == 9
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9) if version == 10 else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) if version == 11
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11) if version == 12
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
             )):
                 raise AdventureError("adventure_recovery_required")
             if run.get("rules") == 6 and any(
@@ -236,7 +247,7 @@ class AdventureStore:
                 economy.validate_loadout(run["loadout"])
                 if run["settlement"] is not None:
                     economy.validate_settlement(run["settlement"])
-                    if run["status"] != "ended" or run["settlement"] != economy.settlement(run["snapshot"]):
+                    if run["status"] != "ended" or run["settlement"] != settle(run["snapshot"]):
                         raise AdventureError("adventure_recovery_required")
                     if raw["economy"]["earned"] < run["settlement"]["total"]:
                         raise AdventureError("adventure_recovery_required")
@@ -345,7 +356,7 @@ class AdventureStore:
                 if not base_fields <= set(values) <= allowed_fields or (
                     values["player_class"] not in CLASSES or values["companion_class"] not in CLASSES
                     or values["character"] != character or not 1 <= len(character) <= 100
-                    or type(values.get("rules", 1)) is not int or values.get("rules", 1) not in (1, 2, 3, 4, 5, 6, 7)
+                    or type(values.get("rules", 1)) is not int or values.get("rules", 1) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
                 ):
                     raise AdventureError("adventure_invalid_request")
                 updated["sequence"] += 1
@@ -391,7 +402,7 @@ class AdventureStore:
                     run["snapshot"] = snapshot
                     if operation == "finish":
                         run["status"] = "ended"
-                        run["settlement"] = economy.settlement(snapshot)
+                        run["settlement"] = settle(snapshot)
                         economy.award(updated["economy"], run["settlement"])
             updated["revision"] += 1
             result = {

@@ -596,7 +596,7 @@ def test_frost_checkpoint_restores_marks_zones_forms_and_counters_exactly(store,
     value = frost_snapshot(module)
     call(store, "release", "release_frost_save", snapshot=value)
     restored = module.AdventureStore(store.file)
-    assert restored.view()["rules"] == 7
+    assert restored.view()["rules"] == module.RULES
     assert restored.view()["run"]["snapshot"] == value
     assert not restored.view("client_00000001")["owns_control"]
 
@@ -741,7 +741,7 @@ def test_rule4_encounter_snapshot_preserves_ai_warning_and_pending_reward(store,
     loaded = module.AdventureStore(store.file)
     assert loaded.view()["run"]["rules"] == 4
     assert loaded.view()["run"]["snapshot"] == value
-    assert loaded.view()["rules"] == 7
+    assert loaded.view()["rules"] == module.RULES
 
 
 @pytest.mark.parametrize("corruption", [
@@ -830,7 +830,7 @@ def test_v4_rule3_run_and_wallet_migrate_to_v5_without_enabling_encounters(store
     call(migrated, "claim", "claim_rule4_migration", takeover=False)
     backups = list(store.file.path.parent.glob("adventure.v4-*.backup.json"))
     assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
-    assert store.file.load()[0]["version"] == 8
+    assert store.file.load()[0]["version"] == module.VERSION
 
 
 def test_rule3_file_cannot_claim_rule4_and_rules_remain_fixed(store, module):
@@ -848,7 +848,7 @@ def test_rule3_file_cannot_claim_rule4_and_rules_remain_fixed(store, module):
 
 
 def test_rule5_map_journey_keeps_rule_identity_and_full_snapshot_on_resume(store, module):
-    assert store.view()["rules"] == 7
+    assert store.view()["rules"] == module.RULES
     call(store, rules=5)
     value = frost_snapshot(module, rules=5)
     call(store, "release", "release_rule5_map", snapshot=value)
@@ -869,7 +869,7 @@ def test_v5_migration_keeps_existing_unobstructed_journey_and_backs_up_before_wr
     store.file.save(raw)
     original = store.file.path.read_bytes()
     migrated = module.AdventureStore(store.file)
-    assert migrated.view()["rules"] == 7
+    assert migrated.view()["rules"] == module.RULES
     assert migrated.view()["run"]["rules"] == 4
     assert migrated.view()["run"]["snapshot"] == value
     assert migrated.view()["economy"] == raw["economy"]
@@ -877,7 +877,7 @@ def test_v5_migration_keeps_existing_unobstructed_journey_and_backs_up_before_wr
     call(migrated, "claim", "claim_map5_migration", takeover=False)
     backups = list(store.file.path.parent.glob("adventure.v5-*.backup.json"))
     assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
-    assert store.file.load()[0]["version"] == 8
+    assert store.file.load()[0]["version"] == module.VERSION
 
 
 def test_v5_file_cannot_claim_future_solid_map_rules(store, module):
@@ -1019,7 +1019,7 @@ def test_v6_migration_keeps_old_skill_pool_candidates_wallet_and_map_then_backs_
     original = store.file.path.read_bytes()
     migrated = module.AdventureStore(store.file)
     view = migrated.view()
-    assert view["rules"] == 7
+    assert view["rules"] == module.RULES
     assert view["run"]["rules"] == 5
     assert "player_route" not in view["run"]
     assert view["run"]["snapshot"] == value
@@ -1028,7 +1028,7 @@ def test_v6_migration_keeps_old_skill_pool_candidates_wallet_and_map_then_backs_
     call(migrated, "claim", "claim_expansion_migration", takeover=False)
     backups = list(store.file.path.parent.glob("adventure.v6-*.backup.json"))
     assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
-    assert store.file.load()[0]["version"] == 8
+    assert store.file.load()[0]["version"] == module.VERSION
 
 
 def test_old_file_cannot_claim_expanded_routes_and_current_run_cannot_switch_rules(store, module):
@@ -1155,14 +1155,14 @@ def test_v7_migration_preserves_rule6_routes_choices_wallet_and_backup(store, mo
     store.file.save(raw)
     original = store.file.path.read_bytes()
     loaded = module.AdventureStore(store.file)
-    assert loaded.view()["rules"] == 7
+    assert loaded.view()["rules"] == module.RULES
     assert loaded.view()["run"] == raw["run"]
     assert loaded.view()["economy"] == raw["economy"]
     assert store.file.path.read_bytes() == original
     call(loaded, "claim", "claim_free_build_upgrade", takeover=False)
     backups = list(store.file.path.parent.glob("adventure.v7-*.backup.json"))
     assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
-    assert store.file.load()[0]["version"] == 8
+    assert store.file.load()[0]["version"] == module.VERSION
 
 
 def test_rule7_rejects_route_metadata_and_v7_cannot_claim_free_rules(store, module):
@@ -1176,3 +1176,468 @@ def test_rule7_rejects_route_metadata_and_v7_cannot_claim_free_rules(store, modu
     with pytest.raises(module.AdventureError, match="recovery_required"):
         module.AdventureStore(store.file).view()
     assert store.file.path.read_bytes() == original
+
+
+def journey_snapshot(module, **journey):
+    """A rule 8 checkpoint in the first node, built on the rule 7 free-build snapshot."""
+    value = free_snapshot(module)
+    value.update(rules=8, enemies=[], foes=[], threats=[], frosts=[], boss_spawned=False)
+    value["encounters"]["milestones"] = {
+        key: {"spawned": False, "defeated": False, "enemy": 0} for key in ("sentinel", "oracle")
+    }
+    value["encounters"].update(selected=[], resolved=[], pending="", choices=[])
+    value["journey"] = {"node": 0, "phase": "fight", "goal": "hold", "reward": "study", "hard": False,
+                        "need": 90000, "started_at": 0, "kills_at": 0, "doors": [], "hard_cleared": 0, **journey}
+    return value
+
+
+def doors_snapshot(module, node=0, doors=None, **journey):
+    value = journey_snapshot(module, node=node, phase="doors", doors=doors if doors is not None else [
+        {"goal": "hold", "reward": "mend", "hard": False, "need": 90000},
+        {"goal": "clear", "reward": "study", "hard": False, "need": 60},
+    ], **journey)
+    return value
+
+
+def test_rule8_journey_checkpoints_doors_and_reloads(store, module):
+    assert (module.VERSION, module.RULES) == (13, 12)
+    call(store, rules=8)
+    value = journey_snapshot(module)
+    call(store, "checkpoint", "journey_first_node", snapshot=value)
+    value = doors_snapshot(module)
+    value["elapsed"] = max(value["elapsed"], 90000)
+    for key in ("spawn_at", "attack_at", "support_at"):
+        value[key] = max(value[key], value["elapsed"])
+    call(store, "release", "journey_doors_save", snapshot=value)
+    loaded = module.AdventureStore(store.file)
+    assert loaded.view()["run"]["rules"] == 8
+    assert loaded.view()["run"]["snapshot"]["journey"] == value["journey"]
+
+
+@pytest.mark.parametrize("change", [
+    {"node": 9}, {"node": -1}, {"phase": "shop"}, {"goal": "clear"}, {"reward": "mend"}, {"hard": True},
+    {"need": 1}, {"started_at": 10**9}, {"kills_at": 10**9}, {"hard_cleared": 1}, {"doors": [{}]},
+    {"node": 1, "goal": "clear", "need": 61}, {"node": 1, "hard": True}, {"node": 1, "reward": "coins"},
+    {"node": 2, "goal": "hold"}, {"node": 2, "goal": "elite", "reward": "", "need": 0},
+    {"node": 8, "goal": "boss", "reward": "", "need": 0}, {"extra": 1},
+])
+def test_rule8_rejects_impossible_journey_states(store, module, change):
+    call(store, rules=8)
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "journey_bad_state", snapshot=journey_snapshot(module, **change))
+
+
+@pytest.mark.parametrize("doors", [
+    [], [{"goal": "hold", "reward": "mend", "hard": False, "need": 90000}],
+    [{"goal": "hold", "reward": "mend", "hard": False, "need": 90000},
+     {"goal": "clear", "reward": "study", "hard": True, "need": 60}],
+    [{"goal": "hold", "reward": "mend", "hard": False, "need": 90000},
+     {"goal": "clear", "reward": "study", "hard": False, "need": 100}],
+    [{"goal": "elite", "reward": "", "hard": False, "need": 0}],
+    [{"goal": "hold", "reward": "mend", "hard": False, "need": 90000},
+     {"goal": "clear", "reward": "study", "hard": False, "need": 60, "extra": 1}],
+])
+def test_rule8_rejects_doors_the_next_node_cannot_offer(store, module, doors):
+    call(store, rules=8)
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "journey_bad_doors", snapshot=doors_snapshot(module, doors=doors))
+
+
+def test_rule8_cleared_fields_are_empty_and_gatekeepers_follow_the_node(store, module):
+    call(store, rules=8)
+    value = doors_snapshot(module)
+    value["enemies"] = [{"id": 1, "kind": "slime", "x": 700, "y": 500, "hp": 24}]
+    value["next_id"] = 2
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "journey_doors_with_enemy", snapshot=value)
+    value = journey_snapshot(module)
+    value["encounters"]["milestones"]["sentinel"] = {"spawned": True, "defeated": True, "enemy": 0}
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "journey_early_sentinel", snapshot=value)
+    value = journey_snapshot(module, node=3, need=90000)
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "journey_skipped_sentinel", snapshot=value)
+    value = journey_snapshot(module)
+    value["boss_spawned"] = True
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "journey_early_boss", snapshot=value)
+
+
+def test_rule8_settlement_pays_cleared_nodes_and_never_a_time_bonus(store, module):
+    call(store, rules=8)
+    value = doors_snapshot(module, node=2, goal="elite", reward="", need=0, doors=[
+        {"goal": "hold", "reward": "mend", "hard": False, "need": 90000},
+        {"goal": "clear", "reward": "study", "hard": False, "need": 100},
+        {"goal": "clear", "reward": "insight", "hard": True, "need": 100},
+    ])
+    value["encounters"]["milestones"]["sentinel"] = {"spawned": True, "defeated": True, "enemy": 0}
+    value.update(elapsed=19 * 60000, outcome="retreated")
+    for key in ("spawn_at", "attack_at", "support_at"):
+        value[key] = value["elapsed"]
+    result = call(store, "finish", "journey_finish_early", snapshot=value)
+    assert result["settlement"] == {"formula": 2, "nodes": 3, "hard": 0, "journey": 50, "clear": 0, "total": 50}
+    assert store.view()["economy"]["balance"] == 50
+    assert module.AdventureStore(store.file).view()["run"]["settlement"]["total"] == 50
+
+
+def test_rule8_clear_needs_the_boss_node_not_eighteen_minutes(store, module):
+    call(store, rules=8)
+    value = journey_snapshot(module, node=8, goal="boss", reward="", need=0, hard_cleared=2,
+                             started_at=600000, kills_at=0)
+    value["encounters"]["milestones"] = {
+        key: {"spawned": True, "defeated": True, "enemy": 0} for key in ("sentinel", "oracle")
+    }
+    value.update(elapsed=13 * 60000, outcome="cleared", boss_spawned=True)
+    for key in ("spawn_at", "attack_at", "support_at"):
+        value[key] = value["elapsed"]
+    result = call(store, "finish", "journey_finish_clear", snapshot=value)
+    assert result["settlement"] == {"formula": 2, "nodes": 9, "hard": 2, "journey": 142, "clear": 80, "total": 222}
+    early = journey_snapshot(module, node=7, need=90000)
+    early["encounters"]["milestones"] = value["encounters"]["milestones"]
+    early.update(outcome="cleared", boss_spawned=True)
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(early)
+
+
+def test_v8_file_with_a_rule7_journey_migrates_to_v9_and_backs_up_before_writing(store, module):
+    call(store, rules=7)
+    call(store, "checkpoint", "save_rule7_before_v9", snapshot=free_snapshot(module))
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 8
+    store.file.save(raw)
+    original = store.file.path.read_bytes()
+    loaded = module.AdventureStore(store.file)
+    assert loaded.view()["rules"] == module.RULES and loaded.view()["run"] == raw["run"]
+    assert store.file.path.read_bytes() == original
+    call(loaded, "claim", "claim_after_v9", takeover=False)
+    backups = list(store.file.path.parent.glob("adventure.v8-*.backup.json"))
+    assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
+    assert store.file.load()[0]["version"] == module.VERSION
+    raw["run"]["rules"] = 8
+    store.file.save(raw)
+    with pytest.raises(module.AdventureError, match="recovery_required"):
+        module.AdventureStore(store.file).view()
+
+
+def ultimate_snapshot(module, energy=0, **journey):
+    value = journey_snapshot(module, **journey)
+    value.update(rules=9, ultimate={"energy": energy})
+    return value
+
+
+def test_rule9_saves_ultimate_energy_and_keeps_rule8_journeys_without_it(store, module):
+    call(store, rules=9)
+    call(store, "release", "ultimate_save", snapshot=ultimate_snapshot(module, 73))
+    loaded = module.AdventureStore(store.file)
+    assert loaded.view()["run"]["snapshot"]["ultimate"] == {"energy": 73}
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot({**journey_snapshot(module), "ultimate": {"energy": 1}})
+    module.validate_snapshot(journey_snapshot(module))
+
+
+@pytest.mark.parametrize("ultimate", [None, {}, {"energy": -1}, {"energy": 101}, {"energy": 1.5}, {"energy": True},
+                                      {"energy": 5, "ready": True}])
+def test_rule9_rejects_impossible_ultimate_state(store, module, ultimate):
+    call(store, rules=9)
+    value = ultimate_snapshot(module)
+    value["ultimate"] = ultimate
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "ultimate_bad", snapshot=value)
+    missing = ultimate_snapshot(module)
+    del missing["ultimate"]
+    with pytest.raises(module.AdventureError, match="invalid_snapshot"):
+        call(store, "checkpoint", "ultimate_missing", snapshot=missing)
+
+
+def test_v9_file_with_a_rule8_journey_migrates_to_v10_and_backs_up(store, module):
+    call(store, rules=8)
+    call(store, "checkpoint", "save_rule8_before_v10", snapshot=journey_snapshot(module))
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 9
+    store.file.save(raw)
+    loaded = module.AdventureStore(store.file)
+    assert loaded.view()["rules"] == module.RULES and loaded.view()["run"] == raw["run"]
+    call(loaded, "claim", "claim_after_v10", takeover=False)
+    backups = list(store.file.path.parent.glob("adventure.v9-*.backup.json"))
+    assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
+    raw["run"]["rules"] = 9
+    store.file.save(raw)
+    with pytest.raises(module.AdventureError, match="recovery_required"):
+        module.AdventureStore(store.file).view()
+
+
+def mastery_snapshot(module, fire=0, level=5, **journey):
+    """A rule 10 checkpoint whose player holds an awakened fire bolt."""
+    value = ultimate_snapshot(module, **journey)
+    value["rules"] = 10
+    for build in value["builds"].values():
+        build["mastery"] = dict.fromkeys(module.skills.MASTERY["skills"], 0)
+    build = value["builds"]["player"]
+    build["skills"] = [{"id": "fire", "level": level, "focus": "power" if level > 1 else "",
+                        "branch": "volley" if level > 2 else "", "evolution": "pure" if level == 5 else "",
+                        "ready_at": 0, "react_at": 0}]
+    build["mastery"]["fire"] = fire
+    value["zones"] = []
+    value["bullets"] = []
+    return value
+
+
+def test_rule10_mastery_grows_past_level_five_and_offers_master_choices(store, module):
+    assert set(module.skills.MASTERY["skills"]) == {"fire", "flame", "meteor"}
+    call(store, rules=10)
+    value = mastery_snapshot(module, fire=2)
+    value.update(choices=["fire:master", "talent:power"], study_owner="player", level=3)
+    call(store, "release", "mastery_save", snapshot=value)
+    assert module.AdventureStore(store.file).view()["run"]["snapshot"]["builds"]["player"]["mastery"]["fire"] == 2
+    build = value["builds"]["player"]
+    assert "fire:master" in module.skills.legal_choices(build, "player", 10)
+    assert "fire:master" not in module.skills.legal_choices(build, "player", 9)
+    build["mastery"]["fire"] = 3
+    assert "fire:master" not in module.skills.legal_choices(build, "player", 10)
+
+
+@pytest.mark.parametrize("change", ["missing", "extra_key", "over_cap", "boolean", "unowned", "unfinished", "rule9_field", "stale_choice"])
+def test_rule10_rejects_impossible_mastery(store, module, change):
+    value = mastery_snapshot(module, fire=1)
+    mastery = value["builds"]["player"]["mastery"]
+    if change == "missing":
+        del value["builds"]["companion"]["mastery"]
+    elif change == "extra_key":
+        mastery["slash"] = 0
+    elif change == "over_cap":
+        mastery["fire"] = 4
+    elif change == "boolean":
+        mastery["fire"] = True
+    elif change == "unowned":
+        mastery["meteor"] = 1
+    elif change == "unfinished":
+        value = mastery_snapshot(module, fire=1, level=4)
+    elif change == "rule9_field":
+        value["rules"] = 9
+    else:
+        mastery["fire"] = 3
+        value.update(choices=["fire:master"], study_owner="player", level=3)
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(value)
+
+
+def test_rule10_flame_bird_bullets_need_full_fire_mastery(store, module):
+    bird = {"id": 1, "x": 900, "y": 600, "vx": 360, "vy": 0, "life": 900, "damage": 300, "owner": "player",
+            "skill": "fire", "pierce": 5, "hit_ids": [], "form": "bird"}
+    value = mastery_snapshot(module, fire=3)
+    value.update(bullets=[bird], next_id=max(value["next_id"], 2))
+    module.validate_snapshot(value)
+    value["builds"]["player"]["mastery"]["fire"] = 2
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(value)
+    old = ultimate_snapshot(module)
+    old["builds"]["player"]["skills"] = mastery_snapshot(module)["builds"]["player"]["skills"]
+    old.update(bullets=[bird], zones=[], next_id=max(old["next_id"], 2))
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(old)
+
+
+def test_v10_file_with_a_rule9_journey_migrates_to_v11_and_backs_up(store, module):
+    call(store, rules=9)
+    call(store, "checkpoint", "save_rule9_before_v11", snapshot=ultimate_snapshot(module, 40))
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 10
+    store.file.save(raw)
+    loaded = module.AdventureStore(store.file)
+    assert loaded.view()["rules"] == module.RULES and loaded.view()["run"] == raw["run"]
+    call(loaded, "claim", "claim_after_v11", takeover=False)
+    backups = list(store.file.path.parent.glob("adventure.v10-*.backup.json"))
+    assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
+    raw["run"]["rules"] = 10
+    store.file.save(raw)
+    with pytest.raises(module.AdventureError, match="recovery_required"):
+        module.AdventureStore(store.file).view()
+
+
+def line_snapshot(module, arts=(), level=5, **journey):
+    """A rule 11 checkpoint: an awakened fire bolt and the forms it has advanced into."""
+    value = mastery_snapshot(module, level=level, **journey)
+    value["rules"] = 11
+    for build in value["builds"].values():
+        build["arts"] = []
+    value["builds"]["player"]["arts"] = [{"id": key, "level": rank} for key, rank in arts]
+    return value
+
+
+def test_rule11_fire_line_advances_rank_by_rank_and_raises_the_level_cap(store, module):
+    legal = module.skills.legal_choices
+    build = line_snapshot(module)["builds"]["player"]
+    assert {"art:blade", "art:spray", "art:burst"} <= legal(build, "player", 11)
+    assert "fire:master" not in legal(build, "player", 11), "the line replaces fire mastery"
+    assert not any(key.startswith("art:") for key in legal(line_snapshot(module, level=4)["builds"]["player"], "player", 11))
+    build["arts"] = [{"id": "spray", "level": 3}]
+    assert {key for key in legal(build, "player", 11) if key.startswith("art:")} == {"art:spray"}
+    build["arts"] = [{"id": "spray", "level": 5}]
+    assert {key for key in legal(build, "player", 11) if key.startswith("art:")} == {"art:magma", "art:hellfire"}
+    build["arts"] = [{"id": "spray", "level": 5}, {"id": "hellfire", "level": 5}]
+    assert {key for key in legal(build, "player", 11) if key.startswith("art:")} == {"art:flash"}
+    build["arts"].append({"id": "flash", "level": 5})
+    assert not any(key.startswith("art:") for key in legal(build, "player", 11))
+    module.validate_snapshot(line_snapshot(module, arts=(("blade", 5), ("hellfire", 5), ("flash", 3))))
+    call(store, rules=11)
+    value = line_snapshot(module, arts=(("burst", 5), ("magma", 2)))
+    value.update(level=44, choices=["art:magma", "talent:power"], study_owner="player")
+    call(store, "release", "fire_line_save", snapshot=value)
+    saved = module.AdventureStore(store.file).view()["run"]["snapshot"]
+    assert saved["builds"]["player"]["arts"] == [{"id": "burst", "level": 5}, {"id": "magma", "level": 2}] and saved["level"] == 44
+    old = mastery_snapshot(module)
+    old["level"] = 44
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(old)
+
+
+@pytest.mark.parametrize("arts", [
+    (("magma", 1),), (("blade", 2), ("magma", 1)), (("blade", 5), ("spray", 1)), (("blade", 6),), (("blade", 0),),
+    (("blade", 5), ("magma", 5), ("magma", 1)), (("ember", 1),), (("flash", 1),), (("blade", 5), ("flash", 1)),
+    (("blade", 5), ("magma", 4), ("flash", 1)), (("blade", 5), ("magma", 5), ("flash", 5), ("flash", 1)),
+])
+def test_rule11_rejects_fire_forms_out_of_order(store, module, arts):
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(line_snapshot(module, arts=arts))
+
+
+@pytest.mark.parametrize("change", ["missing", "unfinished_root", "mastery", "level_cap", "stale_choice"])
+def test_rule11_rejects_impossible_fire_line_states(store, module, change):
+    value = line_snapshot(module, arts=(("blade", 1),))
+    if change == "missing":
+        del value["builds"]["companion"]["arts"]
+    elif change == "unfinished_root":
+        value = line_snapshot(module, arts=(("blade", 1),), level=4)
+    elif change == "mastery":
+        value["builds"]["player"]["mastery"]["fire"] = 1
+    elif change == "level_cap":
+        value["level"] = 51
+    else:
+        value.update(choices=["art:spray"], study_owner="player", level=3)
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(value)
+
+
+def test_v11_file_with_a_rule10_journey_migrates_to_v12_and_backs_up(store, module):
+    call(store, rules=10)
+    call(store, "checkpoint", "save_rule10_before_v12", snapshot=mastery_snapshot(module, fire=2))
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 11
+    store.file.save(raw)
+    loaded = module.AdventureStore(store.file)
+    assert loaded.view()["rules"] == module.RULES and loaded.view()["run"] == raw["run"]
+    call(loaded, "claim", "claim_after_v12", takeover=False)
+    backups = list(store.file.path.parent.glob("adventure.v11-*.backup.json"))
+    assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
+    raw["run"]["rules"] = 11
+    store.file.save(raw)
+    with pytest.raises(module.AdventureError, match="recovery_required"):
+        module.AdventureStore(store.file).view()
+
+
+def tough_snapshot(module, enemies=(), **journey):
+    """A rule 12 checkpoint; every enemy states its affix."""
+    value = line_snapshot(module, **journey)
+    value["rules"] = 12
+    first = value["next_id"]
+    value["enemies"] = [{"id": first + index, "kind": kind, "x": 700 + index * 40, "y": 500, "hp": 50, "affix": affix}
+                        for index, (kind, affix) in enumerate(enemies)]
+    value["next_id"] = first + len(enemies)
+    return value
+
+
+def test_rule12_elites_carry_one_affix_and_only_ordinary_enemies_may(store, module):
+    call(store, rules=12)
+    value = tough_snapshot(module, enemies=(("slime", "swift"), ("brute", "armored"), ("wisp", "split"), ("slime", "")))
+    call(store, "release", "elite_affix_save", snapshot=value)
+    saved = module.AdventureStore(store.file).view()["run"]["snapshot"]["enemies"]
+    assert [enemy["affix"] for enemy in saved] == ["swift", "armored", "split", ""]
+    for bad in ((("slime", "giant"),), (("slime", None),), (("slime", 1),)):
+        with pytest.raises(module.AdventureError):
+            module.validate_snapshot(tough_snapshot(module, enemies=bad))
+    missing = tough_snapshot(module, enemies=(("slime", ""),))
+    del missing["enemies"][0]["affix"]
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(missing)
+    old = line_snapshot(module)
+    old["enemies"] = [{"id": old["next_id"], "kind": "slime", "x": 700, "y": 500, "hp": 50, "affix": "swift"}]
+    old["next_id"] += 1
+    plain = copy.deepcopy(old)
+    del plain["enemies"][0]["affix"]
+    module.validate_snapshot(plain)
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(old)
+
+
+def _gatekeeper(module, rules, kind, phase, node):
+    value = tough_snapshot(module) if rules >= 12 else line_snapshot(module)
+    affix = {"affix": ""} if rules >= 12 else {}
+    one = value["next_id"]
+    value["enemies"] = [{"id": one, "kind": kind, "x": 700, "y": 500, "hp": 300, **affix}]
+    value["next_id"] = one + 1
+    value["foes"] = [{"target": one, "state": "move", "ready_at": value["elapsed"], "step": 0, "phase": phase}]
+    marks = value["encounters"]["milestones"]
+    if kind == "boss":
+        for mark in marks.values():
+            mark.update(spawned=True, defeated=True, enemy=0)
+        value["boss_spawned"] = True
+    else:
+        marks["sentinel"].update(spawned=True, defeated=kind == "oracle", enemy=one if kind == "sentinel" else 0)
+        if kind == "oracle":
+            marks["oracle"].update(spawned=True, defeated=False, enemy=one)
+    value["journey"].update(node=node, goal="boss" if kind == "boss" else "elite", reward="", need=0)
+    return value
+
+
+@pytest.mark.parametrize("rules,kind,phase,node,valid", [
+    (12, "boss", 3, 8, True), (12, "boss", 2, 8, True), (12, "sentinel", 2, 2, True), (12, "oracle", 2, 5, True),
+    (12, "sentinel", 3, 2, False), (12, "boss", 4, 8, False),
+    (11, "boss", 2, 8, True), (11, "boss", 3, 8, False), (11, "sentinel", 2, 2, False),
+])
+def test_rule12_gatekeeper_phases(store, module, rules, kind, phase, node, valid):
+    value = _gatekeeper(module, rules, kind, phase, node)
+    if valid:
+        module.validate_snapshot(value)
+    else:
+        with pytest.raises(module.AdventureError):
+            module.validate_snapshot(value)
+
+
+def test_rule12_hard_doors_open_from_the_second_node_and_pay_for_five(store, module):
+    early = [{"goal": "hold", "reward": "mend", "hard": False, "need": 90000},
+             {"goal": "clear", "reward": "study", "hard": False, "need": 60},
+             {"goal": "clear", "reward": "insight", "hard": True, "need": 60}]
+    value = tough_snapshot(module, phase="doors", doors=early)
+    module.validate_snapshot(value)
+    value["journey"]["doors"] = early[:2]
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(value)
+    old = line_snapshot(module, phase="doors", doors=early)
+    with pytest.raises(module.AdventureError):
+        module.validate_snapshot(old)
+    module.validate_snapshot(tough_snapshot(module, node=1, goal="clear", need=60, hard=True, reward="mend"))
+    call(store, rules=12)
+    done = _gatekeeper(module, 12, "boss", 3, 8)
+    done["journey"]["hard_cleared"] = 5
+    done.update(outcome="cleared", elapsed=15 * 60000)
+    for key in ("spawn_at", "attack_at", "support_at"):
+        done[key] = done["elapsed"]
+    result = call(store, "finish", "tough_finish_clear", snapshot=done)
+    assert result["settlement"] == {"formula": 2, "nodes": 9, "hard": 5, "journey": 163, "clear": 80, "total": 243}
+
+
+def test_v12_file_with_a_rule11_journey_migrates_to_v13_and_backs_up(store, module):
+    call(store, rules=11)
+    call(store, "checkpoint", "save_rule11_before_v13", snapshot=line_snapshot(module, arts=(("blade", 3),)))
+    raw = copy.deepcopy(store.state)
+    raw["version"] = 12
+    store.file.save(raw)
+    loaded = module.AdventureStore(store.file)
+    assert loaded.view()["rules"] == 12 and loaded.view()["run"] == raw["run"]
+    call(loaded, "claim", "claim_after_v13", takeover=False)
+    backups = list(store.file.path.parent.glob("adventure.v12-*.backup.json"))
+    assert len(backups) == 1 and module.StateFile(backups[0]).load()[0] == raw
+    raw["run"]["rules"] = 12
+    store.file.save(raw)
+    with pytest.raises(module.AdventureError, match="recovery_required"):
+        module.AdventureStore(store.file).view()

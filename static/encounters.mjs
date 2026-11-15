@@ -1,4 +1,4 @@
-import { FOES, COOPERATIONS, MILESTONES, drawCooperations, segmentDistance, spawnPoint, isBoss } from "./encounter-rules.mjs"
+import { FOES, COOPERATIONS, MILESTONES, AFFIXES, AFFIX_IDS, eliteChance, circlePattern, drawCooperations, segmentDistance, spawnPoint, isBoss } from "./encounter-rules.mjs"
 import { button, element } from "./camp.mjs"
 import { icon } from "./icons.mjs"
 import { DEPTH } from "./terrain-rules.mjs"
@@ -30,31 +30,69 @@ export class Encounters {
     if (!FOES[kind]) return
     this.foes.set(target, { target, state: "move", ready_at: this.s.elapsed + 1200, step: 0, phase: 1 })
   }
+  // Rule 9 gives the boss more health: the node journey reaches it with a stronger build.
+  // Rule 11 toughens every gatekeeper again after play-testing found the journey too easy.
+  maxHp(kind) {
+    const rules = this.s.meta.rules
+    return FOES[kind].hp * (rules >= 11 ? kind === "boss" ? 2.6 : 1.8 : kind === "boss" && rules >= 9 ? 1.6 : 1)
+  }
+  summon(id) {
+    const s = this.s
+    const enemy = s.makeEnemy({ id: s.next(), kind: id, hp: this.maxHp(id), ...spawnPoint(s.player, s.rng, s.terrain?.geometry?.area) })
+    if (id === "boss") s.bossSpawned = true
+    else Object.assign(this.state.milestones[id], { spawned: true, enemy: enemy.getData("id") })
+    return enemy
+  }
   spawn() {
     const s = this.s
+    if (s.journey) return // Rule 8 summons gatekeepers when their node begins.
     for (const id of MILESTONES) {
       const mark = this.state.milestones[id], spec = FOES[id]
       if (mark.spawned || s.elapsed < spec.at) continue
-      const enemy = s.makeEnemy({ id: s.next(), kind: id, hp: spec.hp, ...spawnPoint(s.player, s.rng) })
-      mark.spawned = true; mark.enemy = enemy.getData("id")
+      this.summon(id)
       this.controller.notice(`${spec.name}现身了。`)
     }
     if (!s.bossSpawned && s.elapsed >= FOES.boss.at) {
-      s.bossSpawned = true
-      s.makeEnemy({ id: s.next(), kind: "boss", hp: FOES.boss.hp, ...spawnPoint(s.player, s.rng) })
+      this.summon("boss")
       this.controller.notice("林地守望者已经苏醒。")
     }
   }
   spawnRegular() {
     const s = this.s
     if (s.enemies.countActive() >= 145) return
-    const roll = s.rng.frac()
-    let kind = s.elapsed >= 480000 && roll < .13 ? "caster"
-      : s.elapsed >= 180000 && roll < .28 ? "charger" : roll < .47 ? "brute" : roll < .65 ? "wisp" : "slime"
-    if (s.elapsed < 180000) kind = roll < .2 ? "wisp" : "slime"
+    const roll = s.rng.frac(), time = s.journey ? s.journey.pace() : s.elapsed
+    let kind = time >= 480000 && roll < .13 ? "caster"
+      : time >= 180000 && roll < .28 ? "charger" : roll < .47 ? "brute" : roll < .65 ? "wisp" : "slime"
+    if (time < 180000) kind = roll < .2 ? "wisp" : "slime"
     if (this.foes.size >= 24 && FOES[kind]) kind = "brute"
     const hp = FOES[kind]?.hp || (kind === "brute" ? 65 : kind === "wisp" ? 13 : 24)
-    s.makeEnemy({ id: s.next(), kind, hp: hp * (1 + s.elapsed / 300000), ...spawnPoint(s.player, s.rng) })
+    // Rule 12: now and then an ordinary enemy arrives as an elite. The extra draws happen only under rule 12.
+    let affix = ""
+    if (this.tough && !FOES[kind] && s.rng.frac() < eliteChance(s.journey.state.node, s.journey.state.hard)) affix = AFFIX_IDS[s.rng.between(0, AFFIX_IDS.length - 1)]
+    s.makeEnemy({ id: s.next(), kind, hp: hp * (1 + time / 300000) * (s.journey?.hpScale() ?? 1) * (affix ? AFFIXES[affix].hp : 1),
+      ...(this.tough ? { affix } : {}), ...spawnPoint(s.player, s.rng, s.terrain?.geometry?.area) })
+  }
+  get tough() { return this.s.meta.rules >= 12 && Boolean(this.s.journey) }
+  // A split elite breaks into three small slimes where it fell.
+  onDeath(kind, affix, x, y) {
+    const s = this.s
+    if (affix !== "split" || s.outcome !== "playing") return
+    const time = s.journey.pace()
+    for (let i = 0; i < 3 && s.enemies.countActive() < 150; i++) {
+      const angle = i / 3 * Math.PI * 2 + .5
+      s.makeEnemy({ id: s.next(), kind: "slime", affix: "", hp: 24 * (1 + time / 300000) * s.journey.hpScale(),
+        ...s.terrain.safePoint({ x: x + Math.cos(angle) * 26, y: y + Math.sin(angle) * 26 }) })
+    }
+  }
+  // Gatekeepers call for help when they change phase.
+  reinforce(enemy, kinds) {
+    const s = this.s, time = s.journey.pace()
+    kinds.forEach((kind, i) => {
+      if (s.enemies.countActive() >= 150) return
+      const angle = i / kinds.length * Math.PI * 2, hp = FOES[kind]?.hp || (kind === "brute" ? 65 : 13)
+      s.makeEnemy({ id: s.next(), kind, affix: "", hp: hp * (1 + time / 300000) * s.journey.hpScale(),
+        ...s.terrain.safePoint({ x: enemy.x + Math.cos(angle) * 70, y: enemy.y + Math.sin(angle) * 70 }) })
+    })
   }
   onKill(id, kind) {
     const warnings = this.threats.length
@@ -117,14 +155,18 @@ export class Encounters {
   }
   prepare(enemy, ai) {
     const s = this.s, kind = enemy.getData("kind"), spec = FOES[kind], phase = ai.phase
+    const tough = this.tough
+    // Rule 12: the sentinel answers every third charge by cracking the ground around the player.
     const circle = kind === "caster" || kind === "oracle" || isBoss(enemy) && ai.step % 2 === 1
-    const count = kind === "oracle" || kind === "boss" && phase === 2 && circle ? 3 : 1
+      || tough && kind === "sentinel" && ai.step % 3 === 2
+    const pattern = tough && circle ? circlePattern(kind, phase, ai.step) : null
+    const count = pattern ? pattern.at.length : kind === "oracle" || kind === "boss" && phase === 2 && circle ? 3 : 1
     if (this.threats.length + count > 32) return
-    const delay = spec.windup - (phase === 2 ? 150 : 0)
+    const delay = spec.windup - (phase === 2 ? 150 : phase === 3 ? 250 : 0)
     for (let i = 0; i < count; i++) {
-      const offset = (i - (count - 1) / 2) * 105
+      const offset = pattern ? pattern.at[i][0] : (i - (count - 1) / 2) * 105
       let x = circle ? clamp(s.player.x + offset, 1800) : enemy.x
-      let y = circle ? clamp(s.player.y, 1200) : enemy.y
+      let y = circle ? clamp(s.player.y + (pattern ? pattern.at[i][1] : 0), 1200) : enemy.y
       let ex = x, ey = y
       if (!circle) {
         const d = Math.max(1, distance(enemy, s.player)), range = Math.min(kind === "charger" ? 300 : 360, d + 45)
@@ -133,7 +175,7 @@ export class Encounters {
         ex = end.x; ey = end.y
       }
       this.threats.push({ id: s.next(), source: ai.target, kind: circle ? "circle" : "line",
-        x, y, ex, ey, radius: circle ? kind === "caster" ? 58 : kind === "oracle" ? 72 : 105 : kind === "charger" ? 30 : 48,
+        x, y, ex, ey, radius: pattern ? pattern.radius : circle ? kind === "caster" ? 58 : kind === "oracle" ? 72 : 105 : kind === "charger" ? 30 : 48,
         damage: spec.damage, trigger_at: s.elapsed + delay, expires_at: s.elapsed + delay + 260, fired: false })
     }
     enemy.setVelocity(0)
@@ -148,7 +190,18 @@ export class Encounters {
       const enemy = live.get(id)
       if (!enemy) { this.foes.delete(id); continue }
       const kind = enemy.getData("kind"), spec = FOES[kind], d = distance(enemy, s.player)
-      if (kind === "boss" && ai.phase === 1 && enemy.getData("hp") <= spec.hp / 2) {
+      if (this.tough) {
+        // Rule 12: the boss has three phases, the two gatekeepers gain a second one, and each change brings help.
+        const left = enemy.getData("hp") / this.maxHp(kind)
+        if (kind === "boss" && ai.phase === 1 && left <= .66) {
+          ai.phase = 2; this.controller.notice("林地守望者 · 回响激化"); this.reinforce(enemy, ["brute", "brute", "charger", "charger"])
+        } else if (kind === "boss" && ai.phase === 2 && left <= .33) {
+          ai.phase = 3; this.controller.notice("林地守望者 · 根须封场"); this.reinforce(enemy, ["brute", "brute", "caster", "caster", "charger"])
+        } else if ((kind === "sentinel" || kind === "oracle") && ai.phase === 1 && left <= .5) {
+          ai.phase = 2; this.controller.notice(`${spec.name} · 被激怒了`)
+          this.reinforce(enemy, kind === "sentinel" ? ["brute", "brute", "brute"] : ["wisp", "wisp", "wisp", "wisp", "caster"])
+        }
+      } else if (kind === "boss" && ai.phase === 1 && enemy.getData("hp") <= this.maxHp(kind) / 2) {
         ai.phase = 2; this.controller.notice("林地守望者 · 回响激化")
       }
       const frost = s.combat.frost.marks.get(id)
@@ -181,6 +234,7 @@ export class Encounters {
         const end = s.terrain.place(source, { x: threat.ex, y: threat.ey })
         threat.ex = end.x; threat.ey = end.y
       }
+      s.art?.enemyStrike?.(threat)
       const hit = threat.kind === "circle" ? distance(s.player, threat) <= threat.radius + 10
         : segmentDistance(s.player, threat, { x: threat.ex, y: threat.ey }) <= threat.radius + 10
       if (hit && (threat.kind === "circle" || s.terrain.lineClear(threat, s.player))) s.takeDamage(threat.damage, source)
@@ -191,6 +245,14 @@ export class Encounters {
   paint() {
     const g = this.graphics, now = this.s.elapsed
     g.clear()
+    // Elites stand on a ring in their affix colour.
+    if (this.tough) for (const enemy of this.s.enemies.getChildren()) {
+      const affix = AFFIXES[enemy.getData("affix")]
+      if (!affix || !enemy.active) continue
+      const y = enemy.y + enemy.displayHeight * .34, pulse = 1 + Math.sin(now / 180 + enemy.getData("id")) * .08
+      g.lineStyle(3, affix.color, .9).strokeEllipse(enemy.x, y, 44 * pulse, 20 * pulse)
+      g.fillStyle(affix.color, .18).fillEllipse(enemy.x, y, 44 * pulse, 20 * pulse)
+    }
     for (const t of this.threats) {
       const color = t.fired ? 0xffbc86 : 0xf18c88
       g.lineStyle(t.fired ? 4 : 2, color, .95).fillStyle(color, t.fired ? .42 : .14)
@@ -216,7 +278,7 @@ export class Encounters {
     node.closest(".battlefield").classList.toggle("has-encounter", Boolean(enemy))
     if (!enemy) return
     const spec = FOES[enemy.getData("kind")], ai = this.foes.get(enemy.getData("id"))
-    node.querySelector(".encounter-name").textContent = `${spec.name} · ${ai?.phase === 2 ? "第二阶段 · " : ""}${ai?.state === "windup" ? "蓄力" : ai?.state === "recover" ? "恢复" : "游走"}`
-    node.querySelector(".encounter-fill").style.width = `${Math.min(100, enemy.getData("hp") / spec.hp * 100)}%`
+    node.querySelector(".encounter-name").textContent = `${spec.name} · ${ai?.phase === 3 ? "第三阶段 · " : ai?.phase === 2 ? "第二阶段 · " : ""}${ai?.state === "windup" ? "蓄力" : ai?.state === "recover" ? "恢复" : "游走"}`
+    node.querySelector(".encounter-fill").style.width = `${Math.min(100, enemy.getData("hp") / this.maxHp(enemy.getData("kind")) * 100)}%`
   }
 }

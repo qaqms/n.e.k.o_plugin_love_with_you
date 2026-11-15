@@ -39,6 +39,56 @@ export function forestLayout() {
   return props
 }
 
+// Rule 8 plays each journey node in a smaller arena cut from the same world.
+const ARENA_BOUNDS = { x: 250, y: 150, width: 1300, height: 900 }
+export const ARENAS = {
+  glade: { name: "林间空地", bounds: ARENA_BOUNDS },
+  lanes: { name: "断墙小径", bounds: ARENA_BOUNDS },
+}
+
+export function arenaLayout(id) {
+  if (!ARENAS[id]) throw new Error("未知场地")
+  const props = [], b = ARENAS[id].bounds
+  const add = (name, kind, x, y, width, height, scale = 1, variant = 0, decor = false) => {
+    props.push({ id: name, kind, x, y, scale, variant, ...(decor ? { decor } : {}),
+      footprint: { x: x - width / 2, y: y - height, width, height } })
+  }
+  // The treeline stands outside the playable rectangle; it is scenery, not collision.
+  let n = 0
+  for (let x = b.x - 60; x <= b.x + b.width + 60; x += 82) {
+    add(`border-${n}`, "tree", x + (n % 3) * 9, b.y - 6 - (n % 2) * 26, 27, 18, .95 + (n % 3) * .08, n % 4, true); n++
+    add(`border-${n}`, "tree", x + (n % 3) * 11, b.y + b.height + 168 + (n % 2) * 24, 27, 18, 1 + (n % 3) * .07, n % 4, true); n++
+  }
+  for (let y = b.y + 70; y <= b.y + b.height + 120; y += 96) {
+    add(`border-${n}`, "tree", b.x - 52 - (n % 2) * 30, y, 27, 18, .95 + (n % 3) * .08, n % 4, true); n++
+    add(`border-${n}`, "tree", b.x + b.width + 52 + (n % 2) * 30, y + 30, 27, 18, 1 + (n % 3) * .07, n % 4, true); n++
+  }
+  if (id === "glade") {
+    for (const i of [3, 4, 5, 10, 11, 12, 18, 19, 20, 25, 26, 27]) {
+      const angle = i / 30 * Math.PI * 2
+      add(`rim-${i}`, "rubble", 900 + Math.cos(angle) * 188, 600 + Math.sin(angle) * 135, 30, 13, 1, i % 3)
+    }
+    for (const [i, [x, y, scale]] of [[520, 380, 1.1], [1290, 400, 1], [470, 830, 1], [1300, 840, 1.15]].entries()) {
+      add(`rock-${i}`, "rock", x, y, 50 * scale, 28 * scale, scale, i % 3)
+    }
+    for (const [i, [x, y]] of [[660, 262], [1170, 968], [1420, 620], [385, 590]].entries()) {
+      add(`tree-${i}`, "tree", x, y, 24, 16, .8, i % 4)
+    }
+  } else {
+    for (const [i, [x, y]] of [[520, 420], [594, 420], [668, 420], [1132, 420], [1206, 420], [1280, 420],
+      [520, 830], [594, 830], [668, 830], [1132, 830], [1206, 830], [1280, 830]].entries()) {
+      add(`wall-${i}`, "wall", x, y, 74, 19, 1, i % 3)
+    }
+    for (const [i, [x, y]] of [[770, 478], [1030, 478], [770, 772], [1030, 772]].entries()) {
+      add(`column-${i}`, "column", x, y, 42, 22, 1, i % 2)
+    }
+    for (const [i, [x, y, scale]] of [[900, 300, 1], [900, 950, 1.1], [390, 620, .9], [1410, 640, .9]].entries()) {
+      add(`rock-${i}`, "rock", x, y, 50 * scale, 28 * scale, scale, i % 3)
+    }
+  }
+  return props
+}
+
 const clamp = (v, low, high) => Math.max(low, Math.min(high, v))
 const inside = (p, r) => p.x > r.x && p.x < r.x + r.width && p.y > r.y && p.y < r.y + r.height
 const expanded = (r, shape) => ({ x: r.x - shape.rx, y: r.y - shape.ry,
@@ -60,10 +110,14 @@ function entryTime(a, b, r) {
 }
 
 export class TerrainGeometry {
-  constructor(props = forestLayout()) { this.props = props; this.rects = props.map(p => p.footprint) }
+  constructor(props = forestLayout(), bounds = null) {
+    this.props = props; this.rects = props.filter(p => !p.decor).map(p => p.footprint)
+    this.area = bounds ? { left: bounds.x, top: bounds.y, right: bounds.x + bounds.width, bottom: bounds.y + bounds.height }
+      : { left: WORLD.margin, top: WORLD.margin, right: WORLD.width - WORLD.margin, bottom: WORLD.height - WORLD.margin }
+  }
   bounded(p, shape) {
-    return { x: clamp(p.x, WORLD.margin + shape.rx, WORLD.width - WORLD.margin - shape.rx),
-      y: clamp(p.y, WORLD.margin + shape.ry, WORLD.height - WORLD.margin - shape.ry) }
+    return { x: clamp(p.x, this.area.left + shape.rx, this.area.right - shape.rx),
+      y: clamp(p.y, this.area.top + shape.ry, this.area.bottom - shape.ry) }
   }
   free(p, shape) {
     const b = this.bounded(p, shape)
@@ -95,7 +149,8 @@ export class TerrainGeometry {
     for (const candidate of candidates) if (this.free(candidate, shape)) return candidate
     // Deterministic bounded fallback also handles overlapping trunks / masonry.
     let best = null, bestDistance = Infinity
-    for (let x = 36; x < WORLD.width - 24; x += CELL) for (let y = 36; y < WORLD.height - 24; y += CELL) {
+    const a = this.area
+    for (let x = a.left + 12; x < a.right; x += CELL) for (let y = a.top + 12; y < a.bottom; y += CELL) {
       const candidate = { x, y }, d = Math.hypot(x - start.x, y - start.y)
       if (d < bestDistance && this.free(candidate, shape)) { best = candidate; bestDistance = d }
     }

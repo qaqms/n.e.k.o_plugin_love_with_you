@@ -1,4 +1,5 @@
 import { ROUTES } from "./skills.mjs"
+import { JOURNEY, settlementFor } from "./journey-rules.mjs"
 
 const messages = {
   adventure_stale: "进度已在另一个窗口更新，请重新读取。",
@@ -54,6 +55,11 @@ function validLoadout(value, shop) {
 }
 
 export function validSettlement(value, snapshot) {
+  if (object(snapshot) && snapshot.rules >= 8) {
+    if (!JOURNEY.nodes || !object(snapshot.journey)) return false
+    const expected = settlementFor(snapshot), keys = Object.keys(expected)
+    return sameKeys(value, keys) && keys.every(key => value[key] === expected[key])
+  }
   if (!sameKeys(value, ["formula", "minutes", "survival", "clear", "total"]) || !object(snapshot)
     || !integer(snapshot.elapsed, 1200000)) return false
   const minutes = Math.floor(snapshot.elapsed / 60000), clear = snapshot.outcome === "cleared" ? 80 : 0
@@ -138,10 +144,10 @@ export class AdventureApi {
     const view = await this.call({ operation: "read", client: this.client })
     if (!view || !Number.isSafeInteger(view.revision) || typeof view.epoch !== "string"
       || !Array.isArray(view.characters) || typeof view.owns_control !== "boolean"
-      || ![1, 2, 3, 4, 5, 6, 7].includes(view.rules) || !view.characters.every(name => typeof name === "string" && name.length <= 100)
+      || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(view.rules) || !view.characters.every(name => typeof name === "string" && name.length <= 100)
       || !Object.hasOwn(view, "run") || !validEconomy(view.economy, view.shop)
       || (view.run !== null && (!object(view.run) || !validLoadout(view.run.loadout, view.shop)
-        || !["active", "ended"].includes(view.run.status) || ![1, 2, 3, 4, 5, 6, 7].includes(view.run.rules ?? 1)
+        || !["active", "ended"].includes(view.run.status) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(view.run.rules ?? 1)
         || (view.run.rules === 6 && ["player", "companion"].some(owner =>
           typeof view.run[`${owner}_route`] !== "string" || !Object.hasOwn(ROUTES, view.run[`${owner}_route`])
           || ROUTES[view.run[`${owner}_route`]].class !== view.run[`${owner}_class`]))

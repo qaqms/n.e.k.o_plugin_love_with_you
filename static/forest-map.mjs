@@ -1,4 +1,4 @@
-import { forestLayout, TerrainGeometry, WORLD, CELL, groundDepth, DEPTH } from "./terrain-rules.mjs"
+import { forestLayout, arenaLayout, ARENAS, TerrainGeometry, WORLD, CELL, groundDepth, DEPTH } from "./terrain-rules.mjs"
 import { paintForest } from "./forest-art.mjs"
 
 export function bodyShape(actor) {
@@ -13,16 +13,31 @@ const length = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
 
 export class ForestMap {
   constructor(scene) {
-    this.s = scene; this.geometry = new TerrainGeometry(forestLayout())
-    this.visuals = paintForest(scene, WORLD.width, WORLD.height, this.geometry.props)
+    this.s = scene; this.visuals = []; this.arena = null
     this.solids = scene.physics.add.staticGroup()
+    this.colliders = []
+    this.load("")
+    this.reset(false)
+  }
+  // "" is the full rule 5 forest; any other id is a rule 8 arena.
+  load(arena) {
+    if (this.arena === arena) return
+    const scene = this.s, bounds = arena ? ARENAS[arena].bounds : null
+    this.arena = arena
+    for (const { image } of this.visuals) image.destroy()
+    this.solids.clear(true, true)
+    this.geometry = new TerrainGeometry(arena ? arenaLayout(arena) : forestLayout(), bounds)
+    this.visuals = paintForest(scene, WORLD.width, WORLD.height, this.geometry.props, arena, bounds)
     for (const prop of this.geometry.props) {
+      if (prop.decor) continue
       const r = prop.footprint
       const zone = scene.add.zone(r.x + r.width / 2, r.y + r.height / 2, r.width, r.height)
       scene.physics.add.existing(zone, true); this.solids.add(zone)
     }
-    this.colliders = []
-    this.reset(false)
+    const a = this.geometry.area
+    scene.physics.world.setBounds(a.left, a.top, a.right - a.left, a.bottom - a.top)
+    scene.cameras.main.setBounds(0, 0, WORLD.width, WORLD.height)
+    this.graphs?.clear()
   }
   bind() {
     const s = this.s, enabled = () => this.enabled

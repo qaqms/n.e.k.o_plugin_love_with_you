@@ -1855,8 +1855,8 @@ test("freezing a charger cancels its warning and encounter movement keeps the fr
 })
 
 for (const viewport of [{ width: 1280, height: 820 }, { width: 390, height: 844 }]) {
-  test(`default rule7 launch renders readable boss warnings at ${viewport.width}px`, async () => {
-    const h = await harness({ viewport })
+  test(`rule7 launch renders readable boss warnings at ${viewport.width}px`, async () => {
+    const h = await harness({ viewport, displayRules: 7 })
     try {
       await startFree(h)
       assert.equal(await h.state(c => c.scene.meta.rules), 7)
@@ -2291,3 +2291,772 @@ for (const viewport of [{ width: 1280, height: 820 }, { width: 390, height: 844 
     } finally { await h.close() }
   })
 }
+
+test("combat feedback shows damage numbers, hit reactions and death beats without touching the saved simulation", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const result = await h.state(c => {
+      const s = c.scene, art = s.art
+      s.setPaused(true); s.elapsed = 5000; s.spawnAt = 1200000
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.drops.clear(true, true)
+      const foe = s.makeEnemy({ id: s.next(), kind: "charger", x: s.player.x + 90, y: s.player.y, hp: 500 })
+      const bodies = () => [s.player, s.companion, foe].map(actor =>
+        [actor.body.width, actor.body.height, actor.body.offset.x, actor.body.offset.y, actor.body.radius, actor.body.x, actor.body.y])
+      const tint = [foe.isTinted, foe.tintTopLeft, foe.tintFill]
+      const before = JSON.stringify(s.snapshot()), rng = s.rng.state(), bodyBefore = bodies()
+      // Presentation calls alone: nothing in the checkpoint may move.
+      art.strike(foe, 30, "player", false); art.strike(foe, 12, "companion", false)
+      art.hurt(9, 0); art.hurt(0, 6); art.impact(foe.x, foe.y, "fire"); art.burst(foe.x, foe.y, 60, 0xb6c7a0, "quake")
+      art.enemyStrike({ kind: "circle", x: foe.x, y: foe.y, radius: 60 })
+      art.update()
+      const lit = foe.tintFill, numbers = art.numbers.length, texts = art.numbers.map(n => n.label.text).sort()
+      for (let i = 0; i < 12; i++) { s.elapsed += 50; art.update() }
+      const restored = [foe.isTinted, foe.tintTopLeft, foe.tintFill], angle = foe.angle
+      const preserved = JSON.stringify({ ...s.snapshot(), elapsed: 5000 }) === before && s.rng.state() === rng
+      const bodyAfter = bodies()
+      // A real lethal hit goes through the rule path once and leaves a death beat and a hopping crystal.
+      const kills = s.kills
+      s.combat.deal(foe, 9999, "player")
+      const killed = s.kills - kills
+      const drop = s.drops.getChildren()[0], hidden = drop.alpha
+      const ghosts = art.ghosts.length
+      for (let i = 0; i < 12; i++) { s.elapsed += 50; art.update() }
+      // Budgets hold when a whole pack is hit in one frame.
+      for (let i = 0; i < 80; i++) {
+        const e = s.makeEnemy({ id: s.next(), kind: "slime", x: s.player.x + 60 + i, y: s.player.y + 40, hp: 5 })
+        s.combat.deal(e, 9999, i % 2 ? "player" : "companion")
+      }
+      art.update()
+      return { lit, numbers, texts, tint, restored, angle, preserved, bodyBefore, bodyAfter, killed, hidden,
+        shown: drop.alpha, ghosts, peak: [art.numbers.length, art.ghosts.length, art.particles.length, art.bursts.length],
+        paused: s.physics.world.isPaused, stop: art.stopLeft }
+    })
+    assert.equal(result.lit, true); assert.equal(result.numbers, 4)
+    assert.deepEqual(result.texts, ["-9", "12", "30", "6"])
+    assert.deepEqual(result.restored, result.tint); assert.equal(result.angle, 0)
+    assert.equal(result.preserved, true); assert.deepEqual(result.bodyAfter, result.bodyBefore)
+    assert.equal(result.killed, 1); assert.equal(result.hidden, 0); assert.equal(result.shown, 1); assert.ok(result.ghosts >= 2)
+    assert.ok(result.peak[0] <= 40 && result.peak[1] <= 24 && result.peak[2] <= 180 && result.peak[3] <= 24)
+    // Feedback requested while paused never starts a hit-stop.
+    assert.equal(result.paused, true); assert.equal(result.stop, 0)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("hit-stop holds the clock and physics briefly, releases on pause, and reduced effects disable it with screen shake", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    await h.state(c => { const s = c.scene; s.spawnAt = 1200000; s.enemies.clear(true, true) })
+    const held = await h.state(async c => {
+      const s = c.scene, start = s.elapsed
+      s.art.stop(400)
+      const frozen = s.physics.world.isPaused
+      // A second request inside the gate is ignored rather than extending the first.
+      s.art.stop(5000)
+      const capped = s.art.stopLeft <= 400
+      await new Promise(resolve => setTimeout(resolve, 150))
+      return { frozen, capped, moved: s.elapsed - start, left: s.art.stopLeft > 0 }
+    })
+    assert.equal(held.frozen, true); assert.equal(held.capped, true); assert.equal(held.moved, 0); assert.equal(held.left, true)
+    await poll(() => h.state(c => c.scene.art.stopLeft === 0 && !c.scene.physics.world.isPaused))
+    const elapsed = await h.state(c => c.scene.elapsed)
+    await poll(() => h.state((c, elapsed) => c.scene.elapsed > elapsed, elapsed))
+    // Pausing mid-stop hands control back to the pause state.
+    await new Promise(resolve => setTimeout(resolve, 450))
+    const released = await h.state(c => {
+      const s = c.scene
+      s.art.stop(400); s.setPaused(true)
+      const paused = [s.art.stopLeft, s.physics.world.isPaused]
+      s.setPaused(false)
+      return { paused, resumed: [s.art.stopLeft, s.physics.world.isPaused] }
+    })
+    assert.deepEqual(released.paused, [0, true]); assert.deepEqual(released.resumed, [0, false])
+    await new Promise(resolve => setTimeout(resolve, 450))
+    await h.frame.getByRole("button", { name: "简化特效", exact: true }).click()
+    const reduced = await h.state(c => {
+      const s = c.scene
+      s.art.stop(400); s.art.shake(.02, 300); s.art.hurt(20, 0)
+      return { stop: s.art.stopLeft, frozen: s.physics.world.isPaused, shaking: s.cameras.main.shakeEffect.isRunning,
+        particles: s.art.particles.length, numbers: s.art.numbers.length }
+    })
+    assert.deepEqual(reduced, { stop: 0, frozen: false, shaking: false, particles: 0, numbers: 1 })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("larger projectile artwork keeps the same centred collision circle", async () => {
+  const h = await harness()
+  try {
+    await startFree(h, "fire", "ice")
+    const bolts = await h.state(c => {
+      const s = c.scene
+      s.setPaused(true); s.bullets.clear(true, true)
+      return ["base", "awakened"].map(form => {
+        const bolt = s.makeBullet({ id: s.next(), x: 400, y: 300, vx: 100, vy: 0, life: 900, damage: 5, owner: "player",
+          skill: "fire", pierce: 0, hit_ids: [], form })
+        bolt.body.updateFromGameObject()
+        return { key: bolt.texture.key, width: bolt.width, radius: bolt.body.halfWidth,
+          off: Math.hypot(bolt.body.center.x - 400, bolt.body.center.y - 300) }
+      })
+    })
+    assert.equal(bolts[0].key, "bolt-fire"); assert.equal(bolts[0].width, 48); assert.equal(bolts[0].radius, 7)
+    assert.equal(bolts[1].key, "bolt-awakened")
+    // The circle stays centred on the sprite to within a tenth of a pixel.
+    assert.ok(bolts[0].off < .1 && bolts[1].off < .1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("all eight raster enemies play cut-out frames on the unchanged world-space collision circle", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const result = await h.state(c => {
+      const s = c.scene
+      s.setPaused(true); s.elapsed = 4000; s.enemies.clear(true, true)
+      const rows = [["slime", .62], ["wisp", .62], ["brute", .85], ["charger", .85], ["caster", .62], ["sentinel", 1.12], ["oracle", 1.12], ["boss", 1.4]].map(([kind, scale], i) => {
+        const e = s.makeEnemy({ id: s.next(), kind, x: s.player.x - 300 + i * 90, y: s.player.y + 150, hp: 500 })
+        e.body.updateFromGameObject()
+        // Vector enemies: a radius-19 circle at offset (13, 29) in a 64x72 frame, scaled with the sprite.
+        const off = Math.hypot(e.body.x - (e.x - 19 * scale), e.body.y - (e.y - 7 * scale))
+        return { kind, key: e.texture.key, scale: e.scaleX, tinted: e.isTinted, off, width: e.body.width, want: 38 * scale, enemy: e }
+      })
+      s.art.update()
+      const first = rows.map(r => r.enemy.frame.name)
+      s.elapsed += 290; s.art.update()
+      const moved = rows.map(r => r.enemy.frame.name)
+      s.art.strike(rows[0].enemy, 30, "player", false); s.art.update()
+      const flinch = rows[0].enemy.frame.name
+      s.elapsed += 400; s.art.update()
+      const recovered = rows[0].enemy.frame.name
+      s.combat.deal(rows[2].enemy, 9999, "player"); s.elapsed += 300; s.art.update()
+      const death = s.art.ghosts.find(g => g.death)?.image.frame.name
+      return { rows: rows.map(({ enemy, ...rest }) => rest), first, moved, flinch, recovered, death }
+    })
+    assert.deepEqual(result.rows.map(r => r.key), ["slime", "wisp", "brute", "charger", "caster", "sentinel", "oracle", "boss"].map(kind => `foe-${kind}`))
+    assert.ok(result.rows.every(r => r.scale === 1 && r.tinted === false))
+    for (const row of result.rows) { assert.ok(row.off < .01, row.kind); assert.ok(Math.abs(row.width - row.want) < .01, row.kind) }
+    for (const i of result.rows.keys()) { assert.ok(result.first[i] < 8 && result.moved[i] < 8); assert.notEqual(result.first[i], result.moved[i]) }
+    assert.ok(result.flinch >= 8 && result.flinch < 11); assert.ok(result.recovered < 8)
+    assert.ok(result.death >= 11 && result.death < 16)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("the raster player traveller keeps the world-space body and animates on the shared actor atlas", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const result = await h.state(c => {
+      const s = c.scene, p = s.player
+      s.setPaused(true); s.elapsed = 3000
+      p.body.updateFromGameObject()
+      const body = [p.body.width, p.body.height, +(p.body.x - p.x).toFixed(3), +(p.body.y - p.y).toFixed(3)]
+      const frames = []
+      for (const [vx, vy] of [[0, 0], [90, 0], [-90, 0], [0, -90], [0, 90]]) { p.body.velocity.set(vx, vy); s.art.update(); frames.push(p.frame.name) }
+      p.body.velocity.set(0, 0)
+      s.art.cast("player", "fire", 0); s.art.update()
+      return { body, frames, cast: p.frame.name, width: p.frame.width, scale: p.scaleX, kind: s.meta.player_class,
+        avatar: document.getElementById("player-avatar").getAttribute("src") }
+    })
+    assert.deepEqual(result.body, [19.6, 21, -9.8, -1.4])
+    assert.equal(result.width, 80); assert.equal(result.scale, 1)
+    const k = result.kind
+    assert.match(result.frames[0], new RegExp(`^${k}-down-idle-\\d$`))
+    assert.match(result.frames[1], new RegExp(`^${k}-right-walk-\\d$`)); assert.match(result.frames[2], new RegExp(`^${k}-left-walk-\\d$`))
+    assert.match(result.frames[3], new RegExp(`^${k}-up-walk-\\d$`)); assert.match(result.frames[4], new RegExp(`^${k}-down-walk-\\d$`))
+    assert.match(result.cast, new RegExp(`^${k}-right-cast-\\d$`))
+    assert.equal(result.avatar, `art/player-traveller-${k}.png`)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+// Rule 8: nine nodes with a choice of doors between them.
+async function passScreens(h) {
+  for (let i = 0; i < 16; i++) {
+    await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending && c.scene.paused))
+    const kind = await h.state(c => c.scene.outcome !== "playing" ? "done" : c.scene.choices.length ? "study"
+      : c.scene.encounters.state.pending ? "coop" : c.scene.journey.fighting ? "fight" : "doors")
+    if (kind === "study") await h.frame.locator("[data-upgrade]").first().click()
+    else if (kind === "coop") await h.frame.locator("[data-cooperation]").first().click()
+    else return kind
+  }
+  throw new Error("screens did not settle")
+}
+async function finishNode(h) {
+  await h.state(c => {
+    const s = c.scene, j = s.journey.state
+    s.hurtUntil = 1200000
+    if (j.goal === "hold") s.elapsed = j.started_at + j.need
+    else if (j.goal === "clear") s.kills += j.need
+    else s.combat.deal(s.enemies.getChildren().find(e => e.getData("kind") === s.journey.node.foe), 1e6, "player")
+  })
+  return passScreens(h)
+}
+async function pickDoor(h, selector = "[data-door]") {
+  await h.frame.locator(selector).first().click()
+  await h.frame.locator("#screen").waitFor({ state: "hidden" })
+  await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending && !c.scene.paused))
+}
+
+test("rule8 default launch clears a node, sweeps the field, pays the door reward and enters the next arena", async () => {
+  const h = await harness({ displayRules: 11 })
+  try {
+    await startFree(h)
+    const opening = await h.state(c => ({ rules: c.scene.meta.rules, arena: c.scene.terrain.arena, journey: c.scene.journey.state,
+      clock: document.getElementById("clock").textContent, objective: document.getElementById("objective").textContent,
+      bounds: [c.scene.physics.world.bounds.x, c.scene.physics.world.bounds.y, c.scene.physics.world.bounds.width, c.scene.physics.world.bounds.height] }))
+    assert.equal(opening.rules, 11)
+    assert.equal(opening.arena, "glade")
+    assert.deepEqual(opening.bounds, [250, 150, 1300, 900])
+    assert.deepEqual(opening.journey, { node: 0, phase: "fight", goal: "hold", reward: "study", hard: false, need: 90000,
+      started_at: 0, kills_at: 0, doors: [], hard_cleared: 0 })
+    assert.match(opening.clock, /第 1 \/ 9 段/)
+    assert.match(opening.objective, /林缘 · 坚守 · 还剩 1:30/)
+    // Spawns come out of the treeline and stay inside the fence.
+    await h.state(c => { c.scene.hurtUntil = 1200000; for (const build of Object.values(c.scene.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000 })
+    await poll(() => h.state(c => c.scene.enemies.countActive() >= 3))
+    assert.ok(await h.state(c => c.scene.enemies.getChildren().every(e => e.x >= 250 && e.x <= 1550 && e.y >= 150 && e.y <= 1050
+      && ["slime", "wisp"].includes(e.getData("kind")))))
+    const before = await h.state(c => {
+      const s = c.scene
+      s.makeDrop({ id: s.next(), x: 700, y: 500, amount: 9 }); s.makeDrop({ id: s.next(), x: 1100, y: 700, amount: 5 })
+      return { level: s.level, xp: s.xp, kills: s.kills, enemies: s.enemies.countActive() }
+    })
+    assert.equal(await finishNode(h), "doors")
+    const cleared = await h.state(c => {
+      const s = c.scene
+      return { level: s.level, kills: s.kills, enemies: s.enemies.countActive(), drops: s.drops.countActive(),
+        journey: s.journey.state, saved: c.api.view.run?.id === s.meta.id, title: document.querySelector("#screen h2").textContent,
+        doors: [...document.querySelectorAll("[data-door]")].map(node => [node.dataset.goal, node.dataset.hard || "", node.textContent]) }
+    })
+    assert.ok(cleared.level > before.level, "the study reward grants a level at once")
+    assert.equal(cleared.kills, before.kills, "dispersed enemies are not counted as kills")
+    assert.deepEqual([cleared.enemies, cleared.drops], [0, 0])
+    assert.equal(cleared.title, "选择去路")
+    assert.equal(cleared.journey.phase, "doors")
+    assert.deepEqual(cleared.doors.map(door => door[0]).sort(), ["clear", "hold"])
+    assert.ok(cleared.doors.every(door => door[1] === "" && /研习|休整|灵感/.test(door[2])))
+    assert.notEqual(cleared.journey.doors[0].reward, cleared.journey.doors[1].reward)
+    // The door checkpoint is on disk: a reload resumes on the same doors, not in the middle of a fight.
+    await h.page.reload()
+    h.page.once("dialog", dialog => dialog.accept())
+    await h.frame.getByRole("button", { name: "接管此旅程", exact: true }).click()
+    await h.frame.locator("[data-door]").first().waitFor()
+    assert.deepEqual(await h.state(c => c.scene.journey.state.doors), cleared.journey.doors)
+    await pickDoor(h, '[data-goal="clear"]')
+    const next = await h.state(c => {
+      const s = c.scene
+      return { journey: s.journey.state, arena: s.terrain.arena, player: [s.player.x, s.player.y], elapsed: s.elapsed,
+        bullets: s.bullets.countActive(), zones: s.combat.zones.length, objective: document.getElementById("objective").textContent,
+        walls: s.terrain.geometry.props.filter(prop => prop.kind === "wall").length, solids: s.terrain.solids.getLength(),
+        rects: s.terrain.geometry.rects.length }
+    })
+    assert.equal(next.arena, "lanes")
+    assert.deepEqual([next.journey.node, next.journey.phase, next.journey.goal, next.journey.need], [1, "fight", "clear", 60])
+    assert.equal(next.journey.kills_at, cleared.kills)
+    assert.ok(Math.abs(next.player[0] - 900) < 30 && Math.abs(next.player[1] - 600) < 30)
+    assert.match(next.objective, /林缘 · 清剿 · \d+ \/ 60/)
+    assert.equal(next.walls, 12)
+    assert.equal(next.solids, next.rects)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule8 full journey: gatekeepers, cooperation, hard doors and the boss settle node coins exactly", async () => {
+  const h = await harness({ displayRules: 11 })
+  try {
+    await startFree(h)
+    const seen = []
+    let hard = 0
+    for (let node = 0; node < 8; node++) {
+      assert.equal(await finishNode(h), "doors")
+      const offer = await h.state(c => ({ node: c.scene.journey.state.node, doors: c.scene.journey.state.doors,
+        hp: c.scene.hp, max: c.scene.maxHp(), resolved: c.scene.encounters.state.resolved.length,
+        overflow: document.getElementById("screen").scrollWidth > document.getElementById("screen").clientWidth }))
+      assert.equal(offer.node, node)
+      assert.equal(offer.overflow, false)
+      assert.equal(offer.doors.length, [1, 4, 7].includes(node) ? 1 : node >= 2 ? 3 : 2)
+      assert.equal(offer.resolved, node >= 5 ? 2 : node >= 2 ? 1 : 0)
+      seen.push(offer.doors.map(door => door.goal).join("/"))
+      const risky = offer.doors.some(door => door.hard)
+      if (risky) hard++
+      await pickDoor(h, risky ? "[data-hard]" : "[data-door]")
+      const entered = await h.state(c => {
+        const s = c.scene, foe = s.journey.node.foe
+        return { node: s.journey.state.node, hard: s.journey.state.hard, arena: s.terrain.arena, expected: s.journey.node.arena,
+          foe: foe ? s.enemies.getChildren().filter(e => e.getData("kind") === foe).length : -1, boss: s.bossSpawned,
+          status: document.getElementById("encounter-status").hidden }
+      })
+      assert.equal(entered.node, node + 1)
+      assert.equal(entered.hard, risky)
+      assert.equal(entered.arena, entered.expected)
+      assert.equal(entered.foe, [2, 5, 8].includes(node + 1) ? 1 : -1)
+      assert.equal(entered.boss, node + 1 === 8)
+    }
+    assert.deepEqual(seen.filter(text => !text.includes("/")), ["elite", "elite", "boss"])
+    assert.equal(hard, 4)
+    await poll(() => h.state(c => !document.getElementById("encounter-status").hidden))
+    assert.match(await h.frame.locator("#objective").textContent(), /荆棘深处 · 首领 · 击败林地守望者/)
+    assert.equal(await finishNode(h), "done")
+    await h.frame.getByRole("button", { name: "返回营地", exact: true }).waitFor()
+    const result = await h.state(c => ({ run: c.api.view.run, balance: c.api.view.economy.balance,
+      text: document.getElementById("screen-body").textContent }))
+    assert.equal(result.run.snapshot.outcome, "cleared")
+    assert.ok(result.run.snapshot.elapsed < 18 * 60000, "the clear no longer waits for the eighteenth minute")
+    assert.deepEqual(result.run.settlement, { formula: 2, nodes: 9, hard: 4, journey: 156, clear: 80, total: 236 })
+    assert.equal(result.balance, 236)
+    assert.match(result.text, /冒险金币 \+236/)
+    assert.match(result.text, /路程 9 段（险路 4）：156 · 通关：80/)
+    assert.match(result.text, /9 \/ 9 段/)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule8 doors fit a phone, a lost door acknowledgement cannot enter twice, and rule7 journeys keep the open forest", async () => {
+  const h = await harness({ viewport: { width: 390, height: 844 }, displayRules: 11 })
+  try {
+    await startFree(h)
+    assert.equal(await finishNode(h), "doors")
+    const layout = await h.state(() => {
+      const screen = document.getElementById("screen")
+      return { overflow: screen.scrollWidth > screen.clientWidth,
+        cards: [...document.querySelectorAll("[data-door]")].map(node => { const r = node.getBoundingClientRect(); return [r.left >= 0, r.right <= innerWidth, r.height] }) }
+    })
+    assert.equal(layout.overflow, false)
+    assert.ok(layout.cards.length === 2 && layout.cards.every(card => card[0] && card[1] && card[2] >= 44))
+    await h.page.screenshot({ path: join(artifacts, "journey-doors-390.png") })
+    // Drop the acknowledgement of the save that follows the pick.
+    await h.state(c => {
+      const call = c.api.call.bind(c.api)
+      c.api.call = async args => { const result = await call(args); if (args.operation === "checkpoint") { c.api.call = call; throw new Error("lost") } return result }
+    })
+    await h.frame.locator("[data-door]").first().click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).waitFor()
+    assert.equal(await h.state(c => c.scene.journey.state.node), 1)
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await poll(() => h.state(c => !c.busy && !c.api.pending))
+    assert.deepEqual(await h.state(c => [c.scene.journey.state.node, c.scene.journey.state.phase, document.querySelectorAll("[data-door]").length]), [1, "fight", 0])
+    // An older journey loaded into the same scene gets the full forest back.
+    const classic = await h.state(c => {
+      const s = c.scene
+      s.loadRun({ ...s.meta, rules: 7, snapshot: null })
+      return { arena: s.terrain.arena, journey: s.journey, bounds: [s.physics.world.bounds.x, s.physics.world.bounds.width],
+        props: s.terrain.geometry.props.length, clock: document.getElementById("clock").textContent }
+    })
+    assert.deepEqual([classic.arena, classic.journey, classic.bounds, classic.props], ["", null, [24, 1752], 70])
+    assert.match(classic.clock, /\/ 20:00/)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule9 kills charge the fire finishing move; its cut-in spends nothing until it lands and a pause cancels it", async () => {
+  const h = await harness({ displayRules: 9 })
+  try {
+    await startFree(h)
+    const opening = await h.state(c => {
+      const s = c.scene
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      const foes = [0, 1, 2].map(i => s.makeEnemy({ id: s.next(), kind: i ? "slime" : "sentinel", x: s.player.x + 60 + i * 20, y: s.player.y - 200, hp: 10 }))
+      for (const foe of foes) s.combat.deal(foe, 99, "player")
+      s.updateHud()
+      return { school: s.ultimate.school, energy: s.ultimate.energy, early: s.ultimate.cast(), hidden: document.getElementById("ultimate").hidden,
+        state: document.getElementById("ultimate").dataset.state, boss: s.encounters.maxHp("boss"), sentinel: s.encounters.maxHp("sentinel") }
+    })
+    assert.deepEqual(opening, { school: "fire", energy: 17, early: false, hidden: false, state: "charging", boss: 5120, sentinel: 650 })
+    const cast = await h.state(c => {
+      const s = c.scene
+      s.combat.facing = { x: 1, y: 0 }; s.ultimate.energy = 100
+      const near = [0, 1, 2, 3].map(i => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 150 + i * 40, y: s.player.y + (i - 2) * 50, hp: 150 }))
+      const far = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 150, y: s.player.y + 300, hp: 150 })
+      window.__ult = { far: far.getData("id"), kills: s.kills }
+      const ok = s.ultimate.cast()
+      return { ok, again: s.ultimate.cast(), energy: s.ultimate.energy, saved: s.snapshot().ultimate, elapsed: s.elapsed,
+        cutin: document.getElementById("cutin").hidden, alive: s.enemies.countActive() }
+    })
+    assert.deepEqual([cast.ok, cast.again, cast.energy, cast.saved, cast.cutin, cast.alive], [true, false, 100, { energy: 100 }, false, 5])
+    // One round trip for the frozen check and the pause: the cut-in lasts under a second of wall-clock time.
+    await new Promise(resolve => setTimeout(resolve, 120))
+    const held = await h.state(c => {
+      const elapsed = c.scene.elapsed
+      c.pause()
+      return { elapsed, after: [c.scene.ultimate.pending, c.scene.ultimate.energy, document.getElementById("cutin").hidden, c.scene.enemies.countActive()] }
+    })
+    assert.equal(held.elapsed, cast.elapsed, "the fight is frozen during the cut-in")
+    assert.deepEqual(held.after, [0, 100, true, 5])
+    await h.frame.getByRole("button", { name: "继续", exact: true }).click()
+    await poll(() => h.state(c => !c.scene.paused))
+    await h.page.keyboard.press("r")
+    await poll(() => h.state(c => c.scene.ultimate.energy < 100))
+    const landed = await h.state(c => {
+      const s = c.scene
+      return { energy: s.ultimate.energy, kills: s.kills - window.__ult.kills, alive: s.enemies.getChildren().map(e => e.getData("id")),
+        far: window.__ult.far, safe: s.hurtUntil >= s.elapsed, fx: Boolean(s.ultimate.fx), cutin: document.getElementById("cutin").hidden,
+        hp: s.enemies.getChildren()[0]?.getData("hp") }
+    })
+    assert.deepEqual([landed.energy, landed.kills, landed.alive, landed.safe, landed.fx, landed.cutin, landed.hp], [4, 4, [landed.far], true, true, true, 150])
+    await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending))
+    await h.state(c => c.save())
+    assert.deepEqual(await h.state(c => c.api.view.run === null ? null : c.scene.snapshot().ultimate), { energy: 4 })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule10 fire depth: mastery bursts, the flame bird, burning, chain blasts and twin rings all act and save", async () => {
+  const h = await harness({ displayRules: 10 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, combat = s.combat, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      const made = (id, level) => ({ id, level, focus: "power", branch: id === "fire" ? "volley" : "burst", evolution: "pure", ready_at: 1200000, react_at: 0 })
+      combat.builds.player.skills = [made("fire", 5), made("flame", 5)]
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      out.before = combat.tier("player")
+      Object.assign(combat.builds.player.mastery, { fire: 3, flame: 3 })
+      combat.burn(); s.updateHud()
+      out.tier = combat.tier("player"); out.chip = document.querySelector("#ultimate .ult-res").textContent
+      out.labels = combat.labels().player
+      const foe = (dx, dy, hp = 5000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const hp = e => e.getData("hp")
+      const [a, b, far] = [foe(200, 0), foe(260, 30), foe(200, -300)]
+      // First volley after mastery III is one flame bird; the next is an ordinary volley.
+      combat.birdAt.player = 0
+      const fire = combat.skill("player", "fire")
+      combat.shoot(s.player, "player", fire)
+      const bird = s.bullets.getChildren().at(-1)
+      out.bird = { count: s.bullets.countActive(), form: bird.getData("form"), pierce: bird.getData("pierce"), texture: bird.texture.key,
+        damage: bird.getData("damage"), blend: bird.blendMode === Phaser.BlendModes.ADD, radius: bird.body.halfWidth * 2 }
+      combat.shoot(s.player, "player", fire)
+      const volley = s.bullets.getChildren().slice(1)
+      out.volley = { count: volley.length, forms: [...new Set(volley.map(v => v.getData("form")))], damage: volley[0].getData("damage") }
+      for (const v of volley) v.destroy()
+      // A direct hit bursts onto the neighbour and sets both alight; a distant enemy is untouched.
+      bird.setPosition(a.x, a.y); combat.hit(bird, a)
+      out.hit = { a: 5000 - hp(a), b: 5000 - hp(b), far: 5000 - hp(far), burning: [a, b, far].map(e => combat.burns.has(e.getData("id"))), alive: bird.active }
+      const tick = combat.burns.get(a.getData("id")).damage, at = hp(a)
+      s.elapsed += 600; combat.burn()
+      out.burn = { tick, lost: at - hp(a) }
+      // Tier II: a burning enemy that dies explodes and lights its neighbour.
+      const weak = foe(-200, 0, 1), near = foe(-240, 20), safe = foe(-200, 300)
+      combat.ignite(weak, "player", 100); combat.deal(weak, 5, "player")
+      out.queued = combat.blasts.length
+      s.elapsed += 200; combat.burn()
+      out.chain = { near: 5000 - hp(near), safe: 5000 - hp(safe), lit: combat.burns.has(near.getData("id")), left: combat.blasts.length }
+      // Flame mastery: the ring lands with a burst and a second ring forms underfoot.
+      combat.skill("player", "flame").ready_at = 0
+      const zonesBefore = combat.zones.length, nearHp = hp(a)
+      out.cast = combat.castManual(0)
+      const rings = combat.zones.slice(zonesBefore)
+      out.rings = { count: rings.length, kinds: rings.map(z => z.kind), atPlayer: rings.some(z => Math.hypot(z.x - s.player.x, z.y - s.player.y) < 1),
+        burst: nearHp - hp(a), tick: rings[0].damage }
+      rings[0].tick_at = s.elapsed; combat.update(0)
+      out.tickGap = rings[0].tick_at - s.elapsed
+      out.snapshot = { mastery: s.snapshot().builds.player.mastery, forms: s.snapshot().bullets.map(x => x.form) }
+      return out
+    })
+    assert.deepEqual([r.before, r.tier, r.chip], [2, 3, "共鸣Ⅲ"])
+    assert.match(r.labels, /火丸 · 精通Ⅲ 5级 \/ 焰环 · 精通Ⅲ 5级/)
+    assert.deepEqual([r.bird.count, r.bird.form, r.bird.pierce, r.bird.texture, r.bird.blend], [1, "bird", 5, "fx-fire-bird", true])
+    assert.equal(r.bird.radius, 72, "a 36px source circle, about 16px once the picture is scaled to 0.44")
+    assert.ok(r.volley.count >= 3 && r.volley.forms.join() === "awakened")
+    assert.ok(Math.abs(r.bird.damage - r.volley.damage * 3) < 1e-6, "the bird carries three times one bolt")
+    assert.ok(Math.abs(r.hit.a - r.bird.damage) < 1e-6 && Math.abs(r.hit.b - r.bird.damage * .6) < 1e-6 && r.hit.far === 0)
+    assert.deepEqual(r.hit.burning, [true, true, false])
+    assert.equal(r.hit.alive, true, "the bird keeps flying after its first hit")
+    assert.ok(Math.abs(r.burn.tick - r.bird.damage * .15) < 1e-6 && Math.abs(r.burn.lost - r.burn.tick) < 1e-6)
+    assert.equal(r.queued, 1)
+    assert.ok(Math.abs(r.chain.near - 60) < 1e-6 && r.chain.safe === 0 && r.chain.lit && r.chain.left === 0)
+    assert.equal(r.cast, true)
+    assert.deepEqual([r.rings.count, r.rings.kinds.join(), r.rings.atPlayer], [2, "flame,flame", true])
+    assert.ok(Math.abs(r.rings.burst - r.rings.tick * 2.5) < 1e-6)
+    assert.equal(r.tickGap, 300)
+    assert.deepEqual(r.snapshot, { mastery: { fire: 3, flame: 3, meteor: 0 }, forms: ["bird"] })
+    // The server accepts the mastered build and the flying bird, and a rule 9 journey still has neither.
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.builds.player.mastery.fire, stored.snapshot.bullets[0].form], [10, 3, "bird"])
+    const old = await h.state(c => {
+      const s = c.scene
+      s.loadRun({ ...s.meta, rules: 9, snapshot: null })
+      return { mastery: s.combat.builds.player.mastery ?? null, tier: s.combat.tier("player"), hidden: document.getElementById("ultimate").hidden }
+    })
+    assert.deepEqual(old, { mastery: null, tier: 0, hidden: true })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule11 fire line: blade, spray, delayed burst and lava with its pillar link all act, slow earlier forms and save", async () => {
+  const h = await harness({ displayRules: 11 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, combat = s.combat, line = combat.line, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      combat.builds.player.skills = [{ id: "fire", level: 5, focus: "power", branch: "volley", evolution: "pure", ready_at: 1200000, react_at: 0 }]
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const foe = (dx, dy, hp = 5000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const lost = e => 5000 - e.getData("hp"), lit = e => combat.burns.has(e.getData("id"))
+      const wipe = () => { s.enemies.clear(true, true); combat.burns.clear(); line.clear() }
+      out.rules = [s.meta.rules, combat.builds.player.arts.length, s.encounters.maxHp("boss"), s.encounters.maxHp("sentinel"), s.journey.hpScale()]
+      // Middle rank, close: a fan in front, nothing behind.
+      combat.builds.player.arts = [{ id: "blade", level: 1 }]
+      let front = foe(100, 20), side = foe(80, -40), behind = foe(-100, 0), far = foe(200, 0)
+      line.update()
+      out.blade = { hits: [front, side, behind, far].map(lost), lit: [front, side, behind, far].map(lit), wait: line.at.player.blade - s.elapsed, arcs: line.slashes.length }
+      // Middle rank, sustained: a narrow cone, many small hits.
+      wipe(); combat.builds.player.arts = [{ id: "spray", level: 1 }]
+      front = foe(200, 20); side = foe(0, 222)
+      line.update(); const once = lost(front)
+      s.elapsed += 200; line.update()
+      out.spray = { once, twice: lost(front), side: lost(side), lit: lit(front), wait: line.at.player.spray - s.elapsed }
+      // Middle rank, heavy: the circle warns first, then everything inside is hit and lit.
+      wipe(); combat.builds.player.arts = [{ id: "burst", level: 1 }]
+      const pack = [foe(300, 0), foe(330, 30), foe(300, 50)]; far = foe(-300, 0)
+      line.update()
+      out.burst = { pending: line.pending.length, early: pack.map(lost), wait: line.at.player.burst - s.elapsed }
+      s.elapsed += 600; line.update()
+      out.burst.after = pack.map(lost); out.burst.far = lost(far); out.burst.left = line.pending.length; out.burst.lit = pack.every(lit)
+      // Upper rank: lava slows and burns; a fire bolt landing in it raises a pillar on the neighbours.
+      wipe(); combat.builds.player.arts = [{ id: "burst", level: 5 }, { id: "magma", level: 1 }]
+      line.at.player.burst = 1200000
+      const [a, b] = [foe(250, 0), foe(290, 20)]; far = foe(-300, 0)
+      a.setVelocity(100, 0)
+      line.update()
+      const pool = line.pools[0]
+      out.magma = { pools: line.pools.length, near: Math.hypot(pool.x - a.x, pool.y - a.y) < 60, tick: lost(a), speed: a.body.velocity.x, far: lost(far),
+        wait: line.at.player.magma - s.elapsed }
+      const fire = combat.skill("player", "fire"); fire.ready_at = 0
+      combat.shoot(s.player, "player", fire)
+      const bolt = s.bullets.getChildren()[0], before = lost(b), carried = bolt.getData("damage")
+      bolt.setPosition(a.x, a.y); combat.hit(bolt, a)
+      out.pillar = { neighbour: lost(b) - before, bolt: carried, cooled: pool.erupt_at - s.elapsed }
+      const again = s.bullets.getChildren().find(x => x.active && x !== bolt), mark = lost(b)
+      again.setPosition(a.x, a.y); combat.hit(again, a)
+      out.pillar.second = lost(b) - mark
+      // The level cap is fifty now, and the snapshot carries the forms.
+      wipe(); s.bullets.clear(true, true)
+      s.level = 40; s.xp = s.xpNeeded(); combat.checkLevel()
+      out.level = [s.level, s.choices.length > 0]
+      s.choices = []; combat.studyOwner = ""
+      out.arts = s.snapshot().builds.player.arts
+      return out
+    })
+    assert.deepEqual(r.rules, [11, 0, 8320, 1170, 1.15])
+    assert.ok(r.blade.hits[0] > 0 && r.blade.hits[0] === r.blade.hits[1] && r.blade.hits[2] === 0 && r.blade.hits[3] === 0)
+    assert.deepEqual([r.blade.lit, r.blade.wait, r.blade.arcs], [[true, true, false, false], 1400, 1])
+    assert.ok(r.spray.once > 0 && Math.abs(r.spray.twice - r.spray.once * 2) < 1e-9 && r.spray.side === 0 && r.spray.lit)
+    assert.ok(r.blade.hits[0] > r.spray.once * 4, "the blade hits far harder than one tick of spray")
+    assert.equal(r.spray.wait, 200)
+    assert.deepEqual([r.burst.pending, r.burst.early, r.burst.far, r.burst.left, r.burst.lit, r.burst.wait], [1, [0, 0, 0], 0, 0, true, 3200])
+    assert.ok(r.burst.after.every(amount => amount === r.burst.after[0] && amount > r.blade.hits[0] * 2.5))
+    assert.deepEqual([r.magma.pools, r.magma.near, r.magma.far, r.magma.wait], [1, true, 0, 6000])
+    assert.ok(r.magma.tick > 0 && Math.abs(r.magma.speed - 55) < 1e-6)
+    assert.ok(Math.abs(r.pillar.neighbour - (r.pillar.bolt * 1.5 + r.magma.tick * 2)) < 1e-6, JSON.stringify([r.pillar, r.magma]))
+    assert.deepEqual([r.pillar.cooled, r.pillar.second], [800, 0])
+    assert.deepEqual(r.level, [41, true])
+    assert.deepEqual(r.arts, [{ id: "burst", level: 5 }, { id: "magma", level: 1 }])
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.level, stored.snapshot.builds.player.arts.length], [11, 41, 2])
+    const old = await h.state(c => {
+      const s = c.scene
+      s.loadRun({ ...s.meta, rules: 10, snapshot: null })
+      return [s.combat.line, s.combat.builds.player.arts ?? null, s.encounters.maxHp("boss")]
+    })
+    assert.deepEqual(old, [null, null, 5120])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule11 upper and saint forms: hellfire rolls, grows on burning enemies and bursts; the flash ignites the field and every fire answers", async () => {
+  const h = await harness({ displayRules: 11 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, combat = s.combat, line = combat.line, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      combat.builds.player.skills = [{ id: "fire", level: 5, focus: "power", branch: "volley", evolution: "pure", ready_at: 1200000, react_at: 0 }]
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const foe = (dx, dy, hp = 50000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const lost = e => 50000 - e.getData("hp")
+      const run = ms => { for (let t = 0; t < ms && s.outcome === "playing"; t += 100) { s.elapsed += 100; line.update() } }
+      // Hellfire: aimed at the pack, it burns whatever it rolls over on the way.
+      combat.builds.player.arts = [{ id: "burst", level: 5 }, { id: "hellfire", level: 1 }]
+      line.at.player.burst = 1200000
+      const onPath = foe(150, 0), pack = [foe(420, 0), foe(450, 25), foe(430, -30)], aside = foe(150, 260)
+      for (const enemy of [onPath, ...pack]) combat.ignite(enemy, "player", 100)
+      line.update()
+      const orb = line.orbs[0]
+      out.orb = { count: line.orbs.length, speed: Math.hypot(orb.vx, orb.vy), heading: Math.abs(orb.vy) < 15, wait: line.at.player.hellfire - s.elapsed, base: orb.damage }
+      run(1400)
+      out.roll = { path: lost(onPath) > orb.damage * 2, grow: orb.grow, aside: lost(aside), x: orb.x - s.player.x }
+      const before = pack.map(lost)
+      run(2400)
+      out.end = { gone: line.orbs.length === 0, pack: pack.map((enemy, i) => lost(enemy) > before[i]), aside: lost(aside) }
+      // Flash: a half-second gathering, then everything in range burns and every fire on the field erupts.
+      s.enemies.clear(true, true); combat.burns.clear(); line.clear()
+      combat.builds.player.arts = [{ id: "burst", level: 5 }, { id: "magma", level: 5 }, { id: "flash", level: 1 }]
+      Object.assign(line.at.player, { burst: 1200000, magma: 1200000 })
+      const plain = foe(-300, 0), lit = foe(0, -320), inLava = foe(380, 0), away = foe(0, 420)
+      away.setPosition(s.player.x + 20, s.player.y + 430)
+      combat.ignite(lit, "player", 100)
+      line.pools.push({ x: inLava.x, y: inLava.y, radius: 110, born: s.elapsed, until: s.elapsed + 60000, tick_at: 1200000, erupt_at: 0, owner: "player", damage: 1 })
+      const range = Math.hypot(away.x - s.player.x, away.y - s.player.y)
+      line.update()
+      out.gather = { flashes: line.flashes.length, early: [plain, lit, inLava].map(lost), wait: line.at.player.flash - s.elapsed }
+      const flash = line.flashes[0]
+      s.elapsed += 500; line.update()
+      out.flash = { damage: flash.damage, plain: lost(plain), lit: lost(lit), lava: lost(inLava), erupted: flash.erupted,
+        allLit: [plain, lit, inLava].every(e => combat.burns.has(e.getData("id"))), done: flash.done === s.elapsed, range }
+      s.elapsed += 800; line.update()
+      out.cleared = line.flashes.length
+      out.none = (() => { s.enemies.clear(true, true); line.at.player.flash = 0; line.update(); return line.flashes.length })()
+      return out
+    })
+    assert.deepEqual([r.orb.count, Math.round(r.orb.speed), r.orb.heading, r.orb.wait], [1, 150, true, 5000])
+    assert.ok(r.roll.path && r.roll.grow > 0 && r.roll.aside === 0 && r.roll.x > 150, JSON.stringify(r.roll))
+    assert.deepEqual(r.end, { gone: true, pack: [true, true, true], aside: 0 })
+    assert.deepEqual([r.gather.flashes, r.gather.early, r.gather.wait], [1, [0, 0, 0], 14000])
+    assert.ok(Math.abs(r.flash.plain - r.flash.damage) < 1e-6, "an unlit enemy takes the flash alone")
+    assert.ok(Math.abs(r.flash.lit - (r.flash.damage + 15 * 8)) < 1e-6, "a burning enemy also takes eight burn ticks at once")
+    assert.ok(Math.abs(r.flash.lava - r.flash.damage * 2.6) < 1e-6, "the lava under an enemy erupts for 1.6 flashes more")
+    assert.deepEqual([r.flash.erupted, r.flash.allLit, r.flash.done, r.cleared, r.none], [1, true, true, 0, 0])
+    assert.ok(r.flash.range < 760)
+    const stored = await h.state(async c => {
+      c.scene.combat.builds.player.arts = [{ id: "blade", level: 5 }, { id: "hellfire", level: 5 }, { id: "flash", level: 5 }]
+      c.scene.setPaused(true); await c.save(); return (await c.api.read()).run.snapshot.builds.player.arts
+    })
+    assert.deepEqual(stored.map(art => art.id), ["blade", "hellfire", "flash"])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule12 elites: affixes change speed, contact damage and death, are drawn from the saved RNG only after the first node, and save", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      out.rules = s.meta.rules
+      const at = (dx, dy) => ({ x: s.player.x + dx, y: s.player.y + dy })
+      const plain = s.makeEnemy({ id: s.next(), kind: "slime", hp: 100, affix: "", ...at(300, 0) })
+      const swift = s.makeEnemy({ id: s.next(), kind: "slime", hp: 100, affix: "swift", ...at(-300, 0) })
+      const armored = s.makeEnemy({ id: s.next(), kind: "brute", hp: 100, affix: "armored", ...at(0, 300) })
+      out.look = { scale: [plain.scaleX, swift.scaleX], tinted: [plain.isTinted, swift.isTinted], tint: swift.tintTopLeft, body: [plain.body.radius, swift.body.radius] }
+      out.saved = s.snapshot().enemies.map(e => e.affix)
+      s.hurtUntil = 0; const hp = s.hp
+      s.hurt(armored); out.contact = hp - s.hp
+      s.hurtUntil = 1200000; s.hp = s.maxHp()
+      // A split elite leaves three small slimes and a triple crystal.
+      const split = s.makeEnemy({ id: s.next(), kind: "brute", hp: 10, affix: "split", ...at(200, 200) })
+      const before = s.enemies.countActive(), kills = s.kills
+      s.combat.deal(split, 99, "player")
+      const fresh = s.enemies.getChildren().slice(-3)
+      out.split = { count: s.enemies.countActive() - before, kinds: fresh.map(e => e.getData("kind") + ":" + e.getData("affix")), kills: s.kills - kills,
+        near: fresh.every(e => Math.hypot(e.x - split.x, e.y - split.y) < 80), drop: s.drops.getChildren().at(-1).getData("amount") }
+      // The elite roll: never in the first node, and only for ordinary kinds.
+      const frac = s.rng.frac.bind(s.rng), between = s.rng.between.bind(s.rng)
+      const draws = values => { let i = 0; s.rng.frac = () => values[i++ % values.length]; s.rng.between = (low, high) => Math.min(high, Math.max(low, 1)) }
+      draws([.9, .01]); s.encounters.spawnRegular()
+      out.first = s.enemies.getChildren().at(-1).getData("affix")
+      s.journey.state.node = 1
+      draws([.9, .01]); s.encounters.spawnRegular()
+      const elite = s.enemies.getChildren().at(-1)
+      draws([.9, .5]); s.encounters.spawnRegular()
+      const normal = s.enemies.getChildren().at(-1)
+      out.roll = { affix: elite.getData("affix"), kind: elite.getData("kind"), ratio: elite.getData("hp") / normal.getData("hp"), normal: normal.getData("affix") }
+      s.journey.state.node = 0
+      s.rng.frac = frac; s.rng.between = between
+      return out
+    })
+    assert.equal(r.rules, 12)
+    assert.ok(Math.abs(r.look.scale[1] / r.look.scale[0] - 1.28) < 1e-9)
+    assert.deepEqual([r.look.tinted, r.look.tint], [[false, true], 0xf4d874])
+    assert.deepEqual(r.saved, ["", "swift", "armored"])
+    assert.equal(r.contact, 27, "an armored brute hits half again as hard")
+    assert.deepEqual(r.split, { count: 2, kinds: ["slime:", "slime:", "slime:"], kills: 1, near: true, drop: 36 })
+    assert.equal(r.first, "", "no elites in the first node")
+    assert.deepEqual([r.roll.affix, r.roll.kind, r.roll.normal], ["armored", "slime", ""])
+    assert.ok(Math.abs(r.roll.ratio - 4) < 1e-9)
+    // Speed is applied in the real movement step.
+    await h.state(c => c.play())
+    await poll(() => h.state(c => {
+      const speed = id => { const e = c.scene.enemies.getChildren().find(x => x.getData("affix") === id && x.getData("kind") === "slime"); return Math.hypot(e.body.velocity.x, e.body.velocity.y) }
+      return speed("") > 10 && Math.abs(speed("swift") / speed("") - 1.6) < .05
+    }))
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.equal(stored.rules, 12)
+    assert.ok(stored.snapshot.enemies.every(e => typeof e.affix === "string") && stored.snapshot.enemies.some(e => e.affix === "swift"))
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule12 gatekeepers: the sentinel cracks the ground around you, phases bring reinforcements, and the boss has a third phase", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, enc = s.encounters, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      const circles = () => enc.threats.filter(t => t.kind === "circle").map(t => ({ r: t.radius, d: Math.round(Math.hypot(t.x - s.player.x, t.y - s.player.y)) }))
+      const count = kind => s.enemies.getChildren().filter(e => e.getData("kind") === kind).length
+      // Sentinel: two charges, then a cross of circles that leaves the spot under the player safe.
+      const sentinel = enc.summon("sentinel"), ai = enc.foes.get(sentinel.getData("id"))
+      ai.step = 0; enc.prepare(sentinel, ai)
+      out.charge = enc.threats.map(t => t.kind)
+      enc.threats = []; ai.step = 2; enc.prepare(sentinel, ai)
+      out.cross = circles()
+      enc.threats = []; ai.state = "recover"; ai.ready_at = s.elapsed + 3000
+      sentinel.setData("hp", enc.maxHp("sentinel") * .49)
+      enc.update()
+      out.angry = { phase: ai.phase, brutes: count("brute") }
+      enc.update()
+      out.once = count("brute")
+      // Boss: 66% and 33% thresholds, each with its own help; the third phase alternates a ring and a big centre circle.
+      s.enemies.clear(true, true); enc.foes.clear(); enc.threats = []
+      const boss = enc.summon("boss"), mind = enc.foes.get(boss.getData("id"))
+      mind.state = "recover"; mind.ready_at = s.elapsed + 3000
+      enc.update(); out.p1 = mind.phase
+      boss.setData("hp", enc.maxHp("boss") * .6); enc.update()
+      out.p2 = { phase: mind.phase, adds: s.enemies.countActive() - 1 }
+      mind.step = 1; enc.prepare(boss, mind); out.row = circles(); enc.threats = []; mind.state = "recover"; mind.ready_at = s.elapsed + 3000
+      boss.setData("hp", enc.maxHp("boss") * .3); enc.update()
+      out.p3 = { phase: mind.phase, adds: s.enemies.countActive() - 1, casters: count("caster") }
+      mind.step = 3; enc.prepare(boss, mind); out.ring = circles(); out.windup = enc.threats[0].trigger_at - s.elapsed
+      enc.threats = []; mind.step = 1; enc.prepare(boss, mind); out.centre = circles()
+      enc.hudAt = -Infinity; enc.updateHud(); out.status = document.querySelector("#encounter-status .encounter-name").textContent
+      return out
+    })
+    assert.deepEqual(r.charge, ["line"])
+    assert.deepEqual(r.cross, [{ r: 52, d: 100 }, { r: 52, d: 100 }, { r: 52, d: 100 }, { r: 52, d: 100 }])
+    assert.deepEqual([r.angry, r.once], [{ phase: 2, brutes: 3 }, 3])
+    assert.deepEqual([r.p1, r.p2], [1, { phase: 2, adds: 4 }])
+    assert.deepEqual(r.row.map(c => c.r), [105, 105, 105])
+    assert.deepEqual(r.p3, { phase: 3, adds: 9, casters: 2 })
+    assert.deepEqual(r.ring, Array(6).fill({ r: 66, d: 150 }))
+    assert.equal(r.windup, 900)
+    assert.deepEqual(r.centre, [{ r: 120, d: 0 }])
+    assert.match(r.status, /林地守望者 · 第三阶段/)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule12 offers a hard door as early as the second node", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    assert.equal(await finishNode(h), "doors")
+    const doors = await h.state(c => c.scene.journey.state.doors.map(door => [door.goal, door.hard, door.need]))
+    assert.equal(doors.length, 3)
+    assert.deepEqual(doors.map(door => door[1]), [false, false, true])
+    await pickDoor(h, "[data-hard]")
+    assert.deepEqual(await h.state(c => [c.scene.journey.state.node, c.scene.journey.state.hard]), [1, true])
+    await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending))
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})

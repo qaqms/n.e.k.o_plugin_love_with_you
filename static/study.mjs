@@ -1,6 +1,6 @@
 import { button, element } from "./camp.mjs"
 import { icon } from "./icons.mjs"
-import { SKILLS, LIMITS, BUILD_MODS, SKILL_TAGS, catalogFor, choiceText, skillName, skillControl, newSkill, parameters, nextStep, starterSkills } from "./skills.mjs"
+import { MASTERY, NUMERALS, resonance, SKILLS, LIMITS, BUILD_MODS, SKILL_TAGS, catalogFor, choiceText, skillName, skillControl, newSkill, parameters, nextStep, starterSkills } from "./skills.mjs"
 import { COOPERATIONS } from "./encounter-rules.mjs"
 import { actorImage } from "./actor-art.mjs"
 
@@ -17,11 +17,16 @@ export function renderStudy(body, scene) {
   const buildList = element("div", "", "study-build")
   for (const skill of build.skills) {
     const item = element("div", "", "study-skill")
-    item.append(element("span", `${skillName(skill)} ${skill.level}级 · ${skillControl(build, skill.id)}`),
+    item.append(element("span", `${skillName(skill, build)} ${skill.level}级 · ${skillControl(build, skill.id)}`),
       element("span", nextStep(build, skill), "study-next"))
     buildList.append(item)
   }
   body.append(buildList)
+  if (build.mastery) {
+    const { points, tier } = resonance(build), tiers = MASTERY.resonance.tiers, next = tiers[tier]
+    if (points) body.append(element("p", `${MASTERY.resonance.name} ${points} 点${tier ? ` · ${NUMERALS[tier - 1]} ${tiers[tier - 1][1]}` : ""}${next
+      ? ` · ${next[0]} 点解锁「${next[1]}」：${next[2]}` : " · 已满"}`, "study-resonance"))
+  }
   if (combat.craft) body.append(element("p", slotSummary(build, owner), "slot-summary"))
   if (scene.meta.rules === 3) body.append(element("p", "凝霜最多3层；玩家迅斩、回势斩或突进直接命中可碎冰。同行施加的凝霜计入双人配合。", "muted"))
   const grid = element("div", "", "upgrade-grid")

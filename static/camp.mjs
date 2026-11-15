@@ -44,7 +44,9 @@ export function settlementDetails(settlement) {
     return details
   }
   details.append(element("strong", `冒险金币 +${settlement.total}`, "reward-total"),
-    element("span", `生存 ${settlement.minutes} 分钟：${settlement.survival} · 通关：${settlement.clear}`, "muted"))
+    element("span", settlement.formula === 2
+      ? `路程 ${settlement.nodes} 段${settlement.hard ? `（险路 ${settlement.hard}）` : ""}：${settlement.journey} · 通关：${settlement.clear}`
+      : `生存 ${settlement.minutes} 分钟：${settlement.survival} · 通关：${settlement.clear}`, "muted"))
   return details
 }
 

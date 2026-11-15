@@ -1,9 +1,10 @@
-import { SKILLS, newBuild, studyOwner, drawChoices, applyChoice, parameters, skillName, skillControl } from "./skills.mjs"
+import { levelCap, SKILLS, MASTERY, NUMERALS, masteryOf, resonance, newBuild, studyOwner, drawChoices, applyChoice, parameters, skillName, skillControl } from "./skills.mjs"
 import { FrostEffects } from "./frost.mjs"
 import { ExpandedCombat } from "./expanded-combat.mjs"
 import { Buildcraft } from "./buildcraft.mjs"
 import { isBoss } from "./encounter-rules.mjs"
 import { paintCombat } from "./battle-art.mjs"
+import { FireLine } from "./fire-line.mjs"
 import { DEPTH } from "./terrain-rules.mjs"
 
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
@@ -30,6 +31,57 @@ export class SkillCombat {
     this.frost = this.modern ? new FrostEffects(this, snapshot) : null
     this.expanded = scene.meta.rules >= 6 ? new ExpandedCombat(this) : null
     this.craft = scene.meta.rules >= 7 ? new Buildcraft(this, snapshot) : null
+    // Rule 10 burning is short-lived presentation-adjacent state; it is rebuilt by the next fire hit, not saved.
+    this.burns = new Map(); this.blasts = []; this.birdAt = { player: 0, companion: 0 }
+    this.tiers = { player: this.tier("player"), companion: this.tier("companion") }
+    this.line = scene.meta.rules >= 11 ? new FireLine(this) : null
+  }
+  mastery(owner, id) { return masteryOf(this.builds[owner], id) }
+  tier(owner) { return resonance(this.builds[owner]).tier }
+  ignite(enemy, owner, amount) {
+    if (!enemy.active || this.s.outcome !== "playing" || this.tier(owner) < 1) return
+    const id = enemy.getData("id"), old = this.burns.get(id), now = this.s.elapsed
+    this.burns.set(id, { until: now + 3000, tick_at: old?.tick_at ?? now + 500, owner,
+      damage: Math.min(400, Math.max(old?.damage || 0, 2, amount * .15)) })
+  }
+  // Damage everything near a point except the enemy that was already hit directly.
+  splash(point, radius, damage, owner, except = null, form = "awakened") {
+    if (!this.s.fireArt?.boom(point.x, point.y, radius)) this.flash(point.x, point.y, radius, COLORS.fire, form)
+    else if (form === "meteor") this.s.art?.shake?.(.006, 160)
+    for (const other of [...this.s.enemies.getChildren()]) {
+      if (other === except || !other.active || distance(other, point) > radius) continue
+      this.deal(other, damage, owner)
+      if (this.s.outcome !== "playing") return
+      this.ignite(other, owner, damage)
+    }
+  }
+  burn() {
+    const s = this.s, now = s.elapsed
+    if (this.burns.size) {
+      const live = new Map(s.enemies.getChildren().map(enemy => [enemy.getData("id"), enemy]))
+      for (const [id, burn] of [...this.burns]) {
+        const enemy = live.get(id)
+        if (!enemy?.active || burn.until <= now) { this.burns.delete(id); continue }
+        if (burn.tick_at > now) continue
+        burn.tick_at = now + 500
+        s.art?.ember?.(enemy.x, enemy.y)
+        this.deal(enemy, burn.damage, burn.owner)
+        if (s.outcome !== "playing") return
+      }
+    }
+    for (let i = 0; i < 6 && this.blasts.length && this.blasts[0].at <= now; i++) {
+      const blast = this.blasts.shift()
+      this.splash(blast, 75, blast.damage, blast.owner)
+      if (s.outcome !== "playing") return
+    }
+    for (const owner of ["player", "companion"]) {
+      const tier = this.tier(owner)
+      if (tier > this.tiers[owner]) {
+        const [, name, text] = MASTERY.resonance.tiers[tier - 1]
+        this.controller.notice(`${owner === "player" ? "" : `${s.meta.character} · `}${MASTERY.resonance.name}${NUMERALS[tier - 1]} · ${name}：${text}`)
+      }
+      this.tiers[owner] = tier
+    }
   }
   destroy() { this.graphics.destroy(); this.zones = []; this.flashes = []; if (this.expanded) this.expanded.lines = [] }
   skill(owner, id) { return this.builds[owner].skills.find(skill => skill.id === id) }
@@ -49,7 +101,7 @@ export class SkillCombat {
   }
   checkLevel() {
     const s = this.s
-    if (this.craft?.preparation || s.outcome !== "playing" || s.xp < s.xpNeeded() || s.choices.length || s.encounters?.state.pending || s.level >= 31) return
+    if (this.craft?.preparation || s.outcome !== "playing" || s.xp < s.xpNeeded() || s.choices.length || s.encounters?.state.pending || s.level >= levelCap(this.builds.player)) return
     s.xp -= s.xpNeeded(); s.level++
     this.studyOwner = studyOwner(s.level)
     s.choices = drawChoices(this.builds[this.studyOwner], this.studyOwner, s.rng)
@@ -71,7 +123,7 @@ export class SkillCombat {
         if (s.encounters?.openReward(true)) return
         this.controller.play()
         const skill = this.skill(owner, key.split(":")[0])
-        if (skill) this.controller.notice(`${owner === "player" ? "玩家" : s.meta.character} · ${skillName(skill)} ${skill.level}级 · ${skillControl(this.builds[owner], skill.id)}`)
+        if (skill) this.controller.notice(`${owner === "player" ? "玩家" : s.meta.character} · ${skillName(skill, this.builds[owner])} ${skill.level}级 · ${skillControl(this.builds[owner], skill.id)}`)
       }
     })
   }
@@ -88,13 +140,21 @@ export class SkillCombat {
     const hp = enemy.getData("hp"), damage = Math.min(hp, amount)
     this.stats[`${owner}_damage`] = Math.min(1e9, this.stats[`${owner}_damage`] + damage)
     enemy.setData("hp", hp - amount)
+    s.art?.strike?.(enemy, damage, owner, hp <= amount)
     if (hp > amount) return
-    const kind = enemy.getData("kind"), id = enemy.getData("id"), x = enemy.x, y = enemy.y
+    const kind = enemy.getData("kind"), id = enemy.getData("id"), x = enemy.x, y = enemy.y, affix = enemy.getData("affix")
     this.frost?.marks.delete(id)
+    const burn = this.burns.get(id)
+    if (burn) {
+      this.burns.delete(id)
+      if (this.tier(burn.owner) >= 2 && this.blasts.length < 24) this.blasts.push({ x, y, damage: burn.damage * 4, owner: burn.owner, at: s.elapsed + 110 })
+    }
     enemy.destroy(); s.kills++
     if (owner === "companion") s.partnerKills++
-    s.makeDrop({ id: s.next(), x, y, amount: kind === "brute" ? 12 : kind === "wisp" ? 5 : 4 })
+    s.art?.drop?.(s.makeDrop({ id: s.next(), x, y, amount: (kind === "brute" ? 12 : kind === "wisp" ? 5 : 4) * (affix ? 3 : 1) }))
+    s.ultimate?.onKill(kind)
     s.encounters?.onKill(id, kind)
+    if (affix) s.encounters?.onDeath?.(kind, affix, x, y)
     if (kind === "boss") s.end("cleared")
   }
   hit(bolt, enemy) {
@@ -112,6 +172,14 @@ export class SkillCombat {
       if (skill.id === "ice") this.frost.apply(enemy, owner, skill)
       if (skill.id === "stone") this.expanded?.stoneImpact(enemy, position, skill, owner, bolt.getData("damage"), hits.length === 1)
       if (s.outcome !== "playing") return
+      if (skill.id === "fire") {
+        const bird = bolt.getData("form") === "bird"
+        this.ignite(enemy, owner, bolt.getData("damage"))
+        if (enemy.active) this.line?.onBolt(enemy, owner, bolt.getData("damage"))
+        if (s.outcome !== "playing") return
+        if (this.mastery(owner, "fire") >= 1) this.splash(position, bird ? 110 : 60, bolt.getData("damage") * (bird ? .6 : .4), owner, enemy, bird ? "meteor" : "awakened")
+        if (s.outcome !== "playing") return
+      }
       if (skill.id === "fire" && skill.branch === "blast") {
         this.addZone("flame", owner, position, p.blastRadius, bolt.getData("damage") * .22, p.blastDuration)
       }
@@ -187,14 +255,17 @@ export class SkillCombat {
   emit(source, owner, skill, p, angle) {
     if (this.s.bullets.countActive() + p.count > 160) return false
     this.s.art?.cast(owner, skill.id, angle)
+    // Mastery III: every five seconds the volley is replaced by one flame bird.
+    const bird = skill.id === "fire" && this.mastery(owner, "fire") >= 3 && this.s.elapsed >= this.birdAt[owner]
+    if (bird) { this.birdAt[owner] = this.s.elapsed + 5000; p = { ...p, count: 1, damage: p.damage * 3, pierce: 5, speed: 360 } }
     const speed = p.speed || 430
     for (let i = 0; i < p.count; i++) {
       const a = angle + (i - (p.count - 1) / 2) * .2
       this.s.makeBullet({
         id: this.s.next(), x: source.x, y: source.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
         life: this.modern ? Math.min(3000, Math.ceil(p.range / speed * 1000 + 180)) : 1400,
-        damage: this.damage(owner, p.damage), owner, skill: skill.id, pierce: p.pierce, hit_ids: [],
-        ...(this.modern ? { form: skill.evolution === "fusion" ? "fusion" : skill.level === 5 ? "awakened" : "base" } : {}),
+        damage: Math.min(1000, this.damage(owner, p.damage)), owner, skill: skill.id, pierce: p.pierce, hit_ids: [],
+        ...(this.modern ? { form: bird ? "bird" : skill.evolution === "fusion" ? "fusion" : skill.level === 5 ? "awakened" : "base" } : {}),
       })
     }
     return true
@@ -244,7 +315,12 @@ export class SkillCombat {
       if (!target) return this.castFailure("焰环范围内没有敌人 · 未消耗冷却")
       if (!this.addZone("flame", "player", target, p.radius, this.damage("player", p.damage) * (s.encounters?.has("embers") ? 1.15 : 1), p.duration)) return this.castFailure("焰环暂无法落地 · 未消耗冷却")
       skill.ready_at = s.elapsed + p.cooldown * (s.encounters?.has("cadence") ? .9 : 1)
-      this.follow("flame", { x: target.x, y: target.y })
+      const rank = this.mastery("player", "flame"), tick = this.damage("player", p.damage) * (s.encounters?.has("embers") ? 1.15 : 1)
+      const spot = { x: target.x, y: target.y }
+      if (rank >= 3) this.addZone("flame", "player", { x: s.player.x, y: s.player.y }, p.radius, tick, p.duration)
+      if (rank >= 1) this.splash(spot, p.radius, tick * 2.5, "player", null, "meteor")
+      if (s.outcome !== "playing") return true
+      this.follow("flame", spot)
     } else if (skill.id === "frost") {
       const target = this.targetGroup(s.player, p.range)
       if (!target) return this.castFailure("霜爆范围内没有敌人 · 未消耗冷却")
@@ -370,15 +446,18 @@ export class SkillCombat {
         }
       }
       if (zone.tick_at <= s.elapsed) {
-        zone.tick_at = s.elapsed + (zone.kind === "frost" ? 1000 : 500)
+        zone.tick_at = s.elapsed + (zone.kind === "frost" ? 1000 : zone.kind === "flame" && this.mastery(zone.owner, "flame") >= 2 ? 300 : 500)
         for (const enemy of [...s.enemies.getChildren()]) if (distance(enemy, zone) <= zone.radius) {
           this.deal(enemy, zone.damage, zone.owner)
           if (s.outcome !== "playing") return
+          if (zone.kind === "flame") this.ignite(enemy, zone.owner, zone.damage * 4)
           if (zone.kind === "frost") this.frost.apply(enemy, zone.owner, this.skill(zone.owner, "frost"), 1)
         }
       }
     }
     this.frost?.update()
+    this.burn()
+    if (s.outcome === "playing") this.line?.update()
     this.paint()
   }
   paint() {
@@ -386,6 +465,6 @@ export class SkillCombat {
   }
   labels() {
     return Object.fromEntries(["player", "companion"].map(owner => [owner,
-      this.builds[owner].skills.map(skill => `${skillName(skill)} ${skill.level}级`).join(" / ")]))
+      this.builds[owner].skills.map(skill => `${skillName(skill, this.builds[owner])} ${skill.level}级`).join(" / ")]))
   }
 }

@@ -80,6 +80,16 @@ def settlement(snapshot: dict[str, Any]) -> dict[str, int]:
 
 
 def validate_settlement(value: Any) -> None:
+    if isinstance(value, dict) and value.get("formula") == 2:
+        # Rule 8 pays per cleared node; the store recomputes the exact amount from the snapshot.
+        if set(value) != {"formula", "nodes", "hard", "journey", "clear", "total"} or any(
+            type(item) is not int for item in value.values()
+        ) or not 0 <= value["nodes"] <= 9 or not 0 <= value["hard"] <= 5 or not 0 <= value["journey"] <= 400 or (
+            value["clear"] not in (0, 80) or (value["clear"] and value["nodes"] != 9)
+            or value["total"] != value["journey"] + value["clear"]
+        ):
+            raise AdventureError("adventure_invalid_economy")
+        return
     if not isinstance(value, dict) or set(value) != {"formula", "minutes", "survival", "clear", "total"}:
         raise AdventureError("adventure_invalid_economy")
     if any(type(item) is not int for item in value.values()) or (

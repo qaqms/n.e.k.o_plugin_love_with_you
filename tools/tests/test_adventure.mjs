@@ -2954,7 +2954,7 @@ test("rule11 upper and saint forms: hellfire rolls, grows on burning enemies and
 })
 
 test("rule12 elites: affixes change speed, contact damage and death, are drawn from the saved RNG only after the first node, and save", async () => {
-  const h = await harness()
+  const h = await harness({ displayRules: 12 })
   try {
     await startFree(h)
     const r = await h.state(c => {
@@ -3016,7 +3016,7 @@ test("rule12 elites: affixes change speed, contact damage and death, are drawn f
 })
 
 test("rule12 gatekeepers: the sentinel cracks the ground around you, phases bring reinforcements, and the boss has a third phase", async () => {
-  const h = await harness()
+  const h = await harness({ displayRules: 12 })
   try {
     await startFree(h)
     const r = await h.state(c => {
@@ -3067,7 +3067,7 @@ test("rule12 gatekeepers: the sentinel cracks the ground around you, phases brin
 })
 
 test("rule12 offers a hard door as early as the second node", async () => {
-  const h = await harness()
+  const h = await harness({ displayRules: 12 })
   try {
     await startFree(h)
     assert.equal(await finishNode(h), "doors")
@@ -3077,6 +3077,435 @@ test("rule12 offers a hard door as early as the second node", async () => {
     await pickDoor(h, "[data-hard]")
     assert.deepEqual(await h.state(c => [c.scene.journey.state.node, c.scene.journey.state.hard]), [1, true])
     await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending))
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule13 flame chain: one key casts ring, wall, field and pillar in order, links to the ground fires, spends only on a target and saves", async () => {
+  const h = await harness({ displayRules: 13 })
+  try {
+    await startFree(h)
+    const r = await h.state(async c => {
+      const { castStats, CASTS } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat, chain = combat.flameLine, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const build = combat.builds.player
+      build.skills = [{ id: "fire", level: 1, focus: "", branch: "", evolution: "", ready_at: 1200000, react_at: 0 },
+        { id: "flame", level: 5, focus: "power", branch: "burst", evolution: "pure", ready_at: 0, react_at: 0 }]
+      out.rules = [s.meta.rules, build.casts.length, Boolean(chain)]
+      build.casts = [{ id: "wall", level: 5 }, { id: "domain", level: 5 }, { id: "pillar", level: 1 }]
+      const foe = (dx, dy, hp = 50000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const lost = e => 50000 - e.getData("hp")
+      const pack = [foe(320, 0), foe(350, 30), foe(320, 50)], far = foe(-520, 0)
+      for (const e of s.enemies.getChildren()) e.setVelocity(0)
+      out.cast = combat.castManual(0)
+      const flame = build.skills[1]
+      out.cooldown = [flame.ready_at - s.elapsed, Math.round(castStats(build, "pillar").cooldown)]
+      out.queue = chain.queue.map(step => [step.id, step.at - s.elapsed, step.scale])
+      out.ring = combat.zones.filter(zone => zone.kind === "flame").length
+      out.again = combat.castManual(0)
+      const step = ms => { s.elapsed += ms; for (const e of s.enemies.getChildren()) e.setVelocity(0); chain.update() }
+      step(300); out.wall = [chain.walls.length, chain.field === null]
+      step(300); out.field = [Boolean(chain.field), chain.boost(), combat.damage("player", 100)]
+      combat.addZone("flame", "player", { x: s.player.x, y: s.player.y + 260 }, 90, 1, 6000)
+      step(300); out.seal = chain.pending.filter(blast => !blast.small).length
+      const before = pack.map(lost)
+      step(500)
+      out.erupted = { big: chain.pillars.filter(p => p.big).length, hit: pack.map((e, i) => lost(e) - before[i]), small: chain.pending.filter(b => b.small).length,
+        linked: chain.pending.filter(b => b.small).length - 6 }
+      for (let i = 0; i < 12; i++) step(100)
+      out.far = lost(far); out.left = chain.pending.length
+      out.snapshot = s.snapshot().builds.player.casts
+      // Nothing in reach: no cooldown is spent and the chain does not start.
+      s.enemies.clear(true, true); chain.clear(); flame.ready_at = 0
+      out.empty = [combat.castManual(0), flame.ready_at, chain.queue.length]
+      step(9000); out.expired = [chain.walls.length, chain.field, chain.boost()]
+      out.lower = CASTS.lower
+      return out
+    })
+    assert.deepEqual(r.rules, [13, 0, true])
+    assert.equal(r.cast, true); assert.equal(r.again, false)
+    assert.equal(r.cooldown[0], r.cooldown[1])
+    assert.deepEqual(r.queue, [["wall", 300, r.lower], ["domain", 600, r.lower], ["pillar", 900, 1]])
+    assert.equal(r.ring, 1)
+    assert.deepEqual(r.wall, [1, true])
+    assert.deepEqual(r.field, [true, 1.25, 125])
+    assert.equal(r.seal, 1)
+    assert.equal(r.erupted.big, 1)
+    assert.ok(r.erupted.hit.every(amount => amount > 300), JSON.stringify(r.erupted))
+    assert.equal(r.erupted.linked, 1, "a flame zone away from the pillar answers with one; fires under the pillar do not repeat it")
+    assert.deepEqual([r.far, r.left], [0, 0])
+    assert.deepEqual(r.snapshot, [{ id: "wall", level: 5 }, { id: "domain", level: 5 }, { id: "pillar", level: 1 }])
+    assert.deepEqual(r.empty, [false, 0, 0])
+    assert.deepEqual(r.expired, [0, null, 1])
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.builds.player.casts.length, stored.snapshot.builds.companion.casts], [13, 3, []])
+    const old = await h.state(c => {
+      const s = c.scene
+      s.loadRun({ ...s.meta, rules: 12, snapshot: null })
+      return [s.combat.flameLine, s.combat.builds.player.casts ?? null]
+    })
+    assert.deepEqual(old, [null, null])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule14 stops: a stop door after the first fight, shards, the merchant, an encounter, the camp, the charm and boons all act and save", async () => {
+  const h = await harness({ displayRules: 14 })
+  try {
+    await startFree(h)
+    const settle = () => h.state(c => new Promise(resolve => { const wait = () => !c.busy && !c.api.pending ? resolve(true) : setTimeout(wait, 50); wait() }))
+    const first = await h.state(c => {
+      const s = c.scene, j = s.journey
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      s.elapsed = j.state.started_at + 91000; j.update(); s.xp = 0; s.choices = []; s.combat.studyOwner = ""
+      j.openDoors(true)
+      return { rules: s.meta.rules, shards: j.state.shards, doors: j.state.doors.map(door => door.goal), stop: j.state.doors.find(door => door.goal === "stop") }
+    })
+    assert.equal(first.rules, 14)
+    assert.equal(first.shards, 3)
+    assert.deepEqual(first.doors.filter(goal => goal === "stop").length, 1)
+    assert.ok(["camp", "shop", "event"].includes(first.stop.reward))
+    // The merchant: take the door, buy one ware, leave; the stop door is gone and the rest remain.
+    await settle()
+    await h.state(c => { const j = c.scene.journey.state; j.shards = 20; j.doors.find(door => door.goal === "stop").reward = "shop"
+      c.scene.journey.pick(j.doors.findIndex(door => door.goal === "stop")) })
+    await settle()
+    const shop = await h.state(c => { const j = c.scene.journey.state; return { phase: j.phase, offer: j.stop.offer, doors: j.doors.length, title: document.getElementById("screen-title")?.textContent || document.querySelector("#screen h1, #screen h2")?.textContent } })
+    assert.equal(shop.phase, "stop"); assert.equal(shop.offer.length, 3); assert.equal(shop.doors, first.doors.length - 1)
+    const bought = await h.state((c, id) => { c.scene.journey.buy(id); return { shards: c.scene.journey.state.shards, bought: c.scene.journey.state.stop.bought } }, shop.offer[0])
+    await settle()
+    const stored = await h.state(async c => (await c.api.read()).run.snapshot.journey)
+    assert.deepEqual([stored.phase, stored.stop.bought, stored.shards], ["stop", [shop.offer[0]], bought.shards])
+    assert.ok(bought.shards < 20)
+    await h.state(c => c.scene.journey.resolve([], "行商挥手道别。")); await settle()
+    const back = await h.state(c => ({ phase: c.scene.journey.state.phase, stop: c.scene.journey.state.stop, goals: c.scene.journey.state.doors.map(d => d.goal) }))
+    assert.deepEqual([back.phase, back.stop, back.goals.includes("stop")], ["doors", null, false])
+    // Effects: the camp's vigor raises max health, the charm turns a lethal blow, boons shape the next fight.
+    const fx = await h.state(c => {
+      const s = c.scene, j = s.journey, out = {}
+      const max = s.maxHp(); j.apply([["vigor", 15]]); out.vigor = [s.maxHp() - max, j.state.vigor]
+      j.apply([["hurt", .99]]); out.hurt = s.hp
+      j.apply([["heal", 1]]); out.heal = s.hp === s.maxHp()
+      j.apply([["boon", "power"]]); out.boostDoors = j.boost()
+      j.apply([["charm", 1]])
+      return out
+    })
+    assert.deepEqual(fx.vigor, [15, 15]); assert.equal(fx.hurt, 1); assert.equal(fx.heal, true); assert.equal(fx.boostDoors, 1, "the boon waits for the next fight")
+    await h.state(c => c.scene.journey.pick(c.scene.journey.state.doors.findIndex(door => door.goal !== "stop" && !door.hard))); await settle()
+    const fight = await h.state(c => {
+      const s = c.scene, j = s.journey, out = {}
+      s.hurtUntil = 0; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      out.boost = [j.boost(), s.combat.damage("player", 100)]
+      const foe = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 10, y: s.player.y, hp: 500 })
+      s.hp = 1; s.takeDamage(50, foe)
+      out.spared = [s.hp, s.outcome, j.state.charm]
+      j.state.boon = "bounty"; const before = j.state.shards
+      s.enemies.clear(true, true); s.hurtUntil = 1200000
+      s.elapsed = j.state.started_at + 200000; s.kills = j.state.kills_at + 200; j.update()
+      out.bounty = [j.state.shards - before, j.state.boon, j.state.phase]
+      out.snapshot = Object.keys(s.snapshot().journey).sort()
+      return out
+    })
+    assert.deepEqual(fight.boost, [1.2, 120])
+    assert.deepEqual(fight.spared, [1, "playing", false])
+    assert.deepEqual(fight.bounty, [6, "", "doors"])
+    assert.deepEqual(fight.snapshot, ["boon", "charm", "doors", "goal", "hard", "hard_cleared", "kills_at", "need", "node", "phase", "reward", "shards", "started_at", "stop", "vigor"])
+    const old = await h.state(c => { const s = c.scene; s.loadRun({ ...s.meta, rules: 13, snapshot: null }); return Object.hasOwn(s.journey.state, "shards") })
+    assert.equal(old, false)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule15 sword line: flash, counter ring, phantoms and intent, the wave, falling blades, the saint cut and the drawn finisher all act and save", async () => {
+  const h = await harness({ displayRules: 15 })
+  try {
+    await startFree(h, "slash")
+    const r = await h.state(c => {
+      const s = c.scene, combat = s.combat, line = combat.swordLine, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const build = combat.builds.player
+      build.skills = [{ id: "slash", level: 5, focus: "power", branch: "cleave", evolution: "pure", ready_at: 1200000, react_at: 0 }]
+      out.rules = [s.meta.rules, build.swords.length, Boolean(line), s.ultimate.school]
+      const foe = (dx, dy, hp = 50000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const lost = e => 50000 - e.getData("hp")
+      const wipe = () => { s.enemies.clear(true, true); line.clear() }
+      const still = () => { for (const e of s.enemies.getChildren()) e.setVelocity(0) }
+      // Swift school: a thin line toward the nearest enemy, every enemy on it hit once with one stack.
+      build.swords = [{ id: "flash", level: 1 }]
+      let near = foe(120, 0), far = foe(260, 4), side = foe(120, 90)
+      still(); line.update()
+      out.flash = { hits: [near, far, side].map(lost), stacks: [near, far, side].map(e => line.stacks(e)), wait: line.at.player.flash - s.elapsed }
+      // Still-water school: a guarding ring, then a counter ring three times as strong when struck.
+      wipe(); build.swords = [{ id: "ripple", level: 1 }]
+      near = foe(60, 0); far = foe(200, 0); still()
+      line.update(); const ring = lost(near)
+      s.hurtUntil = 0; const hurt = s.hp; s.takeDamage(5, near)
+      out.ripple = { ring, far: lost(far), counter: lost(near) - ring, shield: s.hurtUntil - s.elapsed, hp: hurt - s.hp }
+      s.hurtUntil = 1200000
+      // North-star school: three phantoms on the three nearest, three stacks each.
+      wipe(); build.swords = [{ id: "phantom", level: 1 }]
+      const pack = [foe(80, 0), foe(100, 40), foe(130, -30), foe(250, 0)]; still()
+      line.update()
+      out.phantom = { stacks: pack.map(e => line.stacks(e)), hit: pack.map(e => lost(e) > 0) }
+      // Resonance I: slash and the line give two points; an enemy carrying intent takes 15% more.
+      out.tier = line.tier("player")
+      const marked = pack[0], fresh = foe(-80, 0)
+      out.edge = [line.edge(marked, "player", 100), line.edge(fresh, "player", 100)].map(Math.round)
+      // Upper rank: the wave grows on stacked enemies; falling blades double near deep intent.
+      wipe(); build.swords = [{ id: "phantom", level: 5 }, { id: "wave", level: 1 }]; line.at.player.phantom = 1200000
+      const lane = [foe(150, 0), foe(300, 0)]; still(); line.mark(lane[0], 3)
+      line.update()
+      for (let i = 0; i < 8; i++) { s.elapsed += 100; still(); line.update() }
+      out.wave = { hits: lane.map(lost), bonus: line.waves[0]?.bonus ?? "gone", stacks: line.stacks(lane[1]) }
+      wipe(); build.swords = [{ id: "phantom", level: 5 }, { id: "rain", level: 1 }]; line.at.player.phantom = 1200000
+      const deep = foe(0, -120), plain = foe(120, 0); still(); line.mark(deep, 5)
+      line.update(); s.elapsed += 600; still(); line.update()
+      out.rain = { deep: lost(deep), plain: lost(plain), wait: line.at.player.rain - s.elapsed + 600 }
+      // Saint rank: after half a second, everything in view is cut and every stack spent.
+      wipe(); build.swords = [{ id: "phantom", level: 5 }, { id: "wave", level: 5 }, { id: "sever", level: 1 }]
+      line.at.player.phantom = line.at.player.wave = 1200000
+      const heavy = foe(200, 0), light = foe(-200, 0); still(); line.mark(heavy, 10)
+      line.update(); out.gather = [line.severs.length, lost(heavy)]
+      s.elapsed += 500; still(); line.update()
+      out.sever = { heavy: lost(heavy), light: lost(light), left: line.stacks(heavy) }
+      // The finisher belongs to the sword now and spends intent too.
+      wipe(); const target = foe(100, 0); still(); line.mark(target, 4)
+      s.ultimate.energy = 100; s.ultimate.draw()
+      out.drawn = { hit: lost(target), left: line.stacks(target), energy: s.ultimate.energy, spent: s.ultimate.drawn.spent }
+      out.saved = s.snapshot().builds.player.swords
+      return out
+    })
+    assert.deepEqual(r.rules, [15, 0, true, "sword"])
+    assert.ok(r.flash.hits[0] > 0 && r.flash.hits[0] === r.flash.hits[1] && r.flash.hits[2] === 0, JSON.stringify(r.flash))
+    assert.deepEqual([r.flash.stacks, r.flash.wait], [[1, 1, 0], 900])
+    assert.ok(r.ripple.ring > 0 && r.ripple.far === 0)
+    assert.ok(Math.abs(r.ripple.counter - r.ripple.ring * 3 * 1.15) < 1e-6, JSON.stringify(r.ripple))
+    assert.ok(r.ripple.shield >= 400)
+    assert.deepEqual(r.phantom.stacks, [3, 3, 3, 0]); assert.deepEqual(r.phantom.hit, [true, true, true, false])
+    assert.equal(r.tier, 1)
+    assert.deepEqual(r.edge, [115, 100])
+    assert.ok(Math.abs(r.wave.hits[1] - r.wave.hits[0] / 1.15) < 1e-6, JSON.stringify(r.wave)); assert.equal(r.wave.bonus, .1)
+    assert.ok(r.rain.deep > r.rain.plain * 1.5 && r.rain.plain > 0, JSON.stringify(r.rain))
+    assert.deepEqual(r.gather, [1, 0])
+    assert.ok(r.sever.heavy > r.sever.light * 3.5, JSON.stringify(r.sever)); assert.equal(r.sever.left, 0)
+    assert.ok(r.drawn.hit > 0); assert.deepEqual([r.drawn.left, r.drawn.energy, r.drawn.spent], [0, 0, 4])
+    assert.deepEqual(r.saved, [{ id: "phantom", level: 5 }, { id: "wave", level: 5 }, { id: "sever", level: 1 }])
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.builds.player.swords.length, stored.snapshot.builds.companion.swords], [15, 3, []])
+    const old = await h.state(c => { const s = c.scene; s.loadRun({ ...s.meta, rules: 14, snapshot: null }); return [s.combat.swordLine, s.combat.builds.player.swords ?? null] })
+    assert.deepEqual(old, [null, null])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("painted arenas: each area and the sanctuary wear their own pictures without changing collision, and missing pictures fall back", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const r = await h.state(async c => {
+      const { arenaLayout } = await import("./terrain-rules.mjs")
+      const { skinAt } = await import("./journey-rules.mjs")
+      const s = c.scene, out = { skins: [0, 1, 2, 3, 4, 5, 6, 7, 8].map(skinAt) }
+      out.first = [s.terrain.skin, s.terrain.visuals.every(v => v.image.texture.key.startsWith("map-edge-"))]
+      s.terrain.load("lanes", "deep")
+      out.deep = { keys: [...new Set(s.terrain.visuals.map(v => v.image.texture.key))].sort(),
+        rects: JSON.stringify(s.terrain.geometry.rects) === JSON.stringify(arenaLayout("lanes").filter(p => !p.decor).map(p => p.footprint)),
+        floor: s.children.getByName("forest-ground").texture.key }
+      s.terrain.load("glade", "nowhere")
+      out.fallback = s.children.getByName("forest-ground").texture.key
+      return out
+    })
+    assert.deepEqual(r.skins, ["edge", "edge", "edge", "ruin", "ruin", "ruin", "deep", "deep", "boss"])
+    assert.deepEqual(r.first, ["edge", true])
+    assert.deepEqual(r.deep.keys, ["map-deep-column", "map-deep-rock", "map-deep-tree", "map-deep-wall"])
+    assert.equal(r.deep.rects, true)
+    assert.equal(r.deep.floor, "map-floor-v1-lanes-deep")
+    assert.equal(r.fallback, "forest-ground-v3-glade")
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule16 terrain: ruin pillars wear down and break on enemies and save; deep thorns slow and mist hurts", async () => {
+  const h = await harness({ displayRules: 16 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, j = s.journey, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      out.rules = [s.meta.rules, JSON.stringify(s.snapshot().terrain)]
+      j.state.node = 3; s.terrain.load("lanes", "ruin"); s.terrain.reset(true); s.hazards.reset()
+      const col = s.terrain.geometry.props.find(p => p.id === "column-0"), solids = s.terrain.geometry.rects.length
+      const near = s.makeEnemy({ id: s.next(), kind: "slime", hp: 500, affix: "", x: col.x + 30, y: col.y + 40 })
+      const far = s.makeEnemy({ id: s.next(), kind: "slime", hp: 500, affix: "", x: col.x + 400, y: col.y + 40 })
+      for (const e of s.enemies.getChildren()) e.setVelocity(0)
+      s.hazards.strike("column-0", 100)
+      out.worn = [s.hazards.wear["column-0"], s.hazards.broken.length, s.terrain.geometry.rects.length === solids]
+      s.combat.splash({ x: col.x, y: col.y - 10 }, 40, 80, "player")
+      out.broken = { list: [...s.hazards.broken], fewer: solids - s.terrain.geometry.rects.length, near: 500 - near.getData("hp"), far: 500 - far.getData("hp"),
+        free: s.terrain.geometry.free({ x: col.x, y: col.y - 11 }, { rx: 8, ry: 6 }) }
+      out.saved = s.snapshot().terrain
+      // Thorns: everything but gatekeepers moves at 55%; mist hurts the player (never below 1) and normal enemies.
+      s.enemies.clear(true, true)
+      j.state.node = 6; s.terrain.load("glade", "deep"); s.terrain.reset(true); s.hazards.reset()
+      out.reset = s.snapshot().terrain
+      const slowed = s.makeEnemy({ id: s.next(), kind: "slime", hp: 500, affix: "", x: 520, y: 640 }); slowed.setVelocity(100, 0)
+      const misty = s.makeEnemy({ id: s.next(), kind: "slime", hp: 500, affix: "", x: 1370, y: 880 })
+      s.player.setPosition(430, 330); s.hp = 1.5
+      s.hazards.tickAt = 0; s.hazards.update()
+      out.deep = { vx: Math.round(slowed.body.velocity.x), hp: s.hp, misty: 500 - misty.getData("hp") }
+      out.edge = (() => { s.terrain.load("glade", "edge"); s.hazards.reset(); return s.hazards.patches })()
+      return out
+    })
+    assert.deepEqual(r.rules, [16, JSON.stringify({ broken: [], wear: {} })])
+    assert.deepEqual(r.worn, [100, 0, true])
+    assert.deepEqual(r.broken.list, ["column-0"]); assert.equal(r.broken.fewer, 1)
+    assert.ok(r.broken.near > 80 && r.broken.far === 0, JSON.stringify(r.broken)); assert.equal(r.broken.free, true)
+    assert.deepEqual(r.saved, { broken: ["column-0"], wear: {} })
+    assert.deepEqual(r.reset, { broken: [], wear: {} })
+    assert.deepEqual(r.deep, { vx: 55, hp: 1, misty: 10 })
+    assert.equal(r.edge, null)
+    const stored = await h.state(async c => {
+      const s = c.scene; s.journey.state.node = 0; s.terrain.load("glade", "edge"); s.hazards.reset()
+      s.setPaused(true); await c.save(); return (await c.api.read()).run
+    })
+    assert.deepEqual([stored.rules, stored.snapshot.terrain], [16, { broken: [], wear: {} }])
+    const old = await h.state(c => { const s = c.scene; s.loadRun({ ...s.meta, rules: 15, snapshot: null }); return [s.hazards, Object.hasOwn(s.snapshot(), "terrain")] })
+    assert.deepEqual(old, [null, false])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule17 exits: a cleared node lights exits instead of opening the door panel, walking in enters, pause still lists them, stops return to roaming, and the sanctuary roots close in", async () => {
+  const h = await harness({ displayRules: 17 })
+  try {
+    await startFree(h)
+    const settle = () => h.state(c => new Promise(resolve => { const wait = () => !c.busy && !c.api.pending && !c.saving ? resolve(true) : setTimeout(wait, 50); wait() }))
+    const first = await h.state(c => {
+      const s = c.scene, j = s.journey
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      s.elapsed = j.state.started_at + 91000; j.update(); s.xp = 0; s.choices = []; s.combat.studyOwner = ""
+      return { rules: s.meta.rules, phase: j.state.phase, roaming: j.roaming, paused: s.paused, opened: j.openDoors(), exits: j.exits.length - 1, doors: j.state.doors.map(d => d.goal) }
+    })
+    assert.equal(first.rules, 17)
+    assert.deepEqual([first.phase, first.roaming, first.paused, first.opened], ["doors", true, false, false])
+    assert.equal(first.exits, first.doors.length)
+    await settle()
+    // Pause shows the same doors with a way back to the field.
+    await h.state(c => c.pause())
+    assert.equal(await h.frame.locator('[data-door]').count(), first.doors.length)
+    await h.frame.getByRole("button", { name: /回到场地/ }).click()
+    assert.equal(await h.state(c => [c.scene.paused, c.scene.journey.roaming].join()), "false,true")
+    // A stop exit opens its panel; leaving it brings the exits back without the stop.
+    await h.state(c => { const j = c.scene.journey; let i = j.state.doors.findIndex(d => d.goal === "stop")
+      if (i < 0) { j.state.doors.push({ goal: "stop", reward: "camp", hard: false, need: 0 }); j.drawExits(); i = j.state.doors.length - 1 }
+      const p = j.exitPoints()[i]; c.scene.player.setPosition(p.x, p.y); j.update() })
+    await settle()
+    assert.equal(await h.state(c => [c.scene.journey.state.phase, c.scene.paused].join()), "stop,true")
+    await h.state(c => c.scene.journey.resolve([], "test")); await settle()
+    const back = await h.state(c => { const j = c.scene.journey; return { phase: j.state.phase, roaming: j.roaming, paused: c.scene.paused, stop: j.state.doors.some(d => d.goal === "stop"), exits: j.exits.length - 1 } })
+    assert.deepEqual(back, { phase: "doors", roaming: true, paused: false, stop: false, exits: first.doors.filter(g => g !== "stop").length })
+    // Walking into the first exit enters the next node.
+    await h.state(c => { const j = c.scene.journey, p = j.exitPoints()[0]; c.scene.player.setPosition(p.x, p.y); j.update() })
+    await settle()
+    const entered = await h.state(c => ({ node: c.scene.journey.state.node, phase: c.scene.journey.state.phase, exits: c.scene.journey.exits.length, paused: c.scene.paused }))
+    assert.deepEqual(entered, { node: 1, phase: "fight", exits: 0, paused: false })
+    // The sanctuary: in the boss's third phase, standing outside the platform hurts (never below 1).
+    const roots = await h.state(c => {
+      const s = c.scene, j = s.journey
+      s.enemies.clear(true, true); j.state.node = 8; s.terrain.load("glade", "boss")
+      const boss = s.encounters.summon("boss"); boss.setPosition(900, 500)
+      s.encounters.foes.get(boss.getData("id")).phase = 3
+      s.player.setPosition(900, 600); s.hp = 50; s.hazards.rootAt = 0; s.hazards.update(); const inside = s.hp
+      s.player.setPosition(300, 600); s.hazards.rootAt = 0; s.hazards.update()
+      return [inside, s.hp, s.hazards.phase]
+    })
+    assert.deepEqual(roots, [50, 47, 3])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("cartoon enemies: wind-up follows the encounter AI, the strike pose plays on release and on contact, they face the player, and the body never changes", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const r = await h.state(async c => {
+      const { FOE_SHEETS } = await import("./foe-art.mjs")
+      const s = c.scene, art = s.art, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      out.sheets = Object.values(FOE_SHEETS).map(sheet => s.textures.get(sheet.key).frameTotal - 1)
+      const brute = s.encounters.summon("sentinel"); brute.setPosition(s.player.x + 160, s.player.y)
+      const body = [brute.body.radius, brute.body.offset.x, brute.body.offset.y]
+      const ai = s.encounters.foes.get(brute.getData("id"))
+      const frame = () => { art.foesFrame(s.elapsed); return Number(brute.frame.name) }
+      ai.state = "move"; out.idle = frame()
+      ai.state = "windup"; out.windup = frame()
+      ai.state = "recover"; out.strike = frame()
+      s.elapsed += 400; out.after = frame()
+      out.face = brute.flipX
+      brute.setPosition(s.player.x - 160, s.player.y); frame(); out.faceBack = brute.flipX
+      const slime = s.makeEnemy({ id: s.next(), kind: "slime", hp: 50, affix: "", x: s.player.x + 20, y: s.player.y })
+      art.foesFrame(s.elapsed); const calm = Number(slime.frame.name)
+      art.lunge(slime); art.foesFrame(s.elapsed)
+      out.contact = [calm, Number(slime.frame.name)]
+      out.body = JSON.stringify(body) === JSON.stringify([brute.body.radius, brute.body.offset.x, brute.body.offset.y])
+      return out
+    })
+    assert.deepEqual(r.sheets, [16, 16, 16, 16, 16, 16, 16, 16])
+    assert.ok(r.idle < 6, JSON.stringify(r)); assert.ok(r.windup === 6 || r.windup === 7); assert.ok(r.strike === 8 || r.strike === 9); assert.ok(r.after < 6)
+    assert.deepEqual([r.face, r.faceBack], [true, false])
+    assert.ok(r.contact[0] < 6 && (r.contact[1] === 8 || r.contact[1] === 9), JSON.stringify(r.contact))
+    assert.equal(r.body, true)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule18 dash chain: dash, chain cuts, the returning crescent, the star, echoes and the sword domain all strike, stack intent and save", async () => {
+  const h = await harness()
+  try {
+    await startFree(h, "slash")
+    const r = await h.state(async c => {
+      const { strikeStats } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat, line = combat.dashLine, out = {}
+      s.hurtUntil = 0; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const build = combat.builds.player
+      build.skills = [{ id: "slash", level: 1, focus: "", branch: "", evolution: "", ready_at: 1200000, react_at: 0 },
+        { id: "dash", level: 5, focus: "power", branch: "line", evolution: "pure", ready_at: 0, react_at: 0 }]
+      out.rules = [s.meta.rules, build.strikes.length, Boolean(line)]
+      build.strikes = [{ id: "chain", level: 5 }, { id: "echo", level: 5 }, { id: "domain", level: 1 }]
+      s.player.setPosition(700, 600); combat.facing = { x: 1, y: 0 }
+      const foes = [[820, 600], [900, 640], [960, 560], [1040, 620], [1100, 580]].map(([x, y]) => s.makeEnemy({ id: s.next(), kind: "brute", x, y, hp: 50000 }))
+      const lost = e => 50000 - e.getData("hp"), still = () => { for (const e of s.enemies.getChildren()) e.setVelocity(0) }
+      still()
+      const dash = build.skills[1]
+      out.cast = combat.castManual(0)
+      out.cooldown = [dash.ready_at - s.elapsed, strikeStats(build, "domain").cooldown]
+      out.queue = line.queue.map(step => [step.id, step.at - s.elapsed, step.scale])
+      const after = foes.map(lost)
+      for (let i = 0; i < 30; i++) { s.elapsed += 100; still(); line.update() }
+      out.hits = foes.map((e, i) => lost(e) - after[i])
+      out.intent = foes.map(e => combat.swordLine.stacks(e))
+      out.invulnerable = s.hurtUntil > 0
+      out.domain = line.domain
+      out.saved = s.snapshot().builds.player.strikes
+      return out
+    })
+    assert.deepEqual(r.rules, [18, 0, true])
+    assert.equal(r.cast, true)
+    assert.equal(r.cooldown[0], r.cooldown[1])
+    assert.deepEqual(r.queue.map(q => q[0]), ["chain", "echo", "domain"])
+    assert.deepEqual(r.queue.map(q => q[2]), [.6, .6, 1])
+    assert.ok(r.hits.every(amount => amount > 0), JSON.stringify(r.hits))
+    assert.ok(r.intent.some(stacks => stacks >= 3), JSON.stringify(r.intent))
+    assert.equal(r.domain, null)
+    assert.deepEqual(r.saved, [{ id: "chain", level: 5 }, { id: "echo", level: 5 }, { id: "domain", level: 1 }])
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.builds.player.strikes.length, stored.snapshot.builds.companion.strikes], [18, 3, []])
+    const old = await h.state(c => { const s = c.scene; s.loadRun({ ...s.meta, rules: 17, snapshot: null }); return [s.combat.dashLine, s.combat.builds.player.strikes ?? null] })
+    assert.deepEqual(old, [null, null])
     assert.deepEqual(h.errors, [])
   } finally { await h.close() }
 })

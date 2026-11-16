@@ -37,7 +37,7 @@ export class BattleArt {
     for (const p of this.particles) this.free(p.image)
     for (const n of this.numbers) n.label.setVisible(false)
     for (const g of this.ghosts) this.dropGhost(g)
-    this.actors = new WeakMap(); this.foes = new WeakMap(); this.seenLines = new WeakSet()
+    this.actors = new WeakMap(); this.foes = new WeakMap(); this.motions = new WeakMap(); this.seenLines = new WeakSet()
     this.particles = []; this.bursts = []; this.numbers = []; this.ghosts = []
     this.trails = 0; this.trailAt = 0; this.emberAt = 0; this.serial = 0; this.clock = 0
     this.sparks = 0; this.shatter = null; this.slash = null; this.previous = null; this.swing = null
@@ -399,6 +399,40 @@ export class BattleArt {
     this.ghostFrame(now)
     this.playerFrame(now)
   }
+  // Presentation-only attack poses: the encounter AI's wind-up, the moment it strikes, and contact hits.
+  motionOf(enemy, now) {
+    const motion = this.motions.get(enemy) || { attackUntil: 0, last: "" }
+    this.motions.set(enemy, motion)
+    const ai = this.s.encounters?.foes.get(enemy.getData("id")), state = ai?.state || ""
+    if (motion.last === "windup" && state !== "windup") this.strikeFx(enemy, now)
+    motion.last = state
+    if (state === "windup") return "windup"
+    return motion.attackUntil > now ? "attack" : ""
+  }
+  lunge(enemy) {
+    const now = this.s.elapsed, motion = this.motions.get(enemy) || { attackUntil: 0, last: "" }
+    this.motions.set(enemy, motion)
+    if (motion.attackUntil > now - 250) return
+    motion.attackUntil = now + 320
+    this.strikeFx(enemy, now, true)
+  }
+  strikeFx(enemy, now, contact = false) {
+    const motion = this.motions.get(enemy)
+    if (motion) motion.attackUntil = Math.max(motion.attackUntil, now + 320)
+    if (this.reduced) return
+    const kind = enemy.getData("kind"), color = FOE_COLORS[kind] || 0xcfd6d0, x = enemy.x, y = enemy.y + 10
+    const big = isBoss(enemy), size = big ? 1.6 : contact ? .7 : 1
+    if (["brute", "sentinel", "boss"].includes(kind)) {
+      this.ring(x, y, 60 * size, mix(color, 0xffffff, .4), { life: 300, alpha: .7 })
+      this.spray("fx-chunk", x, y, big ? 10 : 5, { speed: 160, lift: -110, gravity: 600, life: 420, tint: 0x8a7a62, from: .5, to: .12, spin: 8, solid: true })
+    } else if (kind === "charger") {
+      this.spray("fx-puff", x, y + 6, 4, { speed: 60, lift: -10, life: 420, tint: 0xd9c6a4, from: .5, to: 1.4, alpha: .5, solid: true })
+    } else if (kind === "slime") {
+      this.ring(x, y, 34 * size, 0x9be06a, { life: 240, alpha: .8 })
+    } else {
+      this.flare(x, y - 14, 40 * size, mix(color, 0xffffff, .5), { life: 200, alpha: .6 })
+    }
+  }
   foesFrame(now) {
     for (const enemy of this.s.enemies.getChildren()) {
       const kind = enemy.getData("kind"), id = enemy.getData("id"), sheet = foeSheet(this.s, kind)
@@ -406,9 +440,15 @@ export class BattleArt {
         // Cut-out frames: a hop cycle, replaced by the flinch while a recent hit is still landing.
         const hit = this.foes.get(enemy), age = hit ? now - hit.kickAt : 1e9
         const flinch = age >= 0 && age < sheet.hurt[1] * sheet.hurt[2]
+        // Wind-up follows the encounter AI; the strike pose plays when it lets go, or when the enemy touches you.
+        const motion = this.motionOf(enemy, now)
         const frame = flinch ? sheet.hurt[0] + Math.floor(age / sheet.hurt[2])
+          : motion === "attack" && sheet.attack ? sheet.attack[0] + Math.floor(now / sheet.attack[2]) % sheet.attack[1]
+          : motion === "windup" && sheet.windup ? sheet.windup[0] + Math.floor(now / sheet.windup[2]) % sheet.windup[1]
           : sheet.move[0] + Math.floor((now + id * 43) / sheet.move[2]) % sheet.move[1]
         if (enemy.frame.name !== frame) enemy.setFrame(frame)
+        const face = this.s.player.x < enemy.x - 6 ? true : this.s.player.x > enemy.x + 6 ? false : enemy.flipX
+        if (enemy.flipX !== face) enemy.setFlipX(face)
       } else if (kind === "slime" || kind === "wisp") {
         const key = `${kind}-motion-${Math.floor((now + id * 43) / 130) % 6}`
         if (enemy.frame.name !== key) enemy.setTexture("actors-v2", key)

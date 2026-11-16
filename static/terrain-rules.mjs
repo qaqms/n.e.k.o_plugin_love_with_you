@@ -158,3 +158,19 @@ export class TerrainGeometry {
     return best
   }
 }
+
+// Rule 16 terrain mechanics. Thorns and mist are fixed patches of the deep arenas (walkable, not solid);
+// pillars are the ruin arenas' columns, which break under enough damage.
+export const HAZARDS = {
+  pillar: { hp: 160, radius: 130, damage: 120, perLevel: 8 },
+  thorn: { slow: .55 },
+  mist: { tick: 500, player: 2, enemy: 10 },
+  // Rule 17 sanctuary: the standing stones wake in phase two; in phase three roots close in on the rim.
+  sanctuary: { x: 900, y: 600, rx: 470, ry: 320, player: 3 },
+  deep: {
+    glade: { thorns: [[520, 640, 80], [1280, 560, 80], [760, 930, 70], [1060, 290, 70]], mist: [[430, 330, 85], [1370, 880, 85]] },
+    lanes: { thorns: [[900, 420, 72], [900, 830, 72], [400, 620, 80], [1400, 600, 80]], mist: [[900, 245, 80], [900, 1000, 80]] },
+  },
+}
+export const hazardsFor = (arena, skin) => skin === "deep" ? HAZARDS.deep[arena] || null : null
+export const breakable = (prop, skin) => skin === "ruin" && prop.kind === "column"

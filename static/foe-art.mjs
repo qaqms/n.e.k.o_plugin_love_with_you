@@ -1,15 +1,10 @@
 // Raster enemies built from AI-drawn parts and baked into cut-out animation frames (see tools/foe-source).
 // Frames are drawn at display size, so sprites use scale 1. Kinds without a sheet keep their vector look.
-export const FOE_SHEETS = {
-  slime: { key: "foe-slime", url: "art/foe-slime.png", cell: 56, move: [0, 8, 100], hurt: [8, 3, 80], death: [11, 5] },
-  wisp: { key: "foe-wisp", url: "art/foe-wisp.png", cell: 56, move: [0, 8, 110], hurt: [8, 3, 80], death: [11, 5] },
-  brute: { key: "foe-brute", url: "art/foe-brute.png", cell: 80, move: [0, 8, 95], hurt: [8, 3, 90], death: [11, 5] },
-  charger: { key: "foe-charger", url: "art/foe-charger.png", cell: 80, move: [0, 8, 75], hurt: [8, 3, 90], death: [11, 5] },
-  caster: { key: "foe-caster", url: "art/foe-caster.png", cell: 56, move: [0, 8, 120], hurt: [8, 3, 80], death: [11, 5] },
-  sentinel: { key: "foe-sentinel", url: "art/foe-sentinel.png", cell: 104, move: [0, 8, 130], hurt: [8, 3, 90], death: [11, 5] },
-  oracle: { key: "foe-oracle", url: "art/foe-oracle.png", cell: 104, move: [0, 8, 130], hurt: [8, 3, 90], death: [11, 5] },
-  boss: { key: "foe-boss", url: "art/foe-boss.png", cell: 128, move: [0, 8, 140], hurt: [8, 3, 90], death: [11, 5] },
-}
+// 0.9.7 cartoon sheets: 16 cells per row — six idle/move squash frames, wind-up, attack, hurt and four death frames.
+const CELLS = { slime: 82, wisp: 82, brute: 116, charger: 116, caster: 82, sentinel: 150, oracle: 150, boss: 186 }
+export const FOE_SHEETS = Object.fromEntries(Object.entries(CELLS).map(([kind, cell]) => [kind, {
+  key: `foe-${kind}`, url: `art/foe-${kind}.png`, cell, move: [0, 6, kind === "boss" ? 150 : 110],
+  windup: [6, 2, 120], attack: [8, 2, 90], hurt: [10, 2, 80], death: [12, 4] }]))
 // World-space collision circle of the vector enemies at each scale: radius 19 at offset (13, 29) in a 64x72 frame.
 const BODY = { radius: 19, left: 13 - 32, top: 29 - 36 }
 

@@ -4,7 +4,7 @@
 
 为 N.E.K.O 的日常聊天加入好感、恋爱关系、专属称呼和共同回忆，让相处的变化留在每一天里。
 
-**当前版本：0.9.0** · 插件标识：`love_with_you`
+**当前版本：0.9.2** · 插件标识：`love_with_you`
 
 [使用指南](docs/guide.md) · [问题反馈](https://github.com/qaqms/n.e.k.o_plugin_love_with_you/issues) · [开发文档](docs/development.md)
 
@@ -72,4 +72,4 @@
 - [素材来源](assets/README.md)与[第三方组件声明](static/engine/README.md)：图片来源及随附代码的许可说明。
 - [发布检查记录](docs/audits/release-readiness-2026-11-16.md)：检查范围和仍待确认的素材分发授权、项目许可证事项。
 
-历史版本说明与内部开发记录已移至[历史文档](docs/readme-history-2026-11-16.md)。本次发布号为 0.9.0，旧记录中的 0.12.x 为此前开发编号。
+历史版本说明与内部开发记录已移至[历史文档](docs/readme-history-2026-11-16.md)。发布号从 0.9.0 起重新编排，旧记录中的 0.12.x 为此前开发编号。

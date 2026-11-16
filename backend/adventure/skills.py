@@ -27,8 +27,17 @@ CATALOGS[9] = CATALOGS[8]
 CATALOGS[10] = CATALOGS[9]
 CATALOGS[11] = CATALOGS[10]
 CATALOGS[12] = CATALOGS[11]
+CATALOGS[13] = CATALOGS[12]
+CATALOGS[14] = CATALOGS[13]
+CATALOGS[15] = CATALOGS[14]
+CATALOGS[16] = CATALOGS[15]
+CATALOGS[17] = CATALOGS[16]
+CATALOGS[18] = CATALOGS[17]
 AFFIXES = ("swift", "armored", "split")
 LINE = json.loads((STATIC_ROOT / "fire-line.json").read_text(encoding="utf-8"))
+CASTS = json.loads((STATIC_ROOT / "flame-line.json").read_text(encoding="utf-8"))
+SWORDS = json.loads((STATIC_ROOT / "sword-line.json").read_text(encoding="utf-8"))
+STRIKES = json.loads((STATIC_ROOT / "dash-line.json").read_text(encoding="utf-8"))
 MASTERY = json.loads((STATIC_ROOT / "mastery.json").read_text(encoding="utf-8"))
 MODS = _catalog("build-mods.json", "mods")
 SKILL_TAGS = json.loads((STATIC_ROOT / "build-mods.json").read_text(encoding="utf-8"))["tags"]
@@ -79,7 +88,7 @@ def legal_choices(build: dict, owner: str, rules: int = 2) -> set[str]:
             ):
                 result.add(f"{skill_id}:fuse")
         elif rules >= 10 and skill_id in MASTERY["skills"] and build["mastery"][skill_id] < MASTERY["cap"] and not (
-            rules >= 11 and skill_id == LINE["root"]
+            rules >= 11 and skill_id == LINE["root"] or rules >= 13 and skill_id == CASTS["root"]
         ):
             result.add(f"{skill_id}:master")
     if rules >= 11 and skills.get(LINE["root"], {}).get("level") == 5:
@@ -88,6 +97,24 @@ def legal_choices(build: dict, owner: str, rules: int = 2) -> set[str]:
             result.add(f"art:{arts[-1]['id']}")
         elif len(arts) < len(LINE["stages"]):
             result.update(f"art:{key}" for key in LINE["stages"][len(arts)])
+    if rules >= 13 and skills.get(CASTS["root"], {}).get("level") == 5:
+        casts = build["casts"]
+        if casts and casts[-1]["level"] < CASTS["cap"]:
+            result.add(f"cast:{casts[-1]['id']}")
+        elif len(casts) < len(CASTS["stages"]):
+            result.update(f"cast:{key}" for key in CASTS["stages"][len(casts)])
+    if rules >= 15 and skills.get(SWORDS["root"], {}).get("level") == 5:
+        swords = build["swords"]
+        if swords and swords[-1]["level"] < SWORDS["cap"]:
+            result.add(f"sword:{swords[-1]['id']}")
+        elif len(swords) < len(SWORDS["stages"]):
+            result.update(f"sword:{key}" for key in SWORDS["stages"][len(swords)])
+    if rules >= 18 and skills.get(STRIKES["root"], {}).get("level") == 5:
+        strikes = build["strikes"]
+        if strikes and strikes[-1]["level"] < STRIKES["cap"]:
+            result.add(f"strike:{strikes[-1]['id']}")
+        elif len(strikes) < len(STRIKES["stages"]):
+            result.update(f"strike:{key}" for key in STRIKES["stages"][len(strikes)])
     allowed = {"power", "vitality", "stride", "reach"} if owner == "player" else {"power", "ward"}
     result.update(f"talent:{key}" for key in allowed if build["talents"][key] < 4)
     if rules >= 7:
@@ -112,6 +139,8 @@ def validate_extra(value: dict) -> dict:
         extra |= {"journey"}
     if value["rules"] >= 9:
         extra |= {"ultimate"}
+    if value["rules"] >= 16:
+        extra |= {"terrain"}
     common_fields = {
         "rules", "elapsed", "rng", "player", "companion", "enemies", "bullets", "drops",
         "level", "xp", "kills", "partner_kills", "next_id", "choices", "spawn_at",
@@ -132,7 +161,7 @@ def validate_extra(value: dict) -> dict:
     _check(isinstance(builds, dict) and set(builds) == set(LIMITS))
     for owner, build in builds.items():
         _check(isinstance(build, dict) and set(build) == {"skills", "talents", "misses"} | (
-            {"mods", "banished"} if free_build else set()) | ({"mastery"} if value["rules"] >= 10 else set()) | ({"arts"} if value["rules"] >= 11 else set()))
+            {"mods", "banished"} if free_build else set()) | ({"mastery"} if value["rules"] >= 10 else set()) | ({"arts"} if value["rules"] >= 11 else set()) | ({"casts"} if value["rules"] >= 13 else set()) | ({"swords"} if value["rules"] >= 15 else set()) | ({"strikes"} if value["rules"] >= 18 else set()))
         skills = build["skills"]
         minimum = 0 if free_build and value["preparation"] else 1 if free_build else 2
         _check(isinstance(skills, list) and minimum <= len(skills) <= (5 if owner == "player" else 3))
@@ -172,6 +201,34 @@ def validate_extra(value: dict) -> dict:
                 _check(index == len(arts) - 1 or art["level"] == LINE["cap"])
             _check(not arts or any(s["id"] == LINE["root"] and s["level"] == 5 for s in skills))
             _check(build["mastery"][LINE["root"]] == 0)
+        if value["rules"] >= 13:
+            # The manual line follows the same order; it replaces the flame ring's mastery.
+            casts = build["casts"]
+            _check(isinstance(casts, list) and len(casts) <= len(CASTS["stages"]))
+            for index, cast in enumerate(casts):
+                _check(isinstance(cast, dict) and set(cast) == {"id", "level"} and isinstance(cast["id"], str)
+                       and cast["id"] in CASTS["stages"][index] and _int(cast["level"], 1, CASTS["cap"]))
+                _check(index == len(casts) - 1 or cast["level"] == CASTS["cap"])
+            _check(not casts or owner == "player" and any(s["id"] == CASTS["root"] and s["level"] == 5 for s in skills))
+            _check(build["mastery"][CASTS["root"]] == 0)
+        if value["rules"] >= 15:
+            # The sword line: one form per rank, in order, each finished before the next begins.
+            swords = build["swords"]
+            _check(isinstance(swords, list) and len(swords) <= len(SWORDS["stages"]))
+            for index, item in enumerate(swords):
+                _check(isinstance(item, dict) and set(item) == {"id", "level"} and isinstance(item["id"], str)
+                       and item["id"] in SWORDS["stages"][index] and _int(item["level"], 1, SWORDS["cap"]))
+                _check(index == len(swords) - 1 or item["level"] == SWORDS["cap"])
+            _check(not swords or any(s["id"] == SWORDS["root"] and s["level"] == 5 for s in skills))
+        if value["rules"] >= 18:
+            # The dash line: player only, in rank order, each form finished before the next begins.
+            strikes = build["strikes"]
+            _check(isinstance(strikes, list) and len(strikes) <= len(STRIKES["stages"]))
+            for index, item in enumerate(strikes):
+                _check(isinstance(item, dict) and set(item) == {"id", "level"} and isinstance(item["id"], str)
+                       and item["id"] in STRIKES["stages"][index] and _int(item["level"], 1, STRIKES["cap"]))
+                _check(index == len(strikes) - 1 or item["level"] == STRIKES["cap"])
+            _check(not strikes or owner == "player" and any(s["id"] == STRIKES["root"] and s["level"] == 5 for s in skills))
         fused = [s for s in skills if s["evolution"] == "fusion"]
         _check(len(fused) <= 1)
         for skill in fused:

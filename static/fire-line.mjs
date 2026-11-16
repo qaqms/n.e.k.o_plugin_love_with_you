@@ -111,7 +111,8 @@ export class FireLine {
     }
     const fires = [...this.pools.map(pool => ({ x: pool.x, y: pool.y, radius: pool.radius })),
       ...this.pending.map(blast => ({ x: blast.x, y: blast.y, radius: blast.radius })),
-      ...c.zones.filter(zone => zone.kind === "flame").map(zone => ({ x: zone.x, y: zone.y, radius: zone.radius }))]
+      ...c.zones.filter(zone => zone.kind === "flame").map(zone => ({ x: zone.x, y: zone.y, radius: zone.radius })),
+      ...(owner === "player" ? c.flameLine?.fires() || [] : [])]
     for (const fire of fires) {
       c.splash(fire, Math.min(200, fire.radius), flash.damage * 1.6, owner, null, "meteor")
       if (s.outcome !== "playing") return

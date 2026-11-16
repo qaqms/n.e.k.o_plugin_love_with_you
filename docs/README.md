@@ -38,6 +38,14 @@
 - [关卡与长期规划](adventure/adventure-chapter-structure-proposal-2026-11-15.md)
 - [精英与首领阶段](adventure/adventure-difficulty-2026-11-15.md)
 - [火系技能线](adventure/adventure-fire-line-2026-11-15.md)
+- [火系手动技能线与一键连招](adventure/adventure-fire-chain-2026-11-16.md)
+- [停靠点与林晶](adventure/adventure-journey-stops-2026-11-16.md)
+- [剑系自动线、剑意与拔刀斩](adventure/adventure-sword-line-2026-11-16.md)
+- [三片林地与圣所的正式画面](adventure/adventure-painted-maps-2026-11-16.md)
+- [地形机制：石柱、荆棘与毒雾](adventure/adventure-terrain-hazards-2026-11-16.md)
+- [走出口选路与首领圣所](adventure/adventure-exits-sanctuary-2026-11-16.md)
+- [怪物卡通化与攻击动作](adventure/adventure-cartoon-foes-2026-11-16.md)
+- [突进手动线与一键连招](adventure/adventure-dash-line-2026-11-16.md)
 
 ## 审计与方案
 

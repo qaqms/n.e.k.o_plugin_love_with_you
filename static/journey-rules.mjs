@@ -12,6 +12,8 @@ export function installJourney(data) {
 export const nodeAt = index => JOURNEY.nodes[index]
 export const areaAt = index => JOURNEY.areas.find(area => area.id === JOURNEY.nodes[index].area)
 export const lastNode = () => JOURNEY.nodes.length - 1
+// The painted look of a node: its area, or the sanctuary for the boss.
+export const skinAt = index => JOURNEY.nodes[index].type === "boss" ? "boss" : JOURNEY.nodes[index].area
 
 function need(index, goal) {
   return goal === "hold" ? JOURNEY.goals.hold.need : goal === "clear" ? areaAt(index).clear : 0
@@ -65,7 +67,7 @@ export function interval(journey, elapsed) {
 
 export function clearedNodes(snapshot) {
   const journey = snapshot.journey
-  return snapshot.outcome === "cleared" ? JOURNEY.nodes.length : journey.node + Number(journey.phase === "doors")
+  return snapshot.outcome === "cleared" ? JOURNEY.nodes.length : journey.node + Number(journey.phase !== "fight")
 }
 
 export function settlementFor(snapshot) {

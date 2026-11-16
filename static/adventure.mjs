@@ -1,28 +1,31 @@
 import { AdventureApi, adventureErrorCode, errorText } from "./bridge.mjs"
 import { TEXTURES } from "./textures.mjs"
 import { ACTOR_TEXTURES, COMPANION_SHEET, ENEMY_TEXTURES, PLAYER_SHEET, actorImage, fitCompanion, fitPlayer, installActorAtlas } from "./actor-art.mjs"
-import { paintProjectiles } from "./forest-art.mjs"
+import { paintProjectiles, MAP_SKINS, MAP_KINDS } from "./forest-art.mjs"
 import { ForestMap } from "./forest-map.mjs"
 import { fitFoe, loadFoes } from "./foe-art.mjs"
 import { DEPTH } from "./terrain-rules.mjs"
 import { BattleArt } from "./battle-art.mjs"
 import { icon } from "./icons.mjs"
 import { button, element, loadoutSummary, renderShop, settlementDetails, wallet } from "./camp.mjs"
-import { installLine, installMastery, installCatalog, installRoutes, installBuildMods, ROUTES, SKILLS } from "./skills.mjs"
+import { installLine, installCasts, installSwords, installStrikes, installMastery, installCatalog, installRoutes, installBuildMods, ROUTES, SKILLS } from "./skills.mjs"
 import { SkillCombat } from "./combat.mjs"
 import { Encounters } from "./encounters.mjs"
 import { installEncounters, FOES, AFFIXES } from "./encounter-rules.mjs"
-import { installJourney, nodeAt } from "./journey-rules.mjs"
+import { installJourney, nodeAt, skinAt } from "./journey-rules.mjs"
+import { installStops } from "./stop-rules.mjs"
 import { Journey } from "./journey.mjs"
 import { Ultimate, ULTIMATE_ART } from "./ultimate.mjs"
 import { FireArt } from "./fire-art.mjs"
+import { SwordArt, SWORD_ART, DASH_ART } from "./sword-art.mjs"
+import { Hazards } from "./hazards.mjs"
 import { renderStudy, renderStarter, renderRefit, renderCodex, mountSkillHud, updateSkillHud, buildDetails } from "./study.mjs"
 
 try {
-  const responses = await Promise.all(["skills.json", "skills-v2.json", "encounters.json", "skills-expanded.json", "routes.json", "build-mods.json", "journey.json", "mastery.json", "fire-line.json"].map(file => fetch(new URL(file, import.meta.url))))
+  const responses = await Promise.all(["skills.json", "skills-v2.json", "encounters.json", "skills-expanded.json", "routes.json", "build-mods.json", "journey.json", "mastery.json", "fire-line.json", "flame-line.json", "stops.json", "sword-line.json", "dash-line.json"].map(file => fetch(new URL(file, import.meta.url))))
   if (responses.some(response => !response.ok)) throw new Error("技能资源读取失败")
-  const [current, legacy, encounters, expanded, routes, mods, journey, mastery, line] = await Promise.all(responses.map(response => response.json()))
-  installCatalog(current, legacy, expanded); installRoutes(routes); installBuildMods(mods); installEncounters(encounters); installJourney(journey); installMastery(mastery); installLine(line)
+  const [current, legacy, encounters, expanded, routes, mods, journey, mastery, line, casts, stops, swords, strikes] = await Promise.all(responses.map(response => response.json()))
+  installCatalog(current, legacy, expanded); installRoutes(routes); installBuildMods(mods); installEncounters(encounters); installJourney(journey); installMastery(mastery); installLine(line); installCasts(casts); installStops(stops); installSwords(swords); installStrikes(strikes)
 } catch (error) {
   document.getElementById("screen-body").textContent = "技能资源未能载入，请重新打开冒险面板。"
   throw error
@@ -59,6 +62,14 @@ class Forest extends Phaser.Scene {
     this.load.image("fx-fire-bird", "art/fx-fire-bird.jpg")
     this.load.image("fx-fire-slash", "art/fx-fire-slash.jpg"); this.load.image("fx-lava-pool", "art/fx-lava-pool.png")
     this.load.image("fx-hellfire", "art/fx-hellfire.png")
+    for (const id of ["wall", "orb", "pillar"]) this.load.image(`fx-flame-${id}`, `art/fx-flame-${id}.jpg`)
+    this.load.image("fx-flame-domain", "art/fx-flame-domain.png")
+    for (const id of SWORD_ART) this.load.image(`fx-sword-${id}`, `art/fx-sword-${id}.jpg`)
+    for (const id of DASH_ART) this.load.image(`fx-dash-${id}`, `art/fx-dash-${id}.jpg`)
+    for (const skin of MAP_SKINS) {
+      this.load.image(`map-${skin}-ground`, `art/map-${skin}-ground.jpg`)
+      for (const kind of MAP_KINDS) this.load.image(`map-${skin}-${kind}`, `art/map-${skin}-${kind}.png`)
+    }
   }
   create() {
     this.controller = controller
@@ -79,6 +90,7 @@ class Forest extends Phaser.Scene {
     paintProjectiles(this)
     this.art = new BattleArt(this)
     this.fireArt = new FireArt(this)
+    this.swordArt = new SwordArt(this)
     this.terrain.bind()
     $("effects").setAttribute("aria-pressed", String(this.art.reduced))
     const crystal = this.make.graphics({ x: 0, y: 0, add: false })
@@ -114,12 +126,14 @@ class Forest extends Phaser.Scene {
     this.art.reset()
     this.combat?.destroy(); this.combat = null
     this.encounters?.destroy(); this.encounters = null
-    this.journey = null
+    this.journey?.clearExits(); this.journey = null
     this.ultimate?.destroy(); this.ultimate = null
-    this.fireArt.reset()
+    this.hazards?.destroy(); this.hazards = null
+    this.fireArt.reset(); this.swordArt.reset()
     for (const group of [this.enemies, this.bullets, this.drops]) group.clear(true, true)
     this.meta = run
-    this.terrain.load(run.rules >= 8 ? nodeAt(run.snapshot?.journey.node ?? 0).arena : "")
+    const node = run.snapshot?.journey?.node ?? 0
+    this.terrain.load(run.rules >= 8 ? nodeAt(node).arena : "", run.rules >= 8 ? skinAt(node) : "")
     this.terrain.reset(run.rules >= 5)
     this.rng = new Phaser.Math.RandomDataGenerator([run.seed])
     this.elapsed = 0; this.level = 1; this.xp = 0; this.kills = 0; this.partnerKills = 0
@@ -142,8 +156,9 @@ class Forest extends Phaser.Scene {
     }
     if (run.rules >= 2) this.combat = new SkillCombat(this, controller, s)
     if (run.rules >= 4) this.encounters = new Encounters(this, controller, s)
-    if (run.rules >= 8) { this.journey = new Journey(this, controller, s); this.journey.arrive() }
+    if (run.rules >= 8) { this.journey = new Journey(this, controller, s); this.journey.arrive(); this.journey.drawExits() }
     if (run.rules >= 9) this.ultimate = new Ultimate(this, controller, s)
+    if (run.rules >= 16) this.hazards = new Hazards(this, s)
     for (const actor of [this.player, this.companion, ...this.enemies.getChildren()]) this.terrain.restoreActor(actor)
     this.terrain.updateDepth()
     mountSkillHud(this)
@@ -158,7 +173,7 @@ class Forest extends Phaser.Scene {
     $("build-label").textContent = partyLabel(run)
     this.art.update()
   }
-  maxHp() { return 100 + this.meta.loadout.bonuses.vitality + (this.combat ? this.combat.talent("player", "vitality") * 12 : this.ranks.vitality * 18) }
+  maxHp() { return 100 + this.meta.loadout.bonuses.vitality + (this.combat ? this.combat.talent("player", "vitality") * 12 : this.ranks.vitality * 18) + (this.journey?.state.vigor || 0) }
   moveSpeed() { return 170 * (1 + this.meta.loadout.bonuses.stride / 100) * (1 + (this.combat ? this.combat.talent("player", "stride") * .04 : this.ranks.stride * .06)) * (1 + (this.combat?.expanded?.stride() || 0)) }
   pickupRange() { return 60 * (1 + this.meta.loadout.bonuses.reach / 100) + (this.combat ? this.combat.talent("player", "reach") * 12 : this.ranks.reach * 16) }
   xpNeeded() { return this.combat ? 14 + this.level * 7 : 10 + this.level * 5 }
@@ -291,7 +306,7 @@ class Forest extends Phaser.Scene {
     if (!enemy.active) return
     const kind = enemy.getData("kind"), amount = this.encounters && FOES[kind] ? FOES[kind].damage
       : kind === "boss" ? 28 : kind === "brute" ? 18 : 9
-    this.takeDamage(amount * (AFFIXES[enemy.getData("affix")]?.damage ?? 1), enemy)
+    if (this.takeDamage(amount * (AFFIXES[enemy.getData("affix")]?.damage ?? 1), enemy)) this.art?.lunge?.(enemy)
   }
   takeDamage(amount, enemy) {
     if (this.paused || this.outcome !== "playing" || this.elapsed < this.hurtUntil || !enemy?.active) return false
@@ -302,6 +317,7 @@ class Forest extends Phaser.Scene {
     if (this.hp / this.maxHp() <= .3 && !this.lowHealth) {
       this.lowHealth = true; controller.notice(`${this.meta.character}：先拉开距离，我在你身边。`)
     }
+    if (this.hp <= 0 && this.journey?.spare()) { this.hp = 1; this.hurtUntil = this.elapsed + 1500; controller.notice("替身护符碎了，你撑了下来。") }
     if (this.hp <= 0) this.end("defeated")
     else this.combat?.onHurt(enemy)
     return true
@@ -373,6 +389,7 @@ class Forest extends Phaser.Scene {
     if (this.encounters) Object.assign(snapshot, this.encounters.data())
     if (this.journey) Object.assign(snapshot, this.journey.data())
     if (this.ultimate) Object.assign(snapshot, this.ultimate.data())
+    if (this.hazards) Object.assign(snapshot, this.hazards.data())
     return snapshot
   }
   updateHud() {
@@ -446,6 +463,7 @@ class Forest extends Phaser.Scene {
       if (!this.encounters?.foes.has(enemy.getData("id"))) this.terrain.move(enemy, this.player, speed)
     }
     this.encounters?.update()
+    this.hazards?.update()
     if (this.outcome !== "playing" || this.paused) return
     this.combat?.update(delta)
     if (this.outcome !== "playing" || this.paused) return
@@ -469,7 +487,7 @@ class Forest extends Phaser.Scene {
     this.updateHud()
     this.art.update()
     this.ultimate?.paint()
-    this.fireArt.paint()
+    this.fireArt.paint(); this.swordArt.paint()
     this.terrain.updateDepth()
     if (this.elapsed >= END) this.end("timeout")
     else controller.autosave()
@@ -659,7 +677,7 @@ class Controller {
   }
   play() {
     if (this.scene.combat?.craft?.preparation) { this.initialStudy(); return }
-    if (this.scene.journey && !this.scene.journey.fighting && this.scene.outcome === "playing") { this.doors(); return }
+    if (this.scene.journey && !this.scene.journey.fighting && !this.scene.journey.roaming && this.scene.outcome === "playing") { this.doors(); return }
     if (document.hidden || !this.surfaceVisible || !this.foreground) { this.pause(true); return }
     $("screen").hidden = true; this.scene.setPaused(false)
     mountSkillHud(this.scene); $("skill-bar").hidden = !this.scene.combat
@@ -763,7 +781,7 @@ class Controller {
     const journey = this.scene?.journey
     if (!journey || journey.fighting || this.scene.choices.length || this.scene.encounters.state.pending) return
     this.scene.setPaused(true)
-    const body = this.screen("选择去路", journey.title())
+    const body = this.screen(journey.heading(), journey.title())
     journey.render(body)
     if (checkpoint) this.save().catch(error => this.failure(error))
   }

@@ -187,7 +187,37 @@ function paintShade(ctx, width, height, b) {
   }
 }
 
-export function paintForest(scene, width, height, props, arena = "", bounds = null) {
+// Painted arenas (presentation only): one ground picture per area and cut-out props per kind.
+// Collision still comes from the layout footprints; missing pictures fall back to the drawn forest.
+export const MAP_SKINS = ["edge", "ruin", "deep", "boss"]
+export const MAP_KINDS = ["tree", "rock", "rubble", "wall", "column"]
+const painted = (scene, skin) => Boolean(skin) && scene.textures.exists(`map-${skin}-ground`)
+  && MAP_KINDS.every(kind => scene.textures.exists(`map-${skin}-${kind}`))
+
+function paintSkin(scene, ctx, width, height, props, skin, bounds) {
+  const source = scene.textures.get(`map-${skin}-ground`).getSourceImage()
+  // The ground beyond the arena is the same picture, stretched and left in shade.
+  ctx.drawImage(source, 0, 0, width, height)
+  ctx.drawImage(source, bounds.x, bounds.y, bounds.width, bounds.height)
+  for (const p of props) {
+    const r = p.footprint
+    ellipse(ctx, p.x + 6, p.y - 2, r.width * .62, Math.max(6, r.height * .5), "#1c2a2a40", -.08)
+    if (p.kind === "tree") ellipse(ctx, p.x + 18, p.y - 6, 56 * p.scale, 20 * p.scale, "#1e3a3330", -.3)
+  }
+  paintShade(ctx, width, height, bounds)
+}
+
+export function paintForest(scene, width, height, props, arena = "", bounds = null, skin = "") {
+  if (arena && bounds && painted(scene, skin)) {
+    const ground = `map-floor-v1-${arena}-${skin}`
+    canvasTexture(scene, ground, width, height, ctx => paintSkin(scene, ctx, width, height, props.filter(prop => !prop.decor), skin, bounds))
+    const floor = scene.children.getByName("forest-ground")
+      || scene.add.image(0, 0, ground).setOrigin(0).setDepth(DEPTH.ground).setName("forest-ground")
+    floor.setTexture(ground)
+    return props.map(prop => ({ prop, canopy: prop.kind === "tree",
+      image: scene.add.image(prop.x, prop.y + 4, `map-${skin}-${prop.kind}`).setOrigin(.5, .94).setScale(prop.scale)
+        .setFlipX(prop.variant % 2 === 1).setDepth(groundDepth(prop.y)) }))
+  }
   const seed = key => new Phaser.Math.RandomDataGenerator([`border-forest-v3-${key}`])
   const ground = arena ? `forest-ground-v3-${arena}` : "forest-ground-v3"
   canvasTexture(scene, ground, width, height, ctx => {

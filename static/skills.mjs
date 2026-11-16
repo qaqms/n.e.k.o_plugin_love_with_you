@@ -35,6 +35,74 @@ export function artStats(build, id) {
   return { damage: spec.damage * (1 + (level - 1) * .2) * (1 + build.talents.power * .08),
     cooldown: Math.round(spec.cooldown * (1 - (level - 1) * .04) * (later && art ? LINE.slow : 1)), range: spec.range }
 }
+// Rule 13: the manual fire line grows out of the flame ring. One key casts the whole chain.
+export const CASTS = {}
+export function installCasts(data) {
+  if (!SKILLS[data?.root] || data.stages?.length !== 3 || data.ranks?.length !== 4 || !data.stages.flat().every(id => data.arts?.[id])) throw new Error("手动技能线目录不完整")
+  Object.assign(CASTS, structuredClone(data))
+}
+export const castOf = (build, id) => build.casts?.find(cast => cast.id === id) || null
+function castChoices(build) {
+  const casts = build.casts, root = build.skills.find(skill => skill.id === CASTS.root)
+  if (!casts || root?.level !== 5) return []
+  const last = casts.at(-1)
+  if (last && last.level < CASTS.cap) return [`cast:${last.id}`]
+  return (CASTS.stages[casts.length] || []).map(id => `cast:${id}`)
+}
+export function castStats(build, id) {
+  const level = castOf(build, id)?.level || 1, spec = CASTS.arts[id]
+  return { damage: spec.damage * (1 + (level - 1) * .2) * (1 + build.talents.power * .08),
+    cooldown: Math.round(spec.cooldown * (1 - (level - 1) * .04) * (resonance(build).tier >= 3 ? .88 : 1)), range: spec.range }
+}
+// Rule 15: the sword line grows out of the swift slash, with its own resonance.
+export const SWORDS = {}
+export function installSwords(data) {
+  if (!SKILLS[data?.root] || data.stages?.length !== 3 || data.ranks?.length !== 4 || !data.stages.flat().every(id => data.arts?.[id])
+    || data.resonance?.tiers?.length !== 3 || !data.resonance.skills.every(id => SKILLS[id])) throw new Error("剑系技能线目录不完整")
+  Object.assign(SWORDS, structuredClone(data))
+}
+export const swordOf = (build, id) => build.swords?.find(item => item.id === id) || null
+function swordChoices(build) {
+  const swords = build.swords, root = build.skills.find(skill => skill.id === SWORDS.root)
+  if (!swords || root?.level !== 5) return []
+  const last = swords.at(-1)
+  if (last && last.level < SWORDS.cap) return [`sword:${last.id}`]
+  return (SWORDS.stages[swords.length] || []).map(id => `sword:${id}`)
+}
+// Rule 18: the manual sword line grows out of the dash, cast as one chain like the flame line.
+export const STRIKES = {}
+export function installStrikes(data) {
+  if (!SKILLS[data?.root] || data.stages?.length !== 3 || data.ranks?.length !== 4 || !data.stages.flat().every(id => data.arts?.[id])) throw new Error("突进技能线目录不完整")
+  Object.assign(STRIKES, structuredClone(data))
+}
+export const strikeOf = (build, id) => build.strikes?.find(item => item.id === id) || null
+function strikeChoices(build) {
+  const strikes = build.strikes, root = build.skills.find(skill => skill.id === STRIKES.root)
+  if (!strikes || root?.level !== 5) return []
+  const last = strikes.at(-1)
+  if (last && last.level < STRIKES.cap) return [`strike:${last.id}`]
+  return (STRIKES.stages[strikes.length] || []).map(id => `strike:${id}`)
+}
+export function strikeStats(build, id) {
+  const level = strikeOf(build, id)?.level || 1, spec = STRIKES.arts[id]
+  return { damage: spec.damage * (1 + (level - 1) * .2) * (1 + build.talents.power * .08),
+    cooldown: Math.round(spec.cooldown * (1 - (level - 1) * .04) * (swordResonance(build).tier >= 3 ? .88 : 1)), range: spec.range }
+}
+export function swordResonance(build) {
+  if (!build.swords) return { points: 0, tier: 0 }
+  const points = build.skills.filter(skill => SWORDS.resonance.skills.includes(skill.id))
+    .reduce((sum, skill) => sum + 1 + Number(skill.level === 5), 0)
+    + build.swords.reduce((sum, item) => sum + 1 + Number(item.level === SWORDS.cap), 0)
+    + (build.strikes || []).reduce((sum, item) => sum + 1 + Number(item.level === STRIKES.cap), 0)
+  return { points, tier: SWORDS.resonance.tiers.filter(([need]) => points >= need).length }
+}
+export function swordStats(build, id) {
+  const item = swordOf(build, id), spec = SWORDS.arts[id], level = item?.level || 1
+  const later = build.swords.findIndex(entry => entry.id === id) < build.swords.length - 1
+  return { damage: spec.damage * (1 + (level - 1) * .2) * (1 + build.talents.power * .08),
+    cooldown: Math.round(spec.cooldown * (1 - (level - 1) * .04) * (later && item ? SWORDS.slow : 1) * (swordResonance(build).tier >= 3 ? .88 : 1)),
+    range: spec.range }
+}
 export const masteryOf = (build, id) => build.mastery?.[id] || 0
 // Points: one per school skill, one more once awakened or fused, one per mastery rank.
 export function resonance(build) {
@@ -42,6 +110,7 @@ export function resonance(build) {
   const points = build.skills.filter(skill => MASTERY.resonance.skills.includes(skill.id))
     .reduce((sum, skill) => sum + 1 + Number(skill.level === 5) + masteryOf(build, skill.id), 0)
     + (build.arts || []).reduce((sum, art) => sum + 1 + Number(art.level === LINE.cap), 0)
+    + (build.casts || []).reduce((sum, cast) => sum + 1 + Number(cast.level === CASTS.cap), 0)
   return { points, tier: MASTERY.resonance.tiers.filter(([need]) => points >= need).length }
 }
 export const TALENTS = {
@@ -78,7 +147,7 @@ export function installBuildMods(data) {
   Object.assign(SKILL_TAGS, data.tags)
   for (const spec of data.mods) BUILD_MODS[spec.id] = Object.freeze(spec)
 }
-export const buildRules = build => Object.hasOwn(build, "arts") ? 11 : Object.hasOwn(build, "mastery") ? 10 : Object.hasOwn(build, "mods") ? 7 : Object.hasOwn(build.misses, "spark") ? 6 : Object.hasOwn(build.misses, "ice") ? 3 : 2
+export const buildRules = build => Object.hasOwn(build, "strikes") ? 18 : Object.hasOwn(build, "swords") ? 15 : Object.hasOwn(build, "casts") ? 13 : Object.hasOwn(build, "arts") ? 11 : Object.hasOwn(build, "mastery") ? 10 : Object.hasOwn(build, "mods") ? 7 : Object.hasOwn(build.misses, "spark") ? 6 : Object.hasOwn(build.misses, "ice") ? 3 : 2
 export const catalogFor = rules => rules >= 6 ? SKILLS : rules === 2 ? LEGACY_SKILLS : FROST_SKILLS
 export const studyOwner = level => (level - 1) % 3 === 0 ? "companion" : "player"
 export function newSkill(id) { return { id, level: 1, focus: "", branch: "", evolution: "", ready_at: 0, react_at: 0 } }
@@ -92,6 +161,9 @@ export function newBuild(owner, kind, rules = 3, route = kind) {
     ...(rules >= 7 ? { mods: Object.fromEntries(Object.keys(BUILD_MODS).map(key => [key, 0])), banished: [] } : {}),
     ...(rules >= 10 ? { mastery: Object.fromEntries(Object.keys(MASTERY.skills).map(key => [key, 0])) } : {}),
     ...(rules >= 11 ? { arts: [] } : {}),
+    ...(rules >= 13 ? { casts: [] } : {}),
+    ...(rules >= 15 ? { swords: [] } : {}),
+    ...(rules >= 18 ? { strikes: [] } : {}),
   }
 }
 export function legalChoices(build, owner) {
@@ -108,9 +180,9 @@ export function legalChoices(build, owner) {
       if (spec.fusion && build.skills.some(s => s.id === spec.fusion[0] && s.level >= 2)
         && !build.skills.some(s => s.evolution === "fusion")) result.push(`${spec.id}:fuse`)
     } else if (build.mastery && MASTERY.skills[spec.id] && build.mastery[spec.id] < MASTERY.cap
-      && !(build.arts && spec.id === LINE.root)) result.push(`${spec.id}:master`)
+      && !(build.arts && spec.id === LINE.root) && !(build.casts && spec.id === CASTS.root)) result.push(`${spec.id}:master`)
   }
-  result.push(...artChoices(build))
+  result.push(...artChoices(build), ...castChoices(build), ...swordChoices(build), ...strikeChoices(build))
   for (const [key, [, , owners]] of Object.entries(TALENTS)) {
     if (owners.includes(owner) && build.talents[key] < 4) result.push(`talent:${key}`)
   }
@@ -175,6 +247,24 @@ export function applyChoice(build, owner, key) {
     else build.arts.push({ id: action, level: 1 })
     return true
   }
+  if (id === "strike") {
+    const item = strikeOf(build, action)
+    if (item) item.level++
+    else build.strikes.push({ id: action, level: 1 })
+    return true
+  }
+  if (id === "sword") {
+    const item = swordOf(build, action)
+    if (item) item.level++
+    else build.swords.push({ id: action, level: 1 })
+    return true
+  }
+  if (id === "cast") {
+    const cast = castOf(build, action)
+    if (cast) cast.level++
+    else build.casts.push({ id: action, level: 1 })
+    return true
+  }
   if (action === "learn") { build.skills.push(newSkill(id)); return true }
   if (action === "master") { build.mastery[id]++; return true }
   const skill = build.skills.find(s => s.id === id)
@@ -186,6 +276,9 @@ export function applyChoice(build, owner, key) {
 }
 export function skillName(skill, build = null) {
   const spec = SKILLS[skill.id], rank = build ? masteryOf(build, skill.id) : 0
+  if (build?.strikes?.length && skill.id === STRIKES.root) return `${spec.name} · 连招 ${build.strikes.map(item => STRIKES.arts[item.id].name).join("→")}`
+  if (build?.swords?.length && skill.id === SWORDS.root) return `${spec.name} · ${SWORDS.arts[build.swords.at(-1).id].name}`
+  if (build?.casts?.length && skill.id === CASTS.root) return `${spec.name} · 连招 ${build.casts.map(cast => CASTS.arts[cast.id].name).join("→")}`
   if (rank) return `${skill.evolution === "fusion" ? spec.fusion[1] : spec.name} · 精通${NUMERALS[rank - 1]}`
   return skill.evolution === "fusion" ? spec.fusion[1] : `${spec.name}${skill.level === 5 ? " · 觉醒" : ""}`
 }
@@ -206,6 +299,24 @@ export function nextStep(build, skill) {
     if (last && last.level < LINE.cap) return `${selected}${LINE.arts[last.id].name} ${last.level}级 · 升满 ${LINE.cap} 级后进阶`
     return next ? `${selected}下次：进阶${LINE.ranks[build.arts.length + 1]} · ${next.map(id => LINE.arts[id].name).join(" / ")}`
       : `${selected}${LINE.ranks[build.arts.length]}已满，这条线已经走到尽头`
+  }
+  if (skill.level === 5 && build.strikes && skill.id === STRIKES.root) {
+    const last = build.strikes.at(-1), next = STRIKES.stages[build.strikes.length]
+    if (last && last.level < STRIKES.cap) return `${selected}${STRIKES.arts[last.id].name} ${last.level}级 · 升满 ${STRIKES.cap} 级后进阶`
+    return next ? `${selected}下次：进阶${STRIKES.ranks[build.strikes.length + 1]} · ${next.map(id => STRIKES.arts[id].name).join(" / ")}`
+      : `${selected}${STRIKES.ranks[build.strikes.length]}已满，连招已经完整`
+  }
+  if (skill.level === 5 && build.swords && skill.id === SWORDS.root) {
+    const last = build.swords.at(-1), next = SWORDS.stages[build.swords.length]
+    if (last && last.level < SWORDS.cap) return `${selected}${SWORDS.arts[last.id].name} ${last.level}级 · 升满 ${SWORDS.cap} 级后进阶`
+    return next ? `${selected}下次：进阶${SWORDS.ranks[build.swords.length + 1]} · ${next.map(id => SWORDS.arts[id].name).join(" / ")}`
+      : `${selected}${SWORDS.ranks[build.swords.length]}已满，这条线已经走到尽头`
+  }
+  if (skill.level === 5 && build.casts && skill.id === CASTS.root) {
+    const last = build.casts.at(-1), next = CASTS.stages[build.casts.length]
+    if (last && last.level < CASTS.cap) return `${selected}${CASTS.arts[last.id].name} ${last.level}级 · 升满 ${CASTS.cap} 级后进阶`
+    return next ? `${selected}下次：进阶${CASTS.ranks[build.casts.length + 1]} · ${next.map(id => CASTS.arts[id].name).join(" / ")}`
+      : `${selected}${CASTS.ranks[build.casts.length]}已满，连招已经完整`
   }
   if (skill.level === 5 && build.mastery && MASTERY.skills[skill.id]) {
     const rank = build.mastery[skill.id]
@@ -360,6 +471,8 @@ export function parameters(skill, build) {
   }
   if (build.mastery && MASTERY.resonance.skills.includes(skill.id) && resonance(build).tier >= 3) cooldown *= .88
   if (build.arts?.length && skill.id === LINE.root) cooldown *= LINE.slow
+  if (build.swords?.length && skill.id === SWORDS.root) cooldown *= SWORDS.slow
+  if (build.swords && SWORDS.resonance.skills.includes(skill.id) && swordResonance(build).tier >= 3) cooldown *= .88
   return { damage, cooldown: Math.max(250, Math.round(cooldown)), range, count, radius, duration, pierce,
     half, width, knockback, reactCooldown, targets, shieldBonus, followBonus, retaliateRange,
     blastRadius, blastDuration, frostStacks, frostDuration, breakDamage, ...extra }
@@ -379,6 +492,43 @@ export function choiceText(build, key, owner = "player") {
     return { name: `${spec.name} · ${rank}`, type: "强化 / 自动攻击",
       detail: art.level + 1 === LINE.cap && LINE.stages[spec.rank] ? `${spec.text} 升满后可进阶${LINE.ranks[spec.rank + 1]}。` : spec.text,
       change: `${art.level} → ${art.level + 1} 级 · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 间隔 ${(before.cooldown / 1000).toFixed(2)} → ${(next.cooldown / 1000).toFixed(2)} 秒`,
+      icon: spec.icon }
+  }
+  if (id === "strike") {
+    const spec = STRIKES.arts[action], item = strikeOf(build, action), after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const next = strikeStats(after, action), rank = STRIKES.ranks[spec.rank], slot = skillControl(build, STRIKES.root)
+    if (!item) return { name: `进阶${rank} · ${spec.name}`, type: `进阶 / ${slot}`, detail: `${spec.text} ${STRIKES.link}`,
+      change: `${STRIKES.ranks[spec.rank - 1]} → ${rank} · 强度 ${Math.round(next.damage)} · 连招冷却 ${(next.cooldown / 1000).toFixed(1)} 秒`, icon: spec.icon }
+    const before = strikeStats(build, action)
+    return { name: `${spec.name} · ${rank}`, type: `强化 / ${slot}`,
+      detail: item.level + 1 === STRIKES.cap && STRIKES.stages[spec.rank] ? `${spec.text} 升满后可进阶${STRIKES.ranks[spec.rank + 1]}。` : spec.text,
+      change: `${item.level} → ${item.level + 1} 级 · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 冷却 ${(before.cooldown / 1000).toFixed(1)} → ${(next.cooldown / 1000).toFixed(1)} 秒`,
+      icon: spec.icon }
+  }
+  if (id === "sword") {
+    const spec = SWORDS.arts[action], item = swordOf(build, action), after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const next = swordStats(after, action), rank = SWORDS.ranks[spec.rank]
+    if (!item) return { name: `进阶${rank} · ${spec.name}`, type: `进阶 / 自动攻击`, detail: `${spec.text} ${spec.link}`,
+      change: `${SWORDS.ranks[spec.rank - 1]} → ${rank} · 强度 ${Math.round(next.damage)} · 间隔 ${(next.cooldown / 1000).toFixed(2)} 秒`, icon: spec.icon }
+    const before = swordStats(build, action)
+    return { name: `${spec.name} · ${rank}`, type: "强化 / 自动攻击",
+      detail: item.level + 1 === SWORDS.cap && SWORDS.stages[spec.rank] ? `${spec.text} 升满后可进阶${SWORDS.ranks[spec.rank + 1]}。` : spec.text,
+      change: `${item.level} → ${item.level + 1} 级 · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 间隔 ${(before.cooldown / 1000).toFixed(2)} → ${(next.cooldown / 1000).toFixed(2)} 秒`,
+      icon: spec.icon }
+  }
+  if (id === "cast") {
+    const spec = CASTS.arts[action], cast = castOf(build, action), after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const next = castStats(after, action), rank = CASTS.ranks[spec.rank], slot = skillControl(build, CASTS.root)
+    const extra = spec.rank === 3 ? ` ${CASTS.pillarLink}` : ""
+    if (!cast) return { name: `进阶${rank} · ${spec.name}`, type: `进阶 / ${slot}`, detail: `${spec.text}${extra} ${CASTS.link}`,
+      change: `${CASTS.ranks[spec.rank - 1]} → ${rank} · 强度 ${Math.round(next.damage)} · 连招冷却 ${(next.cooldown / 1000).toFixed(1)} 秒`, icon: spec.icon }
+    const before = castStats(build, action)
+    return { name: `${spec.name} · ${rank}`, type: `强化 / ${slot}`,
+      detail: cast.level + 1 === CASTS.cap && CASTS.stages[spec.rank] ? `${spec.text} 升满后可进阶${CASTS.ranks[spec.rank + 1]}。` : spec.text + extra,
+      change: `${cast.level} → ${cast.level + 1} 级 · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 冷却 ${(before.cooldown / 1000).toFixed(1)} → ${(next.cooldown / 1000).toFixed(1)} 秒`,
       icon: spec.icon }
   }
   if (id === "mod") {

@@ -1,6 +1,6 @@
 # 模块职责与玩法扩展入口
 
-结构覆盖至版本：0.9.0（2026-11-16，由原开发编号 0.12.4 调整）。文中的源码路径均相对插件根目录。本文描述当前结构；[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
+结构覆盖至版本：0.9.2（2026-11-16；0.9.0 由原开发编号 0.12.4 调整；0.9.2 包含开发步骤 0.9.1–0.9.8）。文中的源码路径均相对插件根目录。本文描述当前结构；[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
 
 发布工具 `tools/build/audit_release.py` 扫描源码、历史与导入包并隐去疑似凭据值；`verify_adventure_package.py` 验证运行资源、文件范围、哈希及合成旧存档迁移；`precheck_release.py` 在临时源码副本调用官方 SDK 预检。对应路径与凭据泄漏回归见 `tests/test_release_hygiene.py`，检查结果及素材许可待办见[发布审计](audits/release-readiness-2026-11-16.md)。浏览器测试拥有自己的临时存档目录，并在正常结束及启动失败时清理。
 
@@ -22,7 +22,7 @@ README 面向插件用户；安装、功能和隐私集中在首页，开发入�
 | `backend/infrastructure/storage.py`、`backend/infrastructure/json_codec.py` | 原子文件替换、有界读写和严格 JSON | 判断玩法奖励、自动覆盖不支持的存档 | `tests/test_storage.py`、`test_host_transport.py` |
 | `backend/infrastructure/host.py` | 有界本机只读查询、宿主历史适配 | 修改宿主、冒用授权或把旧历史当新事件 | `tests/test_host_history.py`、`test_host_transport.py` |
 | `backend/relationship/portraits.py`、`backend/relationship/appearance.py` | 独立素材和外观文件、验证与偏好 | 关系评分代次或聊天内容 | `tests/test_portraits.py`、`test_appearance.py` |
-| `backend/adventure/service.py` | 独立冒险存档、全局修订、单局控制、检查点、新旧战斗规则绑定、旧文件到 v13 的备份迁移、规则 12 开局、金币/终局/强化的原子保存和回执 | 修改关系/礼物金币、调用模型 | `tests/test_adventure.py`，再接运行时启停与隔离测试 |
+| `backend/adventure/service.py` | 独立冒险存档、全局修订、单局控制、检查点、新旧战斗规则绑定、旧文件到 v18 的备份迁移、规则 17 开局、金币/终局/强化的原子保存和回执 | 修改关系/礼物金币、调用模型 | `tests/test_adventure.py`，再接运行时启停与隔离测试 |
 | `backend/adventure/economy.py` | 冒险奖励公式、永久强化目录/上限/价格、购买/退款、钱包与效果校验 | SDK、网络、写文件、礼物经济 | 冒险规则与运行时经济隔离测试 |
 | `backend/adventure/skills.py` | 按战斗版本读取目录，校验双方槽位、分支、进化、候选、冷却、弹体形态、区域、凝霜、敌人状态与协同快照；规则 7 增加选招阶段、四候选、类型改造、放逐与换招额度，遭遇校验在公共实体校验后执行 | 逐帧模拟、选择技能、写存档 | `tests/test_adventure.py` 的规则 2–7、异常快照与迁移测试 |
 
@@ -64,6 +64,14 @@ README 面向插件用户；安装、功能和隐私集中在首页，开发入�
 | `static/journey.mjs` | 规则 8 的运行时：段落完成时清场与发奖、选门界面、换场地与召唤守关强敌；通过控制器保存，不直接发放金币 | `tools/tests/test_adventure.mjs` 的 rule8 用例（整局、读档、响应丢失、手机布局） |
 | `static/mastery.json` | 规则 10 的精通目录（每个技能三档的名称与说明）和流派共鸣的档位；`skills.mjs` 的 `installMastery`、`masteryOf`、`resonance` 读取它，后端 `backend/adventure/skills.py` 用同一份文件校验 | `tools/tests/test_mastery.mjs`，`tests/test_adventure.py` 的 rule10 用例 |
 | `static/fire-line.json`、`fire-line.mjs` | 规则 11 的火系技能线：进阶形态目录，以及焰刃、喷焰、爆炎、熔流、狱炎弹、瞬燃的判定与连携；计时器、待爆法阵和熔岩池是短时状态，不进存档。进阶的合法性与数值在 `skills.mjs`（`installLine`、`artStats`、`levelCap`） | `tools/tests/test_mastery.mjs`、`tools/tests/test_adventure.mjs` 的 rule11 用例、`tests/test_adventure.py` 的 rule11 用例 |
+| `static/flame-line.json`、`flame-line.mjs` | 规则 13 的火系手动技能线：炎墙、大炎球、地脉、燃域、炎柱的目录、一键连招队列、判定与连携；短时状态不存档，画面在 `fire-art.mjs` 的 `paintCasts` | 写快照、消费战斗随机数 | `tools/tests/test_flame_line.mjs`、`tests/test_adventure.py` 的规则 13 用例、浏览器 `rule13` 用例 |
+| `static/stops.json`、`stop-rules.mjs`（及 `journey.mjs` 的停靠部分） | 规则 14 的停靠点：停靠门、篝火／行商／奇遇的内容与效果、林晶、战意与带路、替身护符；内容从存档随机数抽取并存进旅程快照 | 修改局外金币或结算公式 | `tools/tests/test_stops.mjs`、`tests/test_adventure.py` 的规则 14 用例、浏览器 `rule14` 用例 |
+| `static/sword-line.json`、`sword-line.mjs`、`sword-art.mjs` | 规则 15 的剑系自动线（瞬光、流返、幻剑、剑压、千刃、断界）、剑意、剑系共鸣，以及 `ultimate.mjs` 里按流派选择的拔刀斩；剑意和形态计时不存档 | 写快照、消费战斗随机数 | `tools/tests/test_swords.mjs`、`tests/test_adventure.py` 的规则 15 用例、浏览器 `rule15` 用例 |
+| `static/forest-art.mjs` 的 `paintSkin`、`forest-map.mjs` 的 `load(arena, skin)`、`journey-rules.mjs` 的 `skinAt` | 步骤 0.9.4 起旅程各段的正式画面：林缘、苔石遗迹、荆棘深处、首领圣所的底图和障碍物贴图；只改画面，碰撞来自布局 | 改碰撞框、写快照 | 浏览器 `painted arenas` 用例和地形相关用例 |
+| `static/hazards.mjs`，`terrain-rules.mjs` 的 `HAZARDS`，`forest-map.mjs` 的 `removeProp` | 规则 16 的地形机制：遗迹石柱磨损与倒塌（存档 `terrain`）、深处荆棘减速与毒雾 | 改其他布局、消费战斗随机数 | `tests/test_adventure.py` 的规则 16 用例、浏览器 `rule16` 用例 |
+| `static/journey.mjs` 的出口部分（`walking`、`drawExits`、`walk`）与 `hazards.mjs` 的 `sanctuary` | 规则 17：打完一段后在场地边缘亮出出口，走进去选路，暂停仍可用面板；首领圣所第二阶段立石发光，第三阶段根须封场 | 改快照格式 | 浏览器 `rule17` 用例 |
+| `static/foe-art.mjs` 的 `FOE_SHEETS`，`battle-art.mjs` 的 `motionOf`、`lunge`、`strikeFx` | 步骤 0.9.7 卡通怪物：16 格动作表（移动、蓄力、出招、受击、死亡），蓄力跟随遭遇战 AI，出手和接触时播放出招与特效，面向玩家；只改画面 | 改碰撞体或缩放 | 浏览器 `cartoon enemies`、`raster` 用例 |
+| `static/dash-line.json`、`dash-line.mjs`，`sword-art.mjs` 的 `DASH_ART` | 规则 18 的突进手动线（连斩、回身斩、八方斩、残影、剑域）与一键连招；每刀走 `swordLine.strike`，连招队列和剑域计时不存档 | 写快照、绕过地形落点检查 | `tools/tests/test_strikes.mjs`、`tests/test_adventure.py` 的规则 18 用例、浏览器 `rule18` 用例 |
 | `static/encounters.mjs`、`encounter-rules.mjs`（规则 12 部分） | 精英词缀的目录、出现概率与抽取，分裂与援兵的生成，守关强敌和首领按阶段选择的预警排布；精英光环在同一个预警图层绘制 | `tools/tests/test_adventure.mjs` 的 rule12 用例、`tests/test_adventure.py` 的 rule12 用例 |
 | `static/fire-art.mjs` | 火系的贴图特效：爆炸图池与焰环法阵；只读战斗状态，不参与结算，贴图缺失时由调用方回退到矢量爆炸 | 浏览器截图检查 |
 | `static/ultimate.mjs` | 规则 9 的终结技：按击败充能、流派归属、特写定帧、落地伤害与叠加特效；能量随快照保存，特写与特效不进存档 | `tools/tests/test_journey_rules.mjs` 的纯函数用例与 `tools/tests/test_adventure.mjs` 的 rule9 用例 |

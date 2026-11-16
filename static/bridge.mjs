@@ -150,10 +150,10 @@ export class AdventureApi {
     const view = await this.call({ operation: "read", client: this.client })
     if (!view || !Number.isSafeInteger(view.revision) || typeof view.epoch !== "string"
       || !Array.isArray(view.characters) || typeof view.owns_control !== "boolean"
-      || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(view.rules) || !view.characters.every(name => typeof name === "string" && name.length <= 100)
+      || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(view.rules) || !view.characters.every(name => typeof name === "string" && name.length <= 100)
       || !Object.hasOwn(view, "run") || !validEconomy(view.economy, view.shop)
       || (view.run !== null && (!object(view.run) || !validLoadout(view.run.loadout, view.shop)
-        || !["active", "ended"].includes(view.run.status) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(view.run.rules ?? 1)
+        || !["active", "ended"].includes(view.run.status) || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].includes(view.run.rules ?? 1)
         || (view.run.rules === 6 && ["player", "companion"].some(owner =>
           typeof view.run[`${owner}_route`] !== "string" || !Object.hasOwn(ROUTES, view.run[`${owner}_route`])
           || ROUTES[view.run[`${owner}_route`]].class !== view.run[`${owner}_class`]))

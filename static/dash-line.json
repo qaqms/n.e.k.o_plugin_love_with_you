@@ -1,0 +1,22 @@
+{
+ "line": "dash",
+ "root": "dash",
+ "cap": 5,
+ "lower": 0.6,
+ "gap": 260,
+ "ranks": ["初级", "中级", "上级", "圣级"],
+ "stages": [["chain", "return"], ["star", "echo"], ["domain"]],
+ "arts": {
+  "chain": {"name": "连斩", "rank": 1, "icon": "Swords", "damage": 46, "cooldown": 7000, "range": 260,
+   "text": "接着突进，在敌群里折线连冲三次，每次冲向最近的敌人，斩中沿途所有敌人。"},
+  "return": {"name": "回身斩", "rank": 1, "icon": "RotateCw", "damage": 58, "cooldown": 7000, "range": 210,
+   "text": "回身挥出一道宽大的新月斩，片刻后再斩回一次，两次都命中身前半圆里的敌人。"},
+  "star": {"name": "八方斩", "rank": 2, "icon": "Zap", "damage": 72, "cooldown": 9000, "range": 300,
+   "text": "冲进附近敌群最密的地方，向八个方向同时斩出，每道剑光长 160。"},
+  "echo": {"name": "残影", "rank": 2, "icon": "Wind", "damage": 64, "cooldown": 9000, "range": 0,
+   "text": "这次连招的突进路线上留下残影，0.5 秒后和 1 秒后各把这一路再斩一遍。"},
+  "domain": {"name": "剑域", "rank": 3, "icon": "Orbit", "damage": 54, "cooldown": 15000, "range": 260,
+   "text": "展开半径 260 的剑阵，约 2 秒内在阵中瞬移，每 0.15 秒斩一个敌人，优先斩还没斩过的；期间无敌。"}
+ },
+ "link": "一键连招：按一次突进键，先突进，再每隔 0.26 秒依次放出已学会的形态；低阶各段伤害为六成，冷却按最高阶形态计算。每一刀都叠剑意。"
+}

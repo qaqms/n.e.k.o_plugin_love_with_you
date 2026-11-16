@@ -20,18 +20,20 @@ export class ForestMap {
     this.reset(false)
   }
   // "" is the full rule 5 forest; any other id is a rule 8 arena.
-  load(arena) {
-    if (this.arena === arena) return
+  // `skin` picks the painted look of an arena (its area, or the boss sanctuary); it never changes collision.
+  load(arena, skin = "", force = false) {
+    if (this.arena === arena && this.skin === skin && !force && !this.removed) return
+    this.removed = false
     const scene = this.s, bounds = arena ? ARENAS[arena].bounds : null
-    this.arena = arena
+    this.arena = arena; this.skin = skin
     for (const { image } of this.visuals) image.destroy()
     this.solids.clear(true, true)
     this.geometry = new TerrainGeometry(arena ? arenaLayout(arena) : forestLayout(), bounds)
-    this.visuals = paintForest(scene, WORLD.width, WORLD.height, this.geometry.props, arena, bounds)
+    this.visuals = paintForest(scene, WORLD.width, WORLD.height, this.geometry.props, arena, bounds, skin)
     for (const prop of this.geometry.props) {
       if (prop.decor) continue
       const r = prop.footprint
-      const zone = scene.add.zone(r.x + r.width / 2, r.y + r.height / 2, r.width, r.height)
+      const zone = scene.add.zone(r.x + r.width / 2, r.y + r.height / 2, r.width, r.height).setData("prop", prop.id)
       scene.physics.add.existing(zone, true); this.solids.add(zone)
     }
     const a = this.geometry.area
@@ -45,7 +47,26 @@ export class ForestMap {
       this.colliders.push(s.physics.add.collider(actor, this.solids, null, enabled))
     }
     this.colliders.push(s.physics.add.overlap(s.bullets, this.solids,
-      bolt => { if (bolt.active) { s.art.impact(bolt.x, bolt.y, bolt.getData("skill")); bolt.destroy() } }, enabled))
+      (bolt, zone) => {
+        if (!bolt.active) return
+        s.art.impact(bolt.x, bolt.y, bolt.getData("skill"))
+        s.hazards?.strike(zone.getData("prop"), bolt.getData("damage") || 0)
+        bolt.destroy()
+      }, enabled))
+  }
+  // Rule 16: a broken pillar leaves the layout. Collision, routes and its picture change; the rest stays.
+  removeProp(id, rubble) {
+    const prop = this.geometry.props.find(item => item.id === id)
+    if (!prop) return false
+    this.geometry.props = this.geometry.props.filter(item => item !== prop)
+    this.geometry.rects = this.geometry.props.filter(p => !p.decor).map(p => p.footprint)
+    for (const zone of [...this.solids.getChildren()]) if (zone.getData("prop") === id) zone.destroy()
+    const visual = this.visuals.find(item => item.prop === prop)
+    if (visual && rubble && this.s.textures.exists(rubble)) visual.image.setTexture(rubble).setScale(1.25).setOrigin(.5, .8)
+    else visual?.image.setVisible(false)
+    if (visual) visual.prop = { ...prop, kind: "rubble", footprint: { ...prop.footprint, height: 0 } }
+    this.routes = new WeakMap(); this.graphs.clear(); this.removed = true
+    return true
   }
   reset(enabled) {
     this.enabled = enabled

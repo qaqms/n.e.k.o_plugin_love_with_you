@@ -5,6 +5,9 @@ import { Buildcraft } from "./buildcraft.mjs"
 import { isBoss } from "./encounter-rules.mjs"
 import { paintCombat } from "./battle-art.mjs"
 import { FireLine } from "./fire-line.mjs"
+import { FlameLine } from "./flame-line.mjs"
+import { SwordLine } from "./sword-line.mjs"
+import { DashLine } from "./dash-line.mjs"
 import { DEPTH } from "./terrain-rules.mjs"
 
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
@@ -35,6 +38,9 @@ export class SkillCombat {
     this.burns = new Map(); this.blasts = []; this.birdAt = { player: 0, companion: 0 }
     this.tiers = { player: this.tier("player"), companion: this.tier("companion") }
     this.line = scene.meta.rules >= 11 ? new FireLine(this) : null
+    this.flameLine = scene.meta.rules >= 13 ? new FlameLine(this) : null
+    this.swordLine = scene.meta.rules >= 15 ? new SwordLine(this) : null
+    this.dashLine = scene.meta.rules >= 18 ? new DashLine(this) : null
   }
   mastery(owner, id) { return masteryOf(this.builds[owner], id) }
   tier(owner) { return resonance(this.builds[owner]).tier }
@@ -46,6 +52,7 @@ export class SkillCombat {
   }
   // Damage everything near a point except the enemy that was already hit directly.
   splash(point, radius, damage, owner, except = null, form = "awakened") {
+    this.s.hazards?.area(point, radius, damage)
     if (!this.s.fireArt?.boom(point.x, point.y, radius)) this.flash(point.x, point.y, radius, COLORS.fire, form)
     else if (form === "meteor") this.s.art?.shake?.(.006, 160)
     for (const other of [...this.s.enemies.getChildren()]) {
@@ -88,7 +95,7 @@ export class SkillCombat {
   talent(owner, id) { return this.builds[owner].talents[id] }
   actor(owner) { return owner === "player" ? this.s.player : this.s.companion }
   damage(owner, value) {
-    return value * (1 + this.s.meta.loadout.bonuses.power / 100)
+    return value * (1 + this.s.meta.loadout.bonuses.power / 100) * (owner === "player" && this.flameLine ? this.flameLine.boost() : 1) * (this.s.journey?.boost?.() ?? 1)
       * (owner === "companion" ? .85 * (1 + this.s.meta.bonus / 100) * (this.s.encounters?.has("escort") ? 1.12 : 1) : 1)
   }
   data() {
@@ -176,6 +183,7 @@ export class SkillCombat {
         const bird = bolt.getData("form") === "bird"
         this.ignite(enemy, owner, bolt.getData("damage"))
         if (enemy.active) this.line?.onBolt(enemy, owner, bolt.getData("damage"))
+        if (enemy.active && s.outcome === "playing") this.flameLine?.onBolt(enemy, owner, bolt.getData("damage"))
         if (s.outcome !== "playing") return
         if (this.mastery(owner, "fire") >= 1) this.splash(position, bird ? 110 : 60, bolt.getData("damage") * (bird ? .6 : .4), owner, enemy, bird ? "meteor" : "awakened")
         if (s.outcome !== "playing") return
@@ -211,12 +219,15 @@ export class SkillCombat {
       const a = Math.atan2(enemy.y - actor.y, enemy.x - actor.x) - angle
       if (Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) > half) continue
       const amount = this.damage(owner, p.damage) * multiplier
-      this.deal(enemy, this.frost?.strike(enemy, owner, skill.id, amount) ?? amount, owner)
+      const hit = this.frost?.strike(enemy, owner, skill.id, amount) ?? amount
+      if (this.swordLine) this.swordLine.strike(enemy, owner, hit)
+      else this.deal(enemy, hit, owner)
       if (this.s.outcome !== "playing") return
       if (enemy.active && skill.branch === "sweep" && !isBoss(enemy)) {
         this.push(enemy, actor, p.knockback)
       }
     }
+    this.s.hazards?.area({ x: actor.x + Math.cos(angle) * p.range * .5, y: actor.y + Math.sin(angle) * p.range * .5 }, p.range * .5, this.damage(owner, p.damage) * multiplier)
     // Lines reveal the actual arc rather than presenting a melee hit as a projectile.
     const lines = [angle - half, angle, angle + half].map(a => ({
       x: actor.x + Math.cos(a) * p.range, y: actor.y + Math.sin(a) * p.range,
@@ -310,6 +321,11 @@ export class SkillCombat {
     if (expanded === false) return false
     if (expanded === true) {
       if (s.outcome !== "playing") return true
+    } else if (skill.id === "flame" && this.flameLine?.active()) {
+      const spot = this.flameLine.cast(skill, p, s.encounters?.has("cadence") ? .9 : 1, s.encounters?.has("embers") ? 1.15 : 1)
+      if (!spot) return this.castFailure("连招范围内没有敌人 · 未消耗冷却")
+      if (s.outcome !== "playing") return true
+      this.follow("flame", spot)
     } else if (skill.id === "flame") {
       const target = this.targetGroup(s.player, p.range)
       if (!target) return this.castFailure("焰环范围内没有敌人 · 未消耗冷却")
@@ -348,13 +364,15 @@ export class SkillCombat {
         const dx = end.x - start.x, dy = end.y - start.y
         const t = clamp(((enemy.x - start.x) * dx + (enemy.y - start.y) * dy) / (dx * dx + dy * dy), 0, 1)
         if (distance(enemy, { x: start.x + t * dx, y: start.y + t * dy }) <= p.width && s.terrain.lineClear(start, enemy)) {
-          const amount = this.damage("player", p.damage)
-          this.deal(enemy, this.frost?.strike(enemy, "player", skill.id, amount) ?? amount, "player")
+          const amount = this.damage("player", p.damage), hit = this.frost?.strike(enemy, "player", skill.id, amount) ?? amount
+          if (this.swordLine) this.swordLine.strike(enemy, "player", hit)
+          else this.deal(enemy, hit, "player")
           if (s.outcome !== "playing") return true
         }
       }
       if (skill.branch === "guarded") s.shield = Math.min(200, Math.max(s.shield, 12 + skill.level * 2 + p.shieldBonus))
       this.flash(end.x, end.y, 55, COLORS.slash, this.modern && skill.level === 5 ? "awakened" : "base")
+      if (this.dashLine?.active() && s.outcome === "playing") this.dashLine.chain(skill, start, end, s.encounters?.has("cadence") ? .9 : 1)
       this.follow("dash", end)
     } else return false
     s.art?.cast("player", skill.id, Math.atan2(this.facing.y, this.facing.x))
@@ -416,6 +434,8 @@ export class SkillCombat {
   }
   onHurt(enemy) {
     if (this.s.outcome !== "playing") return
+    this.swordLine?.onHurt()
+    if (this.s.outcome !== "playing") return
     for (const owner of ["player", "companion"]) {
       const skill = this.skill(owner, "guard")
       if (skill?.branch !== "counter" || skill.react_at > this.s.elapsed || !enemy.active
@@ -458,6 +478,9 @@ export class SkillCombat {
     this.frost?.update()
     this.burn()
     if (s.outcome === "playing") this.line?.update()
+    if (s.outcome === "playing") this.flameLine?.update()
+    if (s.outcome === "playing") this.swordLine?.update()
+    if (s.outcome === "playing") this.dashLine?.update()
     this.paint()
   }
   paint() {

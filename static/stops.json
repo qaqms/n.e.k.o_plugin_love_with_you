@@ -1,0 +1,64 @@
+{
+ "at": [1, 4, 7],
+ "shards": {"fight": 3, "hard": 3, "elite": 8, "cap": 200},
+ "vigor": {"step": 15, "cap": 45},
+ "kinds": {
+  "camp": {"name": "篝火", "icon": "Flame", "text": "在火边歇一歇，三选一。"},
+  "shop": {"name": "行商", "icon": "ShoppingBag", "text": "用林晶换点有用的东西。"},
+  "event": {"name": "奇遇", "icon": "Sparkles", "text": "林子深处好像有什么。"}
+ },
+ "camp": [
+  {"id": "mend", "name": "睡一觉", "text": "回复 40% 生命。", "effects": [["heal", 0.4]]},
+  {"id": "vigor", "name": "活动筋骨", "text": "生命上限 +15，并回复等量生命。", "effects": [["vigor", 15]]},
+  {"id": "study", "name": "温习功课", "text": "立即获得一次研习。", "effects": [["study", 1]]}
+ ],
+ "items": {
+  "study": {"name": "研习札记", "icon": "BookOpen", "price": 6, "text": "立即获得一次研习。", "effects": [["study", 1]]},
+  "mend": {"name": "回春药", "icon": "Heart", "price": 4, "text": "回复 30% 生命。", "effects": [["heal", 0.3]]},
+  "insight": {"name": "灵感香", "icon": "RotateCw", "price": 3, "text": "研习重选次数 +1（最多 2）。", "effects": [["reroll", 1]]},
+  "power": {"name": "战意符", "icon": "Swords", "price": 5, "text": "下一段战斗中，你和同行的伤害 +20%。", "effects": [["boon", "power"]]},
+  "charm": {"name": "替身护符", "icon": "Shield", "price": 8, "text": "下一次受到致命伤时保留 1 点生命，护符碎掉。", "effects": [["charm", 1]]}
+ },
+ "boons": {
+  "power": "战意：下一段伤害 +20%",
+  "bounty": "带路：下一段林晶翻倍"
+ },
+ "events": [
+  {"id": "altar", "name": "古祭坛", "text": "苔藓下的石祭坛还残留着微光，台面上有一道干涸的刻痕。",
+   "options": [
+    {"label": "献上一点血", "text": "失去 20% 生命，获得一次研习。", "effects": [["hurt", 0.2], ["study", 1]], "result": "刻痕亮起，一段陌生的咒文浮现在脑海里。"},
+    {"label": "离开", "text": "什么也不做。", "effects": [], "result": "你绕开了祭坛。"}
+   ]},
+  {"id": "slime", "name": "迷路的史莱姆", "text": "一只小史莱姆躲在树根后面，看起来找不到回家的路。",
+   "options": [
+    {"label": "护送它回家", "text": "下一段战斗得到的林晶翻倍。", "effects": [["boon", "bounty"]], "result": "它蹦蹦跳跳地跟在后面，说要给你带路。"},
+    {"label": "分它一点干粮", "text": "林晶 +2。", "effects": [["shards", 2]], "result": "它吃完吐出两颗亮晶晶的东西就跑了。"}
+   ]},
+  {"id": "chest", "name": "裂开的宝箱", "text": "一只旧宝箱裂开了一道缝，缝里透出林晶的光。",
+   "options": [
+    {"label": "只拿露出来的", "text": "林晶 +5。", "effects": [["shards", 5]], "result": "你小心地抠出了几颗林晶。"},
+    {"label": "撬开它", "text": "一半可能得到 12 林晶，一半可能被拟态怪咬掉 25% 生命。", "gamble": [
+      {"effects": [["shards", 12]], "result": "箱子里满是林晶！"},
+      {"effects": [["hurt", 0.25]], "result": "箱子张开了嘴——是拟态怪！你挨了一口才挣脱。"}
+     ]}
+   ]},
+  {"id": "spring", "name": "林间泉水", "text": "阳光落在一汪清泉上，水面泛着淡淡的绿光。",
+   "options": [
+    {"label": "喝几口", "text": "回复 30% 生命。", "effects": [["heal", 0.3]], "result": "泉水清凉，疲惫一扫而空。"},
+    {"label": "装一瓶带走", "text": "林晶 +4（之后卖给行商）。", "effects": [["shards", 4]], "result": "你把泉水装进了瓶子。"}
+   ]},
+  {"id": "embers", "name": "旅人的营火残迹", "text": "一堆熄灭不久的营火，旁边散落着别人留下的行囊。",
+   "options": [
+    {"label": "翻找行囊", "text": "一半可能找到一本笔记（一次研习），一半只找到 1 林晶。", "gamble": [
+      {"effects": [["study", 1]], "result": "是一本写满心得的笔记！"},
+      {"effects": [["shards", 1]], "result": "只剩下一颗林晶。"}
+     ]},
+    {"label": "坐下歇脚", "text": "回复 15% 生命。", "effects": [["heal", 0.15]], "result": "余温还在，你稍微缓了口气。"}
+   ]},
+  {"id": "stele", "name": "苔藓石碑", "text": "一块刻满古字的石碑，字迹讲的似乎是战斗的心得。",
+   "options": [
+    {"label": "仔细研读", "text": "研习重选次数 +1，林晶 +2。", "effects": [["reroll", 1], ["shards", 2]], "result": "你记下了几种不同的思路。"},
+    {"label": "拓印下来", "text": "下一段战斗中，你和同行的伤害 +20%。", "effects": [["boon", "power"]], "result": "拓片上的字句让你跃跃欲试。"}
+   ]}
+ ]
+}

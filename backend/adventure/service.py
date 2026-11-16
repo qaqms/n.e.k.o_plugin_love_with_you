@@ -17,8 +17,8 @@ from . import journey as journey
 from . import skills as skills
 from .economy import AdventureError
 
-VERSION = 13
-RULES = 12
+VERSION = 19
+RULES = 18
 DURATION = 20 * 60 * 1000
 WORLD = (1800, 1200)
 CLASSES = ("guardian", "mage")
@@ -45,13 +45,15 @@ def settle(snapshot: dict[str, Any]) -> dict[str, int]:
 
 def validate_snapshot(value: Any, *, nodes: bool = False) -> dict[str, Any]:
     """Validate the entire bounded checkpoint, including pending upgrade choices."""
-    if isinstance(value, dict) and type(value.get("rules")) is int and value["rules"] in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+    if isinstance(value, dict) and type(value.get("rules")) is int and value["rules"] in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
         common = skills.validate_extra(value)
         validate_snapshot(common, nodes=value["rules"] >= 8)
         if value["rules"] >= 4:
             skills.validate_encounters(value, value["builds"])
         if value["rules"] >= 8:
             journey.validate(value)
+        if value["rules"] >= 16:
+            journey.validate_terrain(value)
         return copy.deepcopy(value)
     if not isinstance(value, dict) or set(value) != {
         "rules", "elapsed", "rng", "player", "companion", "enemies", "bullets", "drops",
@@ -167,7 +169,7 @@ class AdventureStore:
         elif raw is not None:
             try:
                 source_version = raw.get("version") if isinstance(raw, dict) else None
-                if type(source_version) is not int or source_version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, VERSION):
+                if type(source_version) is not int or source_version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, VERSION):
                     raise AdventureError("adventure_recovery_required")
                 self._validate_file(raw, version=source_version)
                 migrated = copy.deepcopy(raw)
@@ -224,7 +226,13 @@ class AdventureStore:
                 else (1, 2, 3, 4, 5, 6, 7) if version == 8 else (1, 2, 3, 4, 5, 6, 7, 8) if version == 9
                 else (1, 2, 3, 4, 5, 6, 7, 8, 9) if version == 10 else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) if version == 11
                 else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11) if version == 12
-                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12) if version == 13
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13) if version == 14
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14) if version == 15
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15) if version == 16
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16) if version == 17
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17) if version == 18
+                else (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
             )):
                 raise AdventureError("adventure_recovery_required")
             if run.get("rules") == 6 and any(
@@ -356,7 +364,7 @@ class AdventureStore:
                 if not base_fields <= set(values) <= allowed_fields or (
                     values["player_class"] not in CLASSES or values["companion_class"] not in CLASSES
                     or values["character"] != character or not 1 <= len(character) <= 100
-                    or type(values.get("rules", 1)) is not int or values.get("rules", 1) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+                    or type(values.get("rules", 1)) is not int or values.get("rules", 1) not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
                 ):
                     raise AdventureError("adventure_invalid_request")
                 updated["sequence"] += 1

@@ -1,4 +1,4 @@
-import { LINE, newSkill, parameters, starterSkills, drawChoices, replacementChoices } from "./skills.mjs"
+import { LINE, CASTS, SWORDS, STRIKES, newSkill, parameters, starterSkills, drawChoices, replacementChoices } from "./skills.mjs"
 import { legalCooperations } from "./encounter-rules.mjs"
 
 // Rule 7 decisions share the checkpoint acknowledgement path with ordinary study.
@@ -69,6 +69,9 @@ export class Buildcraft {
       build.skills.splice(index, 1, learned)
       if (build.mastery && id in build.mastery) build.mastery[id] = 0
       if (build.arts && id === LINE.root) { build.arts = []; this.c.line?.clear() }
+      if (build.casts && id === CASTS.root) { build.casts = []; this.c.flameLine?.clear() }
+      if (build.swords && id === SWORDS.root) { build.swords = []; this.c.swordLine?.clear() }
+      if (build.strikes && id === STRIKES.root) { build.strikes = []; this.c.dashLine?.clear() }
       this.swaps[owner]++
       // Remove effects that would outlive their owning skill or catalyst.
       for (const bolt of [...this.s.bullets.getChildren()]) if (bolt.getData("owner") === owner) bolt.destroy()

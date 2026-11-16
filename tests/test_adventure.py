@@ -9,7 +9,7 @@ import pytest
 
 @pytest.fixture
 def module(storage):
-    return importlib.import_module(storage.__package__ + "._adventure")
+    return importlib.import_module("..adventure.service", storage.__package__)
 
 
 @pytest.fixture

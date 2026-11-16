@@ -10,7 +10,10 @@ vendor/
 /.vendor.backup-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 /.vendor.backup-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].pending
 dist/
-build/
+/build/
+archive/
+.benchmarks/
+tools/.build-env/
 node_modules/
 *.egg-info/
 store.db

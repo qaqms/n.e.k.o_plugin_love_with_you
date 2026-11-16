@@ -78,12 +78,18 @@ export function decode(value) {
   throw new Error("无法核对操作结果，请保留窗口并确认上次操作。")
 }
 
-export function errorText(error) {
+export function adventureErrorCode(error) {
   for (const text of [String(error?.code || ""), String(error?.message || error)]) {
-    for (const [code, message] of Object.entries(messages)) {
-      if (new RegExp(`(^|[^A-Za-z0-9_])${code}($|[^A-Za-z0-9_])`).test(text)) return message
+    for (const code of Object.keys(messages)) {
+      if (new RegExp(`(^|[^A-Za-z0-9_])${code}($|[^A-Za-z0-9_])`).test(text)) return code
     }
   }
+  return ""
+}
+
+export function errorText(error) {
+  const code = adventureErrorCode(error)
+  if (code) return messages[code]
   const text = String(error?.message || error?.code || error)
   return text.length < 160 ? text : "连接失败，请保留窗口并重试。"
 }
@@ -128,7 +134,7 @@ export class AdventureApi {
         const result = await fetch("/plugin/love_with_you/hosted-ui/action/adventure_action", {
           method: "POST", credentials: "same-origin", signal: controller.signal,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind: "panel", surface_id: "adventure", args }),
+          body: JSON.stringify({ kind: "panel", surface_id: "main", args }),
         })
         response = await result.json()
         if (!result.ok) {

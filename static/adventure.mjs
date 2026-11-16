@@ -1,4 +1,4 @@
-import { AdventureApi, errorText } from "./bridge.mjs"
+import { AdventureApi, adventureErrorCode, errorText } from "./bridge.mjs"
 import { TEXTURES } from "./textures.mjs"
 import { ACTOR_TEXTURES, COMPANION_SHEET, ENEMY_TEXTURES, PLAYER_SHEET, actorImage, fitCompanion, fitPlayer, installActorAtlas } from "./actor-art.mjs"
 import { paintProjectiles } from "./forest-art.mjs"
@@ -477,7 +477,10 @@ class Forest extends Phaser.Scene {
 }
 
 class Controller {
-  constructor() { this.api = new AdventureApi(); this.scene = null; this.busy = false; this.saving = null; this.lastSaved = 0; this.noticeTimer = null }
+  constructor() {
+    this.api = new AdventureApi(); this.scene = null; this.busy = false; this.saving = null; this.lastSaved = 0; this.noticeTimer = null
+    this.foreground = document.hasFocus(); this.surfaceVisible = true
+  }
   ready(scene) { this.scene = scene; this.refresh() }
   screen(title, eyebrow = "边境冒险") {
     $("screen").hidden = false
@@ -523,9 +526,7 @@ class Controller {
     if (active) {
       const actions = element("div", "", "actions")
       actions.append(button("继续旅程", () => this.resume(false), "primary"),
-        button("接管此旅程", () => {
-          if (confirm("接管后，另一个窗口将不能再保存这场冒险。")) this.resume(true)
-        }), button("冒险商店", () => this.shop(), "", "ShoppingBag"))
+        button("接管此旅程", () => this.takeover()), button("冒险商店", () => this.shop(), "", "ShoppingBag"))
       body.append(loadoutSummary(view), actions)
       return
     }
@@ -636,12 +637,21 @@ class Controller {
       await this.save(false)
     })
   }
-  resume(takeover) {
+  takeover(refresh = false) {
+    if (confirm("接管后，另一个窗口将不能再保存这场冒险。")) return this.resume(true, refresh)
+  }
+  resume(takeover, refresh = false) {
     return this.action(async () => {
+      if (refresh) {
+        this.api.pending = null; this.api.pendingView = null; this.scene.activeRun = false
+        await this.api.read()
+        if (this.api.view.run?.status !== "active") { this.preflight(this.api.view); return }
+      }
       const ack = await this.api.mutate("claim", { run_id: this.api.view.run.id, takeover })
       const view = await this.api.read()
       if (!view.owns_control || view.run?.status !== "active" || view.run.id !== ack.run_id) throw new Error("控制已发生变化，请重新读取。")
       this.scene.loadRun(view.run); this.lastSaved = this.scene.elapsed
+      $("save-state").textContent = `已读取 ${timeText(this.lastSaved)}`
       if (this.scene.choices.length) this.upgrades()
       else if (this.scene.encounters?.state.pending) this.cooperation()
       else this.play()
@@ -650,7 +660,7 @@ class Controller {
   play() {
     if (this.scene.combat?.craft?.preparation) { this.initialStudy(); return }
     if (this.scene.journey && !this.scene.journey.fighting && this.scene.outcome === "playing") { this.doors(); return }
-    if (document.hidden || !document.hasFocus()) { this.pause(true); return }
+    if (document.hidden || !this.surfaceVisible || !this.foreground) { this.pause(true); return }
     $("screen").hidden = true; this.scene.setPaused(false)
     mountSkillHud(this.scene); $("skill-bar").hidden = !this.scene.combat
     $("hud").hidden = $("companion-line").hidden = false
@@ -786,6 +796,17 @@ class Controller {
   }
   failure(error) {
     this.scene?.setPaused(true)
+    if (["adventure_controlled_elsewhere", "adventure_control_lost"].includes(adventureErrorCode(error))) {
+      const body = this.screen("旅程由其他页面持有")
+      body.append(element("p", "另一个游戏页面或已关闭的旧页面持有控制权。接管后，将从最新保存的位置继续。", "lead"),
+        button("接管此旅程", () => this.takeover(true), "primary"),
+        button("读取已保存进度", () => {
+          this.api.pending = null; this.api.pendingView = null; this.scene.activeRun = false
+          this.refresh()
+        }))
+      $("save-state").textContent = "等待接管旅程"
+      return
+    }
     const financial = ["buy", "refund"].includes(this.api.pending?.operation)
     const body = this.screen(financial ? "交易尚待确认" : "旅程已暂停")
     body.append(element("p", errorText(error), "error"))
@@ -858,8 +879,22 @@ $("effects").addEventListener("click", () => {
 })
 $("pause").addEventListener("click", () => controller.pause())
 $("ultimate").addEventListener("click", () => controller.scene?.ultimate?.cast())
-document.addEventListener("visibilitychange", () => { if (document.hidden) controller.pause(true) })
-window.addEventListener("blur", () => controller.pause(true))
+// A trusted interaction proves foreground use even if an embedded WebView reports stale focus.
+for (const type of ["pointerdown", "keydown", "click"]) document.addEventListener(type, event => {
+  if (event.isTrusted && !document.hidden) controller.foreground = true
+}, true)
+window.addEventListener("focus", () => { controller.foreground = true })
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { controller.foreground = false; controller.pause(true) }
+})
+window.addEventListener("blur", () => { controller.foreground = false; controller.pause(true) })
+window.addEventListener("message", event => {
+  if (event.source === window.parent && event.origin === location.origin
+    && event.data?.type === "love-with-you-game-visibility" && typeof event.data.visible === "boolean") {
+    controller.surfaceVisible = event.data.visible
+    if (!controller.surfaceVisible) { controller.foreground = false; controller.pause(true) }
+  }
+})
 const joystick = $("joystick")
 function touchMove(event) {
   const rect = joystick.getBoundingClientRect()
@@ -878,7 +913,8 @@ for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) joystic
 
 export const game = new Phaser.Game({
   type: Phaser.AUTO, parent: "game", backgroundColor: "#304a3b",
-  scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+  // Hidden sidebar pages have zero bounds; WebGL framebuffers must stay nonzero.
+  scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH, min: { width: 1, height: 1 } },
   physics: { default: "arcade", arcade: { gravity: { x: 0, y: 0 }, debug: false } },
   scene: Forest, audio: { noAudio: true }, render: { antialias: true, roundPixels: true },
 })

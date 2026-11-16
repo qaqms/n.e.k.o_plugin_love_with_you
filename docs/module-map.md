@@ -1,28 +1,28 @@
 # 模块职责与玩法扩展入口
 
-结构覆盖至版本：0.12.0。本文描述当前结构；`DESIGN.md` 中的各版本章节保留设计沿革。
+结构覆盖至版本：0.9.0（2026-11-16，由原开发编号 0.12.4 调整）。文中的源码路径均相对插件根目录。本文描述当前结构；[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
 
 ## 后端职责
 
 | 模块 | 拥有什么 | 不应承担 | 首选验证 |
 | --- | --- | --- | --- |
 | `__init__.py` | SDK 入口、生命周期、锁、事务、原子保存调用、评分任务、工具注册、消息提交 | 在入口中复制一份玩法规则或界面算法 | `tests/test_runtime.py` |
-| `_engine.py` | 关系、好感、阶段、称呼、日期来源、关系模式、兼容规范化 | SDK、网络、写文件、界面草稿 | `tests/test_engine.py`、`test_v3.py`、`test_v4.py`、`test_addressing.py` |
-| `_shop.py` | 奖励资格、余额、库存、额度、流水、有限交易回执及商店投影 | 直接修改关系、发出角色回应 | `tests/test_shop.py`、`test_economy.py` |
-| `_commerce.py` | 把领取、购买、送礼组合为跨关系与经济域的结算；返回结果和是否重放 | 加锁、回滚、保存、使评分失效、发送消息 | `tests/test_commerce.py`，再接运行时原子性测试 |
-| `_experiences.py` | 按参与角色隔离的草稿、正式便签、事项、修订、请求回执和模型引用投影 | 宿主消息提交、钱包或好感奖励、界面弹窗 | `tests/test_experiences.py`，再接运行时工具与邀请测试 |
-| `_conversation.py` | 来源过滤、游标、全文指纹、普通聊天配对、主动事件标记解析 | 修改关系或经济状态、请求模型、保存 | `tests/test_recent_chat.py`、`test_host_history.py`，再接运行时来源测试 |
-| `_scoring.py`、`_judge.py` | 前者负责判断规则、提示与解析；后者负责官方模型网关及超时 | 前者不访问模型；两者都不直接保存关系 | `tests/test_scoring_cases.py`、`test_judge_timeout.py` |
-| `_prompts.py`、`_calendar.py` | 模型提示及纯日期计算 | 另存一套关系事实、确认真实播放 | `tests/test_v4.py`、`test_addressing.py`、`test_calendar.py` |
-| `_dashboard.py` | 锁内取得脱离原状态的快照，锁外生成只读展示 | 为了显示创建真实记录、清理存档、提交动作 | `tests/test_dashboard.py` |
-| `_storage.py`、`_json.py` | 原子文件替换、有界读写和严格 JSON | 判断玩法奖励、自动覆盖不支持的存档 | `tests/test_storage.py`、`test_host_transport.py` |
-| `_host.py` | 有界本机只读查询、宿主历史适配 | 修改宿主、冒用授权或把旧历史当新事件 | `tests/test_host_history.py`、`test_host_transport.py` |
-| `_portraits.py`、`_appearance.py` | 独立素材和外观文件、验证与偏好 | 关系评分代次或聊天内容 | `tests/test_portraits.py`、`test_appearance.py` |
-| `_adventure.py` | 独立冒险存档、全局修订、单局控制、检查点、新旧战斗规则绑定、v1–v7 到 v8 的备份迁移、规则 6 开局路线身份、规则 7 装束身份、金币/终局/强化的原子保存和回执 | 修改关系/礼物金币、调用模型 | `tests/test_adventure.py`，再接运行时启停与隔离测试 |
-| `_adventure_economy.py` | 冒险奖励公式、永久强化目录/上限/价格、购买/退款、钱包与效果校验 | SDK、网络、写文件、礼物经济 | 冒险规则与运行时经济隔离测试 |
-| `_adventure_skills.py` | 按战斗版本读取目录，校验双方槽位、分支、进化、候选、冷却、弹体形态、区域、凝霜、敌人状态与协同快照；规则 7 增加选招阶段、四候选、类型改造、放逐与换招额度，遭遇校验在公共实体校验后执行 | 逐帧模拟、选择技能、写存档 | `tests/test_adventure.py` 的规则 2–7、异常快照与迁移测试 |
+| `backend/relationship/engine.py` | 关系、好感、阶段、称呼、日期来源、关系模式、兼容规范化 | SDK、网络、写文件、界面草稿 | `tests/test_engine.py`、`test_v3.py`、`test_v4.py`、`test_addressing.py` |
+| `backend/relationship/shop.py` | 奖励资格、余额、库存、额度、流水、有限交易回执及商店投影 | 直接修改关系、发出角色回应 | `tests/test_shop.py`、`test_economy.py` |
+| `backend/relationship/commerce.py` | 把领取、购买、送礼组合为跨关系与经济域的结算；返回结果和是否重放 | 加锁、回滚、保存、使评分失效、发送消息 | `tests/test_commerce.py`，再接运行时原子性测试 |
+| `backend/relationship/experiences.py` | 按参与角色隔离的草稿、正式便签、事项、修订、请求回执和模型引用投影 | 宿主消息提交、钱包或好感奖励、界面弹窗 | `tests/test_experiences.py`，再接运行时工具与邀请测试 |
+| `backend/relationship/conversation.py` | 来源过滤、游标、全文指纹、普通聊天配对、主动事件标记解析 | 修改关系或经济状态、请求模型、保存 | `tests/test_recent_chat.py`、`test_host_history.py`，再接运行时来源测试 |
+| `backend/relationship/scoring.py`、`backend/infrastructure/judge.py` | 前者负责判断规则、提示与解析；后者负责官方模型网关及超时 | 前者不访问模型；两者都不直接保存关系 | `tests/test_scoring_cases.py`、`test_judge_timeout.py` |
+| `backend/relationship/prompts.py`、`backend/relationship/calendar.py` | 模型提示及纯日期计算 | 另存一套关系事实、确认真实播放 | `tests/test_v4.py`、`test_addressing.py`、`test_calendar.py` |
+| `backend/relationship/dashboard.py` | 锁内取得脱离原状态的快照，锁外生成只读展示 | 为了显示创建真实记录、清理存档、提交动作 | `tests/test_dashboard.py` |
+| `backend/infrastructure/storage.py`、`backend/infrastructure/json_codec.py` | 原子文件替换、有界读写和严格 JSON | 判断玩法奖励、自动覆盖不支持的存档 | `tests/test_storage.py`、`test_host_transport.py` |
+| `backend/infrastructure/host.py` | 有界本机只读查询、宿主历史适配 | 修改宿主、冒用授权或把旧历史当新事件 | `tests/test_host_history.py`、`test_host_transport.py` |
+| `backend/relationship/portraits.py`、`backend/relationship/appearance.py` | 独立素材和外观文件、验证与偏好 | 关系评分代次或聊天内容 | `tests/test_portraits.py`、`test_appearance.py` |
+| `backend/adventure/service.py` | 独立冒险存档、全局修订、单局控制、检查点、新旧战斗规则绑定、旧文件到 v13 的备份迁移、规则 12 开局、金币/终局/强化的原子保存和回执 | 修改关系/礼物金币、调用模型 | `tests/test_adventure.py`，再接运行时启停与隔离测试 |
+| `backend/adventure/economy.py` | 冒险奖励公式、永久强化目录/上限/价格、购买/退款、钱包与效果校验 | SDK、网络、写文件、礼物经济 | 冒险规则与运行时经济隔离测试 |
+| `backend/adventure/skills.py` | 按战斗版本读取目录，校验双方槽位、分支、进化、候选、冷却、弹体形态、区域、凝霜、敌人状态与协同快照；规则 7 增加选招阶段、四候选、类型改造、放逐与换招额度，遭遇校验在公共实体校验后执行 | 逐帧模拟、选择技能、写存档 | `tests/test_adventure.py` 的规则 2–7、异常快照与迁移测试 |
 
-`_commerce.settle()` 会修改传入状态，但不保证异常时自己回滚。调用方必须在同一状态锁和事务内调用并保存；返回 `replayed=True` 时不再保存或发布一次结算通知。送礼涉及关系、库存、额度与回执，保留整体回滚。
+`backend.relationship.commerce.settle()` 会修改传入状态，但不保证异常时自己回滚。调用方必须在同一状态锁和事务内调用并保存；返回 `replayed=True` 时不再保存或发布一次结算通知。送礼涉及关系、库存、额度与回执，保留整体回滚。
 
 状态变更的顺序是：核验运行代次与对象身份 → 在锁和事务内运行规则 → 原子保存 → 使相关旧工作失效或安排通知。消息消费不与插件落盘共享事务；本地提交不代表生成或播放完成。
 
@@ -30,40 +30,42 @@
 
 | 文件 | 状态与职责 | 验证入口 |
 | --- | --- | --- |
-| `ui/panel.tsx` | 导航、当前展示关系、跨页称呼和外观草稿、全局操作互斥、反馈及弹窗编排 | `tools/test_ui.mjs` |
-| `ui/shop.tsx` | 商店页签、送礼参与者、送礼确认、原请求、商店回执字段核对 | `tools/test_ui.mjs` 中商店用例 |
-| `ui/experiences.tsx` | 经历参与者、页签、绑定角色与修订的表单、原请求、经历回执核对 | `tools/test_experiences_ui.mjs` |
-| `ui/together.tsx` | 首页只读摘要与跳转目标 | `tools/test_overview_ui.mjs` |
-| `ui/requests.ts` | 共用返回值解包、完整错误码识别、提交/确认/刷新结果；`RunAction` 合同 | `tools/test_requests.mjs` |
+| `ui/panel.tsx` | 导航、当前展示关系、跨页称呼和外观草稿、全局操作互斥、反馈及弹窗编排 | `tools/tests/test_ui.mjs` |
+| `ui/companion-game.tsx`、`static/panel.html` | 「专属称呼」下方的「同行游戏」入口；主面板由 TSX 编译为同源静态入口，内嵌游戏并只代理指定子窗口的冒险动作；同步显示状态，离开暂停、返回保留文档；真实游戏交互确认前台，控制权冲突提供显式接管恢复 | `tools/tests/test_companion_navigation.mjs`（计时、移动、焦点失效、切页、刷新及接管）；生成入口用 `npm --prefix tools run build:panel` |
+| `static/index.html`、`static/adventure.css` | 游戏文档和布局；顶部常驻测试版提示，桌面与窄屏均完整显示 | `tools/tests/test_companion_navigation.mjs`；截图检查 |
+| `ui/shop.tsx` | 商店页签、送礼参与者、送礼确认、原请求、商店回执字段核对 | `tools/tests/test_ui.mjs` 中商店用例 |
+| `ui/experiences.tsx` | 经历参与者、页签、绑定角色与修订的表单、原请求、经历回执核对 | `tools/tests/test_experiences_ui.mjs` |
+| `ui/together.tsx` | 首页只读摘要与跳转目标 | `tools/tests/test_overview_ui.mjs` |
+| `ui/requests.ts` | 共用返回值解包、完整错误码识别、提交/确认/刷新结果；`RunAction` 合同 | `tools/tests/test_requests.mjs` |
 | `ui/refresh.ts` | 单次读取完成后安排下一次后台刷新；操作、编辑或隐藏时暂停，卸载后不继续排队 | 浏览器整页回归 |
-| `ui/portrait-import.tsx` | 文件预览、裁边编码、批次状态及内容去重导入 | `tools/test_ui.mjs` 中导入用例 |
-| `ui/addressing.ts`、`ui/theme.ts` | 可单独验证的预览、草稿合并或配色算法；后端仍拥有最终规则 | 称呼浏览器测试、`tools/test_theme.mjs` |
-| `ui/interaction.ts`、`ui/scrollbars.ts` | 控件即时反馈和滚动状态 | `tools/test_ui.mjs` 中交互与滚动用例 |
-| `static/adventure.mjs`、`textures.mjs` | Phaser 战斗场景、原创素材、局内状态、暂停与升级；不修改关系、发模型消息或直接决定永久资产 | `tools/test_adventure.mjs` |
+| `ui/portrait-import.tsx` | 文件预览、裁边编码、批次状态及内容去重导入 | `tools/tests/test_ui.mjs` 中导入用例 |
+| `ui/addressing.ts`、`ui/theme.ts` | 可单独验证的预览、草稿合并或配色算法；后端仍拥有最终规则 | 称呼浏览器测试、`tools/tests/test_theme.mjs` |
+| `ui/interaction.ts`、`ui/scrollbars.ts` | 控件即时反馈和滚动状态 | `tools/tests/test_ui.mjs` 中交互与滚动用例 |
+| `static/adventure.mjs`、`textures.mjs` | Phaser 战斗场景、原创素材、局内状态、暂停与升级；不修改关系、发模型消息或直接决定永久资产 | `tools/tests/test_adventure.mjs` |
 | `static/actor-art.mjs`、`companion-art.mjs`、`forest-art.mjs` | 原创原生角色帧与运行时图集；同行者采用 `static/art/companion-yui*.png` 的 YUI 外观，玩家采用 `static/art/player-traveller*.png` 的旅人外观，载入失败各自回退矢量版、程序地表、独立场景物件和弹体纹理；装饰种子独立，不决定碰撞与伤害 | 冒险浏览器的素材像素、双方动作、碰撞尺寸与响应式截图 |
-| `static/terrain-rules.mjs`、`forest-map.mjs` | 规则 5 固定布局、脚底排序、遮挡淡化、静态碰撞体、扫掠截停、安全恢复及有预算的本地 A* 绕行；不消费战斗 RNG，不决定伤害、奖励或读写存档 | `tools/test_terrain_rules.mjs` 及冒险浏览器的实际移动、突进、冲锋、层次和恢复 |
+| `static/terrain-rules.mjs`、`forest-map.mjs` | 规则 5 固定布局、脚底排序、遮挡淡化、静态碰撞体、扫掠截停、安全恢复及有预算的本地 A* 绕行；不消费战斗 RNG，不决定伤害、奖励或读写存档 | `tools/tests/test_terrain_rules.mjs` 及冒险浏览器的实际移动、突进、冲锋、层次和恢复 |
 | `static/battle-art.mjs` | 按战斗时钟更新动作、有界装饰粒子、伤害数字、受击与死亡演出、玩家受伤提示、震屏和顿帧；不消费战斗随机数，不进入快照、不做伤害结算，不改变碰撞体 | 冒险浏览器的随机数/快照不变性、预算、暂停、顿帧和简化特效 |
 | `static/foe-art.mjs` | 全部八种敌人的分件动画帧表（`static/art/foe-*.png`）：载入、按显示尺寸替换敌人贴图并保持世界坐标碰撞圆；载入失败沿用矢量外观 | 冒险浏览器的贴图、碰撞圆、移动/受击/死亡帧 |
 | `static/fx-art.mjs`、`zone-art.mjs` | 反馈用的运行时纹理、元素配色和弹体外形；持续区域、电链、光枪与斩弧的绘制，只读取战斗状态 | 冒险浏览器的效果截图、弹体碰撞圆和重绘不变性 |
 | `static/bridge.mjs` | 动作通信、严格回执核对与原请求；不自动抢占控制，通信失败不宣称保存完成 | 冒险浏览器的回执丢失与接管测试 |
 | `static/camp.mjs` | 营地钱包、商店与结果明细的显示及交互；不发放金币、决定价格或读写存档 | 冒险商店浏览器与协议回归 |
-| `static/skills.json`、`skills-v2.json`、`skills-expanded.json`、`routes.json`、`build-mods.json`、`skills.mjs` | 版本化技能与旧路线目录，规则 7 类型改造与自由候选、纯构筑、保底、分支、进化和同槽换招计算；不在重绘时重抽候选 | `tools/test_adventure_skills.mjs`、`test_expanded_combat.mjs`、`test_buildcraft.mjs` |
+| `static/skills.json`、`skills-v2.json`、`skills-expanded.json`、`routes.json`、`build-mods.json`、`skills.mjs` | 版本化技能与旧路线目录，规则 7 类型改造与自由候选、纯构筑、保底、分支、进化和同槽换招计算；不在重绘时重抽候选 | `tools/tests/test_adventure_skills.mjs`、`test_expanded_combat.mjs`、`test_buildcraft.mjs` |
 | `static/combat.mjs` | 规则 2–7 的技能施放、同行策略、有限接续、范围效果与贡献；通过地图服务取得突进与击退实际落点，场景保留实体和物理 | 冒险浏览器的技能、融合、终态、障碍与冷却恢复测试 |
-| `static/buildcraft.mjs` | 规则 7 起手选招、放逐、重选、战后换招及额度，先保存再恢复；保护融合与协同、保留冷却并清理替换角色的旧效果 | `tools/test_buildcraft.mjs` 与冒险浏览器的真实控件、重放和恢复 |
-| `static/expanded-combat.mjs` | 规则 6 雷链、岩弹命中、贯刺、刃环、伏印、震地、剑舞、天坠、治疗和灵灯；复用统一伤害与保存区域时钟，仅雷链线段是有界装饰，不拥有文件或奖励 | `tools/test_expanded_combat.mjs`、冒险浏览器的新招实际施放、密度与恢复 |
+| `static/buildcraft.mjs` | 规则 7 起手选招、放逐、重选、战后换招及额度，先保存再恢复；保护融合与协同、保留冷却并清理替换角色的旧效果 | `tools/tests/test_buildcraft.mjs` 与冒险浏览器的真实控件、重放和恢复 |
+| `static/expanded-combat.mjs` | 规则 6 雷链、岩弹命中、贯刺、刃环、伏印、震地、剑舞、天坠、治疗和灵灯；复用统一伤害与保存区域时钟，仅雷链线段是有界装饰，不拥有文件或奖励 | `tools/tests/test_expanded_combat.mjs`、冒险浏览器的新招实际施放、密度与恢复 |
 | `static/frost.mjs` | 有界凝霜标记、减速、短冻结、免疫、直接剑技碎冰和同行贡献；时钟使用可保存的战斗时间 | 纯状态测试与浏览器命中、读档回归 |
-| `static/encounters.json`、`encounter-rules.mjs` | 共用敌人与协同目录，前置筛选、有限候选抽取、预警几何与安全出生点 | `tools/test_encounter_rules.mjs` 与后端快照校验 |
-| `static/encounters.mjs` | 首领时间线、敌人招式、预警与命中、战后协同选择、首领血条；通过控制器保存，不直接发放永久资产 | `tools/test_adventure.mjs` 的规则 4、重试、移动与触屏回归 |
-| `static/journey.json`、`journey-rules.mjs` | 规则 8 的九段路程、区域与目标目录；选门抽取、进入下一段、目标进度、按段计算的难度与金币公式，全部为纯函数 | `tools/test_journey_rules.mjs` 与后端 `_adventure_journey.py` 的快照校验 |
-| `static/journey.mjs` | 规则 8 的运行时：段落完成时清场与发奖、选门界面、换场地与召唤守关强敌；通过控制器保存，不直接发放金币 | `tools/test_adventure.mjs` 的 rule8 用例（整局、读档、响应丢失、手机布局） |
-| `static/mastery.json` | 规则 10 的精通目录（每个技能三档的名称与说明）和流派共鸣的档位；`skills.mjs` 的 `installMastery`、`masteryOf`、`resonance` 读取它，后端 `_adventure_skills.py` 用同一份文件校验 | `tools/test_mastery.mjs`，`tests/test_adventure.py` 的 rule10 用例 |
-| `static/fire-line.json`、`fire-line.mjs` | 规则 11 的火系技能线：进阶形态目录，以及焰刃、喷焰、爆炎、熔流、狱炎弹、瞬燃的判定与连携；计时器、待爆法阵和熔岩池是短时状态，不进存档。进阶的合法性与数值在 `skills.mjs`（`installLine`、`artStats`、`levelCap`） | `tools/test_mastery.mjs`、`tools/test_adventure.mjs` 的 rule11 用例、`tests/test_adventure.py` 的 rule11 用例 |
-| `static/encounters.mjs`、`encounter-rules.mjs`（规则 12 部分） | 精英词缀的目录、出现概率与抽取，分裂与援兵的生成，守关强敌和首领按阶段选择的预警排布；精英光环在同一个预警图层绘制 | `tools/test_adventure.mjs` 的 rule12 用例、`tests/test_adventure.py` 的 rule12 用例 |
+| `static/encounters.json`、`encounter-rules.mjs` | 共用敌人与协同目录，前置筛选、有限候选抽取、预警几何与安全出生点 | `tools/tests/test_encounter_rules.mjs` 与后端快照校验 |
+| `static/encounters.mjs` | 首领时间线、敌人招式、预警与命中、战后协同选择、首领血条；通过控制器保存，不直接发放永久资产 | `tools/tests/test_adventure.mjs` 的规则 4、重试、移动与触屏回归 |
+| `static/journey.json`、`journey-rules.mjs` | 规则 8 的九段路程、区域与目标目录；选门抽取、进入下一段、目标进度、按段计算的难度与金币公式，全部为纯函数 | `tools/tests/test_journey_rules.mjs` 与后端 `backend/adventure/journey.py` 的快照校验 |
+| `static/journey.mjs` | 规则 8 的运行时：段落完成时清场与发奖、选门界面、换场地与召唤守关强敌；通过控制器保存，不直接发放金币 | `tools/tests/test_adventure.mjs` 的 rule8 用例（整局、读档、响应丢失、手机布局） |
+| `static/mastery.json` | 规则 10 的精通目录（每个技能三档的名称与说明）和流派共鸣的档位；`skills.mjs` 的 `installMastery`、`masteryOf`、`resonance` 读取它，后端 `backend/adventure/skills.py` 用同一份文件校验 | `tools/tests/test_mastery.mjs`，`tests/test_adventure.py` 的 rule10 用例 |
+| `static/fire-line.json`、`fire-line.mjs` | 规则 11 的火系技能线：进阶形态目录，以及焰刃、喷焰、爆炎、熔流、狱炎弹、瞬燃的判定与连携；计时器、待爆法阵和熔岩池是短时状态，不进存档。进阶的合法性与数值在 `skills.mjs`（`installLine`、`artStats`、`levelCap`） | `tools/tests/test_mastery.mjs`、`tools/tests/test_adventure.mjs` 的 rule11 用例、`tests/test_adventure.py` 的 rule11 用例 |
+| `static/encounters.mjs`、`encounter-rules.mjs`（规则 12 部分） | 精英词缀的目录、出现概率与抽取，分裂与援兵的生成，守关强敌和首领按阶段选择的预警排布；精英光环在同一个预警图层绘制 | `tools/tests/test_adventure.mjs` 的 rule12 用例、`tests/test_adventure.py` 的 rule12 用例 |
 | `static/fire-art.mjs` | 火系的贴图特效：爆炸图池与焰环法阵；只读战斗状态，不参与结算，贴图缺失时由调用方回退到矢量爆炸 | 浏览器截图检查 |
-| `static/ultimate.mjs` | 规则 9 的终结技：按击败充能、流派归属、特写定帧、落地伤害与叠加特效；能量随快照保存，特写与特效不进存档 | `tools/test_journey_rules.mjs` 的纯函数用例与 `tools/test_adventure.mjs` 的 rule9 用例 |
+| `static/ultimate.mjs` | 规则 9 的终结技：按击败充能、流派归属、特写定帧、落地伤害与叠加特效；能量随快照保存，特写与特效不进存档 | `tools/tests/test_journey_rules.mjs` 的纯函数用例与 `tools/tests/test_adventure.mjs` 的 rule9 用例 |
 | `static/study.mjs` | 技能研习、图鉴、Q/E 按钮与冷却显示；不写存档、不发奖励 | 冒险浏览器的归属、触屏、升级响应丢失测试 |
 
-冒险原型使用第二个静态面板，不把游戏引擎塞进 Hosted TSX。`adventure_action` 使用已有素材 I/O 门控与启动代次，关系锁只用于读取开局身份/阶段；冒险文件另用服务锁与原子保存。停用会排空已接纳的 I/O，下一次启动重建会话代次并释放内存控制权。
+游戏使用主面板内的独立静态子页面，引擎与关系组件隔离；宿主只注册一个主面板。`adventure_action` 使用已有素材 I/O 门控与启动代次，关系锁只用于读取开局身份/阶段；冒险文件另用服务锁与原子保存。停用会排空已接纳的 I/O，下一次启动重建会话代次并释放内存控制权。
 
 检查点、冒险钱包与永久强化保持在独立文件内；本局终态、规则计算的金币与回执原子保存。归来共创尚未实现，后续接入时仍需独立的玩家确认流程。金币不兑换礼物币；商店在未结束旅程期间只读。
 
@@ -83,7 +85,7 @@
 ## 新增玩法
 
 1. 明确内容属于关系 scope、实际参与角色，还是全局资产。先选所有者，再设计字段、修订、限额和恢复规则。
-2. 规则放在所属域；确实跨域的结算像 `_commerce.py` 一样集中组合。只需要少量规则时复用已有模块，不为每个按钮增加一层通用框架。
+2. 规则放在所属域；确实跨域的结算像 `backend/relationship/commerce.py` 一样集中组合。只需要少量规则时复用已有模块，不为每个按钮增加一层通用框架。
 3. 先测规则的边界、重放和角色隔离，再接 SDK 入口。入口复用现有锁和事务，保存成功之后才报告已完成。
 4. 区分草稿、玩家确认、消息提交、观察到回复；缺少宿主证据时保留未知。不要从普通聊天文本猜测另一个事件已经完成。
 5. 页面保留自己的表单和原请求；共用 `RunAction`、返回值解包和后台刷新。带资产或内容写入的回执必须先验证，不能只因 Promise 成功便显示保存成功。
@@ -93,11 +95,10 @@
 从插件根目录运行：
 
 ```powershell
-& '../N.E.K.O/.venv/Scripts/python.exe' -B -m pytest tests/test_commerce.py tests/test_runtime.py -q
-$env:NEKO_UI_DEPS='D:\neko kaifa\.neko-ui-review'
+python -B -m pytest tests/test_commerce.py tests/test_runtime.py -q
 $env:NEKO_UI_BROWSER='C:\Program Files\Google\Chrome\Application\chrome.exe'
-node tools/check_ui.mjs
-node --test tools/test_requests.mjs
+node tools/build/check_ui.mjs
+node --test tools/tests/test_requests.mjs
 npm --prefix tools test
 ```
 

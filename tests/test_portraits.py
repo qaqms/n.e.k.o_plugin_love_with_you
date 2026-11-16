@@ -166,7 +166,7 @@ def test_bundled_catalog_and_images(portraits, storage, tmp_path):
     assert len(summary["collections"]) == 8
     assert library.list_items(collection="千恋万花")["total"] == 18
     assert library.list_items(collection="天使☆嚣嚣_RE-BOOT")["total"] == 9
-    policy = json.loads((PLUGIN_ROOT / "tools" / "portrait_exclusions.json").read_text(encoding="utf-8"))
+    policy = json.loads((PLUGIN_ROOT / "tools" / "assets" / "portrait_exclusions.json").read_text(encoding="utf-8"))
     catalog = json.loads((library.root / "catalog.json").read_text(encoding="utf-8"))
     for item in catalog["items"]:
         assert item["collection"] not in policy["collections"]

@@ -9,7 +9,7 @@ import pytest
 
 @pytest.fixture
 def prepare():
-    path = Path(__file__).resolve().parents[1] / "tools" / "prepare_development.py"
+    path = Path(__file__).resolve().parents[1] / "tools" / "development" / "prepare_development.py"
     spec = importlib.util.spec_from_file_location("_love_prepare_development", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -25,7 +25,13 @@ def source(tmp_path):
         encoding="utf-8",
     )
     (root / "__init__.py").write_text("class LoveWithYouPlugin: pass\n", encoding="utf-8")
-    (root / "_engine.py").write_text("VALUE = 1\n", encoding="utf-8")
+    backend = root / "backend" / "relationship"
+    backend.mkdir(parents=True)
+    (root / "backend" / "__init__.py").write_text("", encoding="utf-8")
+    (backend / "__init__.py").write_text("", encoding="utf-8")
+    (backend / "engine.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "archive" / "backups").mkdir(parents=True)
+    (root / "archive" / "backups" / "__init__.py.bak").write_text("private backup\n", encoding="utf-8")
     (root / "ui").mkdir()
     (root / "ui" / "panel.tsx").write_text("export {};\n", encoding="utf-8")
     (root / "tests").mkdir()
@@ -37,14 +43,16 @@ def test_prepare_builds_importable_package_and_refreshes_deleted_files(prepare, 
     target = prepare(source)
     assert target == source.parent / ".neko-dev" / "love_with_you"
     assert not (target / "tests").exists()
+    assert not (target / "archive").exists()
+    assert (target / "backend" / "relationship" / "engine.py").read_text(encoding="utf-8") == "VALUE = 1\n"
     assert (target / "ui" / "panel.tsx").read_bytes() == (source / "ui" / "panel.tsx").read_bytes()
     monkeypatch.syspath_prepend(str(target.parent))
     spec = importlib.util.find_spec("love_with_you")
     assert Path(spec.origin) == target / "__init__.py"
-    (source / "_engine.py").unlink()
+    (source / "backend" / "relationship" / "engine.py").unlink()
     (source / "__init__.py").write_text("class LoveWithYouPlugin: VALUE = 2\n", encoding="utf-8")
     assert prepare(source) == target
-    assert not (target / "_engine.py").exists()
+    assert not (target / "backend" / "relationship" / "engine.py").exists()
     assert "VALUE = 2" in (target / "__init__.py").read_text(encoding="utf-8")
     assert "love_with_you" not in sys.modules
 

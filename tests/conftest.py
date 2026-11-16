@@ -1,13 +1,13 @@
-"""Load the plugin's pure modules by file path.
+"""Load backend packages without importing the SDK-dependent host entry.
 
 The plugin runs from different locations (``plugin/plugins/love_with_you`` in
 CI, a standalone folder during local development), so tests never rely on a
-package import path. ``_engine`` and ``_storage`` have no SDK imports.
+package import path. Business modules have no SDK imports.
 """
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import sys
 import time
 from pathlib import Path
@@ -25,79 +25,72 @@ def _load(name: str):
         package.__path__ = [str(PLUGIN_ROOT)]
         sys.modules[package_name] = package
     module_name = f"{package_name}.{name}"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    spec = importlib.util.spec_from_file_location(module_name, PLUGIN_ROOT / f"{name}.py")
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+    return importlib.import_module(module_name)
 
 
 @pytest.fixture(scope="session")
 def engine():
-    return _load("_engine")
+    return _load("backend.relationship.engine")
 
 
 @pytest.fixture(scope="session")
 def experiences():
-    return _load("_experiences")
+    return _load("backend.relationship.experiences")
 
 
 @pytest.fixture(scope="session")
 def storage():
-    return _load("_storage")
+    return _load("backend.infrastructure.storage")
 
 
 @pytest.fixture(scope="session")
 def dashboard_projection():
-    return _load("_dashboard")
+    return _load("backend.relationship.dashboard")
 
 
 @pytest.fixture(scope="session")
 def appearance():
-    return _load("_appearance")
+    return _load("backend.relationship.appearance")
 
 
 @pytest.fixture(scope="session")
 def portraits():
-    return _load("_portraits")
+    return _load("backend.relationship.portraits")
 
 
 @pytest.fixture(scope="session")
 def shop():
-    return _load("_shop")
+    return _load("backend.relationship.shop")
 
 
 @pytest.fixture(scope="session")
 def commerce():
-    return _load("_commerce")
+    return _load("backend.relationship.commerce")
 
 
 @pytest.fixture(scope="session")
 def cal():
-    return _load("_calendar")
+    return _load("backend.relationship.calendar")
 
 
 @pytest.fixture(scope="session")
 def conv():
-    return _load("_conversation")
+    return _load("backend.relationship.conversation")
 
 
 @pytest.fixture(scope="session")
 def scoring():
-    return _load("_scoring")
+    return _load("backend.relationship.scoring")
 
 
 @pytest.fixture(scope="session")
 def prompts():
-    return _load("_prompts")
+    return _load("backend.relationship.prompts")
 
 
 @pytest.fixture(scope="session")
 def judge():
-    return _load("_judge")
+    return _load("backend.infrastructure.judge")
 
 
 @pytest.fixture
@@ -108,6 +101,6 @@ def module_clock():
 
 @pytest.fixture
 def host(monkeypatch, module_clock):
-    module = _load("_host")
+    module = _load("backend.infrastructure.host")
     monkeypatch.setattr(module, "time", module_clock)
     return module

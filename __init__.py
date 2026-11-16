@@ -1,18 +1,13 @@
 """与你相恋 — relationship / affection layer for N.E.K.O characters.
 
-Architecture (see DESIGN.md):
+Architecture (see docs/module-map.md and docs/architecture.md):
 
-* ``_engine``    pure affection/stage/nickname rules (unit tested, no SDK imports)
-* ``_calendar``  pure anniversary arithmetic (unit tested)
-* ``_conversation`` conversation-bus records -> (user message, reply) exchanges
-* ``_scoring``   prompt + verdict parsing + offline keyword judge (unit tested)
-* ``_judge``     model judging through the official plugin model gateway
-* ``_storage``   atomic JSON state file in the plugin data dir
-* ``_shop``      virtual currency, inventory and gift transaction rules
-* ``_commerce``  cross-domain reward, purchase and gift settlement (no SDK/I/O)
-* ``_adventure`` independent game checkpoints, economy, writer control and atomic persistence
-* ``_host``      read-only loopback queries to main_server
-* ``_prompts``   model-facing text (relationship context, tool descriptions)
+* ``backend.relationship`` pure relationship, calendar, conversation, scoring,
+  shop, settlement and model-facing prompt rules
+* ``backend.adventure`` independent game checkpoints, economy, writer control
+  and versioned snapshot validation
+* ``backend.infrastructure`` atomic JSON storage, bounded host queries and
+  judging through the official plugin model gateway
 
 Threading: entries run on the plugin command loop; the maintenance timer runs
 in its own thread with its own event loop; scoring runs on one worker thread
@@ -53,21 +48,21 @@ from plugin.sdk.plugin import (
     ui,
 )
 
-from . import _adventure as adventure
-from . import _appearance as appearance
-from . import _calendar as cal
-from . import _commerce as commerce
-from . import _conversation as conv
-from . import _dashboard as dashboard_view
-from . import _engine as engine
-from . import _experiences as experiences
-from . import _host as host
-from . import _judge as judge
-from . import _portraits as portraits
-from . import _prompts as prompts
-from . import _scoring as scoring
-from . import _shop as shop
-from ._storage import StateFile
+from .backend.adventure import service as adventure
+from .backend.infrastructure import host as host
+from .backend.infrastructure import judge as judge
+from .backend.infrastructure.storage import StateFile
+from .backend.relationship import appearance as appearance
+from .backend.relationship import calendar as cal
+from .backend.relationship import commerce as commerce
+from .backend.relationship import conversation as conv
+from .backend.relationship import dashboard as dashboard_view
+from .backend.relationship import engine as engine
+from .backend.relationship import experiences as experiences
+from .backend.relationship import portraits as portraits
+from .backend.relationship import prompts as prompts
+from .backend.relationship import scoring as scoring
+from .backend.relationship import shop as shop
 
 _STATE_FILE = "state.json"
 _SHARED_STATE_TOOL = "love_state"
@@ -2740,7 +2735,7 @@ class LoveWithYouPlugin(NekoPluginBase):
     async def _portrait_call(self, method: str, *args: Any):
         return await self._asset_call("portrait", self._portraits, method, *args)
 
-    @ui.context(id="adventure", title="边境林地")
+    @ui.context(id="adventure", title="同行游戏")
     async def adventure_context(self, **_: Any) -> dict[str, Any]:
         return {"rules": adventure.RULES, "prototype": True}
 

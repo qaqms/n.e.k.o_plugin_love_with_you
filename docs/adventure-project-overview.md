@@ -1,10 +1,10 @@
 # 冒险游戏开发总览（给接手的开发者和 AI）
 
-最后更新：2026-11-15，对应插件版本 0.12.0（战斗规则 12，冒险存档版本 13）。
+最后更新：2026-11-16，对应插件发布版本 0.9.0（原开发编号 0.12.4；战斗规则 12，冒险存档版本 13）。按项目主人要求调整发布号，保留全部现有功能和历史开发记录；本发布号不再用于推断旧记录中的战斗规则。目录已整理，见[目录说明](README.md)和[整理记录](project-structure-2026-11-16.md)。游戏顶部常驻「当前版本为测试版，非正式版」，见[测试版提示](adventure/adventure-test-label-2026-11-16.md)。游戏入口名为「同行游戏」，位于左侧「专属称呼」下方，见[导航记录](adventure/adventure-navigation-2026-11-16.md)；暂停和控制权恢复见[修复记录](adventure/adventure-focus-recovery-2026-11-16.md)。
 
 这份文档说明插件内「边境林地」冒险游戏现在是什么样、怎么运行和测试、有哪些不能破坏的约定、项目主人已经做了哪些决定、接下来要做什么。插件的恋爱关系、商店、纪念日等其他部分见 `README.md` 和 `docs/module-map.md`，本文不重复。
 
-先读这一份，再按需要读文末索引里的专题文档。
+先读这一份，再按需要读文末索引里的专题文档。行内代码中的源码路径均相对插件根目录。
 
 ## 1. 项目是什么
 
@@ -17,14 +17,13 @@
 
 ## 2. 目录
 
-以项目主人的电脑为例，工作区是 `F:\ai\neko kaifa8\`：
+项目主人当前工作区是 `D:\neko kaifa2\`，下列历史 `-main` 目录约定已失效，以本表为准：
 
 | 路径 | 是什么 | 能否修改 |
 | --- | --- | --- |
 | `N.E.K.O\` | 宿主源码 | **不能** |
-| `n.e.k.o_plugin_love_with_you-main\` | **当前插件源码，所有开发都在这里** | 能 |
-| `n.e.k.o_plugin_love_with_you\` | 旧版副本，已过时 | 不要动，也不要参考 |
-| `n.e.k.o_plugin_love_with_you-main_backup_*\` | 每次大改前自动留的备份（只含被覆盖的文件） | 只读 |
+| `n.e.k.o_plugin_love_with_you\` | **当前插件源码，所有开发都在这里** | 能 |
+| `n.e.k.o_plugin_love_with_you\archive\backups\` | 插件改动前的源码备份 | 只读 |
 | `foe-sprite-source\` | 美术源文件：AI 原图、提示词、分件图、绑定脚本；不随插件发布 | 能 |
 | `play-adventure.bat` | 双击启动游戏预览 | 能 |
 
@@ -35,14 +34,14 @@
 | `static\` | 游戏前端：`index.html` 加一组 ES 模块，Phaser 3.90 在 `static\engine\` |
 | `static\*.json` | 玩法数据：技能、流派、遭遇、旅程、精通、技能线 |
 | `static\art\` | 发布用的图片素材 |
-| `_adventure.py` | 冒险存档、请求处理、版本迁移 |
-| `_adventure_skills.py` | 快照里构筑、弹体、区域、遭遇的校验 |
-| `_adventure_journey.py` | 规则 8 起的旅程校验和按段结算 |
-| `_adventure_economy.py` | 金币公式和局外强化 |
+| `backend/adventure/service.py` | 冒险存档、请求处理、版本迁移 |
+| `backend/adventure/skills.py` | 快照里构筑、弹体、区域、遭遇的校验 |
+| `backend/adventure/journey.py` | 规则 8 起的旅程校验和按段结算 |
+| `backend/adventure/economy.py` | 金币公式和局外强化 |
 | `tests\test_adventure.py` | 后端测试 |
-| `tools\test_*.mjs` | 前端规则测试和浏览器测试 |
-| `tools\adventure_preview.py` | 不需要宿主的本地预览服务器，使用临时存档 |
-| `docs\adventure-*.md` | 每次改动的设计和实现记录 |
+| `tools\tests\test_*.mjs` | 前端规则测试和浏览器测试 |
+| `tools\preview\adventure_preview.py` | 不需要宿主的本地预览服务器，使用临时存档 |
+| `docs\adventure\adventure-*.md` | 每次游戏改动的设计和实现记录 |
 
 ## 3. 运行与测试
 
@@ -51,7 +50,7 @@
 双击 `play-adventure.bat`，浏览器打开 `http://127.0.0.1:4321`。预览用的是临时存档，不影响宿主里的真实进度。也可以手动运行：
 
 ```
-python -B tools\adventure_preview.py --port 4321
+python -B tools\preview\adventure_preview.py --port 4321
 ```
 
 ### 后端测试
@@ -62,15 +61,14 @@ python -B tools\adventure_preview.py --port 4321
 python -B -m pytest tests --rootdir=tests --confcutdir=tests --import-mode=importlib -p no:cacheprovider
 ```
 
-当前 284 项，应全部通过。
+整理前已有 1129 项，应全部通过。运行约一分钟，耗时依机器而定。
 
 ### 前端测试
 
 纯规则测试只需要 Node：
 
 ```
-cd tools
-node --test test_journey_rules.mjs test_mastery.mjs test_encounter_rules.mjs
+npm --prefix tools run test:rules
 ```
 
 浏览器测试需要 Playwright 和一个 Chromium。环境变量：
@@ -80,12 +78,12 @@ node --test test_journey_rules.mjs test_mastery.mjs test_encounter_rules.mjs
 | `NEKO_PYTHON` | 运行预览服务器的 Python | `..\N.E.K.O\.venv\Scripts\python.exe` |
 | `NEKO_UI_DEPS` | 装有 `playwright` 的目录 | `tools\node_modules` |
 | `NEKO_UI_BROWSER` | 浏览器可执行文件 | Playwright 自带的 Chromium |
-| `NEKO_UI_ARTIFACTS` | 截图输出目录 | `..\.neko-ui-review\artifacts` |
+| `NEKO_UI_ARTIFACTS` | 截图输出目录 | `archive\reviews\browser`；导航测试为 `archive\reviews\navigation` |
 
 完整一轮（约 20 分钟，必须串行）：
 
 ```
-node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs test_adventure_skills.mjs test_expanded_combat.mjs test_buildcraft.mjs test_encounter_rules.mjs test_journey_rules.mjs test_mastery.mjs
+node --test --test-concurrency=1 tools/tests/test_adventure.mjs tools/tests/test_adventure_protocol.mjs tools/tests/test_adventure_skills.mjs tools/tests/test_expanded_combat.mjs tools/tests/test_buildcraft.mjs tools/tests/test_encounter_rules.mjs tools/tests/test_journey_rules.mjs tools/tests/test_mastery.mjs
 ```
 
 只跑一部分用 `--test-name-pattern="rule11"`。
@@ -96,7 +94,7 @@ node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs 
 
 - 共 143 项，其中 4 项在任何改动之前就失败，原因在环境而不在代码：按键施放 Q/E（#2）、Q 火区（#18）、存档重开（#25）、1280 宽度的首领预警布局（#51）。**在项目主人的 Windows 机器上这四项是否通过没有验证过。**
 - 冰系 E 键那一项（#39）时好时坏。
-- `test_terrain_rules.mjs` 依赖的 `javascript-astar` 包在该环境缺失，没有跑过。
+- 当时 `test_terrain_rules.mjs` 的开发依赖缺失；0.12.4 已改用插件发布的 `static/engine/astar-0.4.1.js`，本机规则测试包含这部分。
 - 几个用例依赖真实时间（顿帧、终结技特写），机器很慢时可能偶发失败，单独重跑即可判断。
 
 判断一次改动有没有弄坏东西的办法：改动前后各跑一轮，比较失败的清单，而不是只看总数。
@@ -105,11 +103,11 @@ node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs 
 
 项目主人不想每次改动都等完整的一轮。日常做法：
 
-- 每次改动后跑后端测试（约 2 秒）和 Node 纯规则测试（几秒）。
+- 每次改动后跑后端测试（当前约一分钟）和 Node 纯规则测试（几秒）。
 - 浏览器测试只跑和改动直接相关的用例，用 `--test-name-pattern`。
 - 完整的一轮留到加新规则版本、动了公共模块（`adventure.mjs`、`combat.mjs`、`skills.mjs`、`bridge.mjs`、后端校验）之后，并且有空的时候再跑。跑没跑、跑到哪，在汇报里说清楚。
 
-**当前状态**：0.12.0 写回时完整的一轮只跑到第 38 项就停了，定向的规则 8、11、12 用例和全部后端测试通过。下一次有空时应补跑一轮完整的。
+**当前状态**：0.12.4 目录整理通过 1129 项后端测试、87 项 Node 规则测试和 11 项定向浏览器测试（含桌面、窄窗口与焦点异常的嵌套导航）。更新测试夹具与导入排序后，相关 615 项后端测试再次通过。没有重跑约 20 分钟的完整战斗浏览器套件；历史上 0.12.0 的完整一轮只跑到第 38 项，后续有空时仍应补全。
 
 ## 4. 架构
 
@@ -117,7 +115,7 @@ node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs 
 
 1. 前端 `adventure.mjs` 里的 Phaser 场景运行战斗。
 2. 每隔一段时间、每次升级选择、每次选门时，场景生成一个**快照**（完整的可恢复状态），通过 `bridge.mjs` 发给后端。
-3. 后端 `_adventure.py` 用**严格校验**检查快照：字段必须完全匹配，数值必须在范围内，状态之间必须自洽（比如拥有的弹体必须对应学过的技能）。不通过就拒绝保存。
+3. 后端 `backend/adventure/service.py` 用**严格校验**检查快照：字段必须完全匹配，数值必须在范围内，状态之间必须自洽（比如拥有的弹体必须对应学过的技能）。不通过就拒绝保存。
 4. 结算（金币）只由后端按快照计算，前端只显示。
 
 所以：**前端加任何进快照的东西，后端校验和测试必须同时改**，否则存档会被拒绝。
@@ -140,7 +138,7 @@ node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs 
 | `actor-art.mjs`、`companion-art.mjs`、`foe-art.mjs`、`forest-art.mjs` | 角色、怪物、地表的贴图和动画 |
 | `bridge.mjs`、`camp.mjs` | 与后端通信和回执核对；营地界面 |
 
-各模块的详细职责和对应测试见 `docs/module-map.md`。注意：那张表里 `_adventure.py` 一行关于存档版本的描述还停在较早的版本，以本文第 5 节为准。
+各模块的详细职责和对应测试见 `docs/module-map.md`。资源路径统一由 `backend/paths.py` 提供，不要按业务模块文件所在目录推算 `static/`。
 
 ### 数据文件
 
@@ -174,7 +172,7 @@ node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs 
 | 11 | 0.11.0–0.11.1 | 火系技能线、等级上限 50、难度上调 |
 | 12 | 0.12.0 | 精英词缀、守关强敌第二阶段与新招式、首领第三阶段、险路提前到第二段 |
 
-存档文件另有自己的版本号（`_adventure.py` 的 `VERSION`，现在是 13），每加一个规则版本就加一。旧文件第一次被新版写入之前会自动备份。
+存档文件另有自己的版本号（`backend/adventure/service.py` 的 `VERSION`，现在是 13），每加一个规则版本就加一。旧文件第一次被新版写入之前会自动备份。
 
 ### 什么时候要加新规则版本
 
@@ -183,15 +181,15 @@ node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs 
 
 ### 加一个规则版本要改的地方
 
-1. `_adventure.py`：`VERSION`、`RULES`、三处允许的规则列表、迁移时允许的旧版本列表。
-2. `_adventure_skills.py`：`CATALOGS[N]`，以及新字段的校验。
+1. `backend/adventure/service.py`：`VERSION`、`RULES`、三处允许的规则列表、迁移时允许的旧版本列表。
+2. `backend/adventure/skills.py`：`CATALOGS[N]`，以及新字段的校验。
 3. `static/bridge.mjs`：两处允许的规则列表。
 4. 前端：新行为放在 `rules >= N` 后面；`skills.mjs` 的 `buildRules` 和 `newBuild` 如果构筑多了字段也要改。
 5. `tests/test_adventure.py`：版本断言、一条“旧版文件迁移并备份”的测试、新字段的正反例。
-6. `tools/test_adventure_protocol.mjs`：未知规则版本的那个循环。
-7. `tools/test_adventure.mjs`：新开局默认规则的断言；依赖旧规则行为的用例用 `harness({ displayRules: N })` 固定在旧版本上。
-8. `tools/verify_adventure_package.py`：新文件加进必需清单。
-9. `plugin.toml`、`pyproject.toml` 的版本号，`README.md`、`docs/module-map.md`，以及一份新的 `docs/adventure-*.md`。
+6. `tools/tests/test_adventure_protocol.mjs`：未知规则版本的那个循环。
+7. `tools/tests/test_adventure.mjs`：新开局默认规则的断言；依赖旧规则行为的用例用 `harness({ displayRules: N })` 固定在旧版本上。
+8. `tools/build/verify_adventure_package.py`：新文件加进必需清单。
+9. `plugin.toml`、`pyproject.toml` 的版本号，`README.md`、`docs/module-map.md`，以及一份新的 `docs/adventure/adventure-*.md`。
 
 ## 6. 不能破坏的约定
 
@@ -309,7 +307,7 @@ node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs 
 
 ## 11. 接下来
 
-项目主人认可的整体规划见 `docs/adventure-chapter-structure-proposal-2026-11-15.md`。按建议的顺序：
+项目主人认可的整体规划见 `docs/adventure/adventure-chapter-structure-proposal-2026-11-15.md`。按建议的顺序：
 
 1. **根据试玩调数值**：0.11 与 0.12 连续改了技能强度和难度，项目主人还没有反馈。
 2. **火系主动技能线**：火墙 → 燃烧领域 → 火柱。
@@ -323,10 +321,10 @@ node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs 
 
 ## 12. 工作方式
 
-- **版本库**：GitHub 仓库是 `qaqms/n.e.k.o_plugin_love_with_you`，主分支 `main`。项目主人电脑上的 `n.e.k.o_plugin_love_with_you-main\` 原本是解压出来的副本，没有 `.git`；工作区里的 `push-adventure.bat` 会在第一次运行时把它接到仓库上（不改动任何文件），列出要提交的文件，确认后提交并推送，用的是这台电脑上已有的 Git 凭证。提交说明在同目录的 `push-adventure-message.txt`，每次推送前改成这次的内容。云端的开发环境没有推送权限，所以推送这一步要在项目主人的电脑上执行。
+- **版本库**：GitHub 仓库为 `qaqms/n.e.k.o_plugin_love_with_you`，主分支 `main`。2026-11-16 按项目主人明确的提交推送要求，将当前工作目录接入该远程仓库的已有历史。只在得到提交推送指示后推送，不自动发布标签或市场版本。旧的 `-main` 目录和推送脚本约定不代表当前路径。
 
-- 每次改动前，把要覆盖的文件复制到工作区的 `n.e.k.o_plugin_love_with_you-main_backup_<旧版本>_<日期>\`。
-- 一次改动对应一个版本号和一份 `docs/adventure-<主题>-<日期>.md`，写清楚做了什么、数值、存档兼容、没做的、没验证的。同时更新 `README.md` 的对应小节和 `docs/module-map.md`。
+- 每次改动前，把要覆盖的文件复制到插件内的 `archive/backups/<旧版本>-<主题>-<日期>/`，保留原相对路径并加 `.bak` 后缀，避免被宿主静态扫描当作另一份入口。
+- 一次改动对应一个版本号和一份 `docs/adventure/adventure-<主题>-<日期>.md`，写清楚做了什么、数值、存档兼容、没做的、没验证的。项目级整理可记在 `docs/`。同时更新 `README.md` 的对应小节和 `docs/module-map.md`。
 - 先写规则和测试，再做表现。纯规则尽量放进不依赖 Phaser 的模块（如 `skills.mjs`、`journey-rules.mjs`），用 Node 直接测。
 - 做完后在预览里实际截图看一遍，把截图发给项目主人。
 - 大的方向（玩法结构、画风、是否替换已有系统）先给方案让他选，不要直接做。小的实现细节自己决定并说明。
@@ -336,18 +334,19 @@ node --test --test-concurrency=1 test_adventure.mjs test_adventure_protocol.mjs 
 
 | 主题 | 文档 |
 | --- | --- |
-| 关卡与长期规划 | `docs/adventure-chapter-structure-proposal-2026-11-15.md` |
-| 九段旅程与选门（规则 8） | `docs/adventure-journey-nodes-2026-11-15.md` |
-| 终结技（规则 9） | `docs/adventure-ultimate-fire-2026-11-15.md` |
-| 精通与共鸣（规则 10） | `docs/adventure-fire-mastery-2026-11-15.md` |
-| 火系技能线（规则 11） | `docs/adventure-fire-line-2026-11-15.md` |
-| 精英与首领阶段（规则 12） | `docs/adventure-difficulty-2026-11-15.md` |
-| 打击反馈 | `docs/adventure-combat-feedback-2026-11-14.md` |
-| 怪物与角色贴图 | `docs/adventure-foe-sprites-2026-11-15.md`、`docs/adventure-portrait-design-2026-11-14.md` |
-| 自由构筑（规则 7） | `docs/adventure-free-builds-2026-11-13.md` |
-| 流派扩展（规则 6） | `docs/adventure-build-expansion-2026-11-13.md` |
-| 地图与地形（规则 5） | `docs/adventure-map-2026-11-13.md` |
-| 遭遇与协同（规则 4） | `docs/adventure-encounters-2026-11-13.md` |
-| 金币与局外强化 | `docs/adventure-economy-2026-11-12.md` |
+| 游戏焦点与控制权恢复（0.12.2） | `docs/adventure/adventure-focus-recovery-2026-11-16.md` |
+| 关卡与长期规划 | `docs/adventure/adventure-chapter-structure-proposal-2026-11-15.md` |
+| 九段旅程与选门（规则 8） | `docs/adventure/adventure-journey-nodes-2026-11-15.md` |
+| 终结技（规则 9） | `docs/adventure/adventure-ultimate-fire-2026-11-15.md` |
+| 精通与共鸣（规则 10） | `docs/adventure/adventure-fire-mastery-2026-11-15.md` |
+| 火系技能线（规则 11） | `docs/adventure/adventure-fire-line-2026-11-15.md` |
+| 精英与首领阶段（规则 12） | `docs/adventure/adventure-difficulty-2026-11-15.md` |
+| 打击反馈 | `docs/adventure/adventure-combat-feedback-2026-11-14.md` |
+| 怪物与角色贴图 | `docs/adventure/adventure-foe-sprites-2026-11-15.md`、`docs/adventure/adventure-portrait-design-2026-11-14.md` |
+| 自由构筑（规则 7） | `docs/adventure/adventure-free-builds-2026-11-13.md` |
+| 流派扩展（规则 6） | `docs/adventure/adventure-build-expansion-2026-11-13.md` |
+| 地图与地形（规则 5） | `docs/adventure/adventure-map-2026-11-13.md` |
+| 遭遇与协同（规则 4） | `docs/adventure/adventure-encounters-2026-11-13.md` |
+| 金币与局外强化 | `docs/adventure/adventure-economy-2026-11-12.md` |
 | 模块职责 | `docs/module-map.md` |
-| 插件整体与设计沿革 | `README.md`、`DESIGN.md` |
+| 插件整体与设计沿革 | `README.md`、`docs/architecture.md` |

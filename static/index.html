@@ -3,15 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>边境林地 · 与你相恋</title>
+  <script>
+    if (/\/ui\/?$/.test(location.pathname)) location.replace(location.pathname.replace(/\/ui\/?$/, "/ui/panel.html") + location.search);
+  </script>
+  <title>同行游戏 · 与你相恋</title>
   <link rel="stylesheet" href="./adventure.css">
 </head>
 <body>
   <main id="app">
     <header class="topbar">
-      <div class="brand"><span class="sigil" aria-hidden="true">✦</span><div><h1>边境林地</h1><span id="chapter-label">第一章 · 魔力回响</span></div></div>
+      <div class="brand"><span class="sigil" aria-hidden="true">✦</span><div><h1>同行游戏</h1><span id="chapter-label">第一章 · 魔力回响</span></div></div>
       <div class="head-actions"><span id="save-state" role="status">正在读取旅程</span><button id="effects" class="icon-button" title="简化特效" aria-label="简化特效" aria-pressed="false"></button><button id="pause" class="icon-button" title="暂停" aria-label="暂停" disabled></button></div>
     </header>
+    <p id="release-notice">当前版本为测试版，非正式版</p>
     <section class="battlefield" aria-label="冒险战场">
       <div id="game"></div>
       <div id="hud" hidden>

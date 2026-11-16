@@ -23,7 +23,7 @@
 
 ## 保存和重试
 
-- `_shop.py` 保存商品规则、经济状态归一化、交易校验与展示投影；它不依赖 SDK。
+- `backend/relationship/shop.py` 保存商品规则、经济状态归一化、交易校验与展示投影；它不依赖 SDK。
 - `state.json` 的 `shop` 命名空间增加经济规则版本 2、日周进度、日期最高值、有限去重指纹、累计收入、收支流水与零加分赠送日期；关系记录增加聊天、礼物来源额度和好感修订。整体关系 schema 仍兼容 v3。
 - 升级前备份旧商店存档到 `state.pre-economy-v2.json`。余额、库存和好感不变；旧签到当天不叠加新日奖励，旧加分来源无法确认时当日暂停新正向结算，次日恢复。迁移只执行一次。
 - `buy_shop_item`、`send_shop_gift` 要求 `request_id` 与 `revision`。相同请求重放原结果；参数不一致拒绝；旧版本拒绝。送礼还必须提交 `expected_gain`、`relationship_revision`，并可显式设置 `gesture=true`。关系或实际加分变化时不消费，要求重新确认。

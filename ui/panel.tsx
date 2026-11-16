@@ -29,6 +29,7 @@ import { Experiences, EXPERIENCE_STYLE } from "./experiences"
 import type { ExperienceDestination, ExperienceState } from "./experiences"
 import { Together, TOGETHER_STYLE } from "./together"
 import { errorCode, submitAction, unwrap } from "./requests"
+import { CompanionGame, GAME_STYLE } from "./companion-game"
 
 type HistoryItem = { ts: number; delta: number; value: number; reason: string; source: string }
 
@@ -134,15 +135,15 @@ type Dashboard = {
   portraits?: PortraitLibrary | null
 }
 
-type Section = "heart" | "history" | "dates" | "nicknames" | "shop" | "settings" | "experiences"
+type Section = "heart" | "history" | "dates" | "nicknames" | "shop" | "settings" | "experiences" | "game"
 type Feedback = { tone: "pending" | "success" | "warning" | "danger"; message: string; action: string }
 
 const SECTION_GROUPS: Array<{ label: string; sections: Section[] }> = [
   { label: "nav.daily", sections: ["heart", "experiences", "shop"] },
-  { label: "nav.records", sections: ["history", "dates", "nicknames"] },
+  { label: "nav.records", sections: ["history", "dates", "nicknames", "game"] },
 ]
 const SECTIONS: Section[] = [...SECTION_GROUPS.flatMap(group => group.sections), "settings"]
-const SECTION_ICONS = { heart: "Heart", history: "History", dates: "CalendarDays", nicknames: "MessageCircle", shop: "ShoppingBag", settings: "Settings", experiences: "BookOpen" } as const
+const SECTION_ICONS = { heart: "Heart", history: "History", dates: "CalendarDays", nicknames: "MessageCircle", shop: "ShoppingBag", settings: "Settings", experiences: "BookOpen", game: "Gamepad2" } as const
 const TREND_RANGES = [30, 90, 365]
 
 // Theme + host-control overrides are document-wide on purpose: useConfirm()
@@ -525,7 +526,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 @media (max-width: 359px) {
   .lwy-summary { grid-template-columns: minmax(0, 1fr); }
 }
-@media (max-height: 480px) {
+@media (max-height: 600px) {
   .lwy .lwy-sidebar { gap: 6px; padding-top: 8px; padding-bottom: 8px; }
   .lwy-sidebar-body { gap: 6px; }
   .lwy-sidebar-foot { display:none; }
@@ -535,12 +536,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
   .lwy .lwy-nav-settings { padding-top:4px; }
   .lwy .lwy-nav-group-label { display:none; }
   .lwy-nav { gap: 4px; }
-  .lwy-nav button { min-height: 38px; padding-top: 6px; padding-bottom: 6px; }
+  .lwy-nav button { min-height: 34px; padding-top: 5px; padding-bottom: 5px; }
 }
 @media (max-height: 360px) {
   .lwy .lwy-sidebar { gap: 8px; padding-top: 8px; padding-bottom: 8px; }
   .lwy-nav { gap: 2px; }
-  .lwy-nav button { min-height: 36px; padding-top: 5px; padding-bottom: 5px; }
+  .lwy-nav button { min-height: 30px; padding-top: 4px; padding-bottom: 4px; }
 }
 @media (max-height: 360px) and (max-width: 700px) {
   .lwy-sidebar-head { display: none; }
@@ -1293,7 +1294,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const loverSince = milestones.lover || ""
   const tooLarge = Array.isArray(decoration.too_large) ? decoration.too_large : []
   const sectionLabel = (key: Section) =>
-    key === "experiences" ? t("xp.title") : key === "shop" ? t("nav.shop", { defaultValue: "礼物商店" }) : key === "heart"
+    key === "game" ? t("nav.game", { defaultValue: "同行游戏" }) : key === "experiences" ? t("xp.title") : key === "shop" ? t("nav.shop", { defaultValue: "礼物商店" }) : key === "heart"
       ? t("nav.heart", { defaultValue: "关系概览" })
       : key === "history"
         ? t("nav.history", { defaultValue: "心动记录" })
@@ -2027,7 +2028,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   return (
     <div className={sidebarCollapsed ? "lwy sidebar-collapsed" : "lwy"}>
-      <style>{STYLE + SHOP_STYLE + EXPERIENCE_STYLE + TOGETHER_STYLE + PORTRAIT_IMPORT_STYLE + INTERACTION_STYLE + SCROLLBAR_STYLE + themeCss(liveAppearance)}</style>
+      <style>{STYLE + GAME_STYLE + SHOP_STYLE + EXPERIENCE_STYLE + TOGETHER_STYLE + PORTRAIT_IMPORT_STYLE + INTERACTION_STYLE + SCROLLBAR_STYLE + themeCss(liveAppearance)}</style>
 
       <aside className="lwy-sidebar">
         <div className="lwy-sidebar-head">
@@ -2070,8 +2071,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         </div>
       </aside>
 
-      <main className="lwy-workspace" tabIndex={0} aria-label={sectionLabel(activeSection)} ref={workspaceRef}>
-        <div className={["lwy-page-layout", hasArt ? "has-art" : "", activeSection === "heart" && scope ? "is-overview" : ""].join(" ")}>
+      <main className={activeSection === "game" ? "lwy-workspace is-game" : "lwy-workspace"} tabIndex={0} aria-label={sectionLabel(activeSection)} ref={workspaceRef}>
+        <div hidden={activeSection === "game"} className={["lwy-page-layout", hasArt ? "has-art" : "", activeSection === "heart" && scope ? "is-overview" : ""].join(" ")}>
           <div className="lwy-page-content">
             <header key="page-heading" className="lwy-head">
               <div className="lwy-head-text">
@@ -2163,6 +2164,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           ) : null}
           {activeSection === "heart" && scope ? renderOverviewDates(scope) : null}
         </div>
+        <CompanionGame active={activeSection === "game"} api={api} title={sectionLabel("game")} locale={props.locale} />
       </main>
       {/* Keep this slot mounted so the host preserves page nodes and focus. */}
       <div className="lwy-feedback-slot">{!dialogOpen ? renderFeedback() : null}</div>

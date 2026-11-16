@@ -16,4 +16,23 @@ addopts = "--rootdir=tests --confcutdir=tests --import-mode=importlib -p no:cach
 # Keep tests, development tools and local pytest temp output out of the
 # installable package.
 [tool.neko.build]
-exclude_dirs = ["pytest-of-*", ".benchmarks", "tools", "tests", "archive"]
+exclude_dirs = [
+    "pytest-of-*", ".benchmarks", "tools", "tests", "archive",
+    "docs/adventure", "docs/audits", "docs/plans",
+]
+include = [
+    "__init__.py", "plugin.toml", "pyproject.toml", "README.md",
+    "config.example.toml", "backend/**", "ui/**", "static/**",
+    "assets/**", "i18n/**", "vendor/**", "docs/guide.md", "docs/gifts.md",
+]
+exclude = [
+    "**/.env", "**/.env.*", "**/data/**", "**/saves/**",
+    "**/custom_portraits/**",
+    "docs/README.md",
+]
+exclude_files = [
+    ".env", ".env.*", "*.log", "*.bak", "*.backup*",
+    "*.db", "*.sqlite*", "*.pem", "*.key", "*.p12", "*.pfx",
+    "state.json", "state.*.json", "adventure.json", "adventure.*.json",
+    "appearance.json", "portraits.json", "config.toml", "plugin.config.toml",
+]

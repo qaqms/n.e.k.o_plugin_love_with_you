@@ -8,6 +8,7 @@ import json
 import mimetypes
 import sys
 import tempfile
+from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
@@ -116,8 +117,9 @@ def main():
     parser.add_argument("--port", type=int, default=4321)
     parser.add_argument("--data", type=Path)
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="neko-adventure-") as temporary:
-        server = make_server(args.port, args.data or Path(temporary))
+    data_context = nullcontext(args.data) if args.data else tempfile.TemporaryDirectory(prefix="neko-adventure-")
+    with data_context as data:
+        server = make_server(args.port, Path(data))
         print(json.dumps({"url": f"http://127.0.0.1:{server.server_port}", "isolated": True}), flush=True)
         try:
             server.serve_forever()

@@ -1,6 +1,6 @@
 // Compile the existing TSX panel with the host renderer into a same-origin static surface.
 import { createRequire } from "node:module"
-import { readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { copyFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
@@ -73,4 +73,6 @@ setInterval(function() {
 }, 5000);
 </script>`
 writeFileSync(join(root, "static/panel.html"), html.replace("</body>", `${startup}\n</body>`))
+copyFileSync(join(host, "LICENSE"), join(root, "static/engine/NEKO-LICENSE.txt"))
+copyFileSync(join(host, "NOTICE"), join(root, "static/engine/NEKO-NOTICE.txt"))
 console.log("Built static/panel.html using the host TSX renderer and UI kit.")

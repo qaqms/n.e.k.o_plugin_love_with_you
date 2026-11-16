@@ -20,10 +20,13 @@
 ## 使用与开发
 
 - [使用指南](guide.md)
+- [开发说明与检查命令](development.md)
+- [市场发布资料与头像路径](market-release-2026-11-16.md)
 - [礼物资料](gifts.md)
 - [模块职责与扩展入口](module-map.md)
 - [架构与设计沿革](architecture.md)
 - [2026-11-16 目录整理](project-structure-2026-11-16.md)
+- [旧版 README 与历史开发记录](readme-history-2026-11-16.md)
 
 ## 同行游戏
 
@@ -39,5 +42,7 @@
 ## 审计与方案
 
 审计记录在 `docs/audits/`，包括[稳定性](audits/stability-audit-2026-11-12.md)、[模块与界面状态](audits/module-ui-state-audit-2026-11-12.md)和[解耦、性能与安全](audits/decoupling-performance-security-audit-2026-11-12.md)。
+
+市场发布前先看[2026-11-16 发布审计](audits/release-readiness-2026-11-16.md)，其中列明扫描范围、清理结果和仍待项目主人确认的事项。
 
 后续方案在 `docs/plans/`，包括[开发调研](plans/next-development-research-2026-11-11.md)、[专属称呼](plans/relationship-addressing-plan-2026-11-11.md)和[桌面互动](plans/body-touch-interaction-proposal-2026-11-11.md)。历史文档描述的是对应日期的状态，当前实现以模块职责和开发总览为准。

@@ -109,6 +109,8 @@ node --test --test-concurrency=1 tools/tests/test_adventure.mjs tools/tests/test
 
 **当前状态**：0.12.4 目录整理通过 1129 项后端测试、87 项 Node 规则测试和 11 项定向浏览器测试（含桌面、窄窗口与焦点异常的嵌套导航）。更新测试夹具与导入排序后，相关 615 项后端测试再次通过。没有重跑约 20 分钟的完整战斗浏览器套件；历史上 0.12.0 的完整一轮只跑到第 38 项，后续有空时仍应补全。
 
+0.9.0 发布审计新增 27 项发布卫生测试，官方 SDK 临时源码预检通过全部 1156 项 Python 测试，另通过 87 项 Node 规则和 8 项定向浏览器测试。浏览器测试现在负责清理自己的临时存档，正常结束及启动失败均已验证；本次仅清理有备份的合成测试存档，未清除真实玩家数据。导入包排除工具、测试、开发文档和私有数据，扫描工具及许可待办见 `docs/audits/release-readiness-2026-11-16.md`。没有重跑完整战斗浏览器套件，没有发布市场版本。
+
 ## 4. 架构
 
 ### 一局游戏的数据流
@@ -350,3 +352,4 @@ node --test --test-concurrency=1 tools/tests/test_adventure.mjs tools/tests/test
 | 金币与局外强化 | `docs/adventure/adventure-economy-2026-11-12.md` |
 | 模块职责 | `docs/module-map.md` |
 | 插件整体与设计沿革 | `README.md`、`docs/architecture.md` |
+| 发布范围、敏感信息与测试存档清理 | `docs/audits/release-readiness-2026-11-16.md` |

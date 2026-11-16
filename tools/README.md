@@ -22,6 +22,8 @@ npm --prefix tools run preview
 python -B tools/preview/adventure_preview.py --port 4321
 python -B tools/development/prepare_development.py
 python -B tools/build/verify_adventure_package.py dist/love_with_you-0.9.0.neko-plugin
+python -B tools/build/audit_release.py --history --package dist/love_with_you-0.9.0.neko-plugin
+.\tools\.build-env\Scripts\python.exe -B tools/build/precheck_release.py --report archive/reviews/release-audit-20261116/market-precheck.json
 ```
 
 `build:panel` 只读取相邻 `N.E.K.O` 的渲染器并生成本插件的 `static/panel.html`。`preview` 是模拟关系数据；游戏预览是实际游戏后端配临时存档。`prepare_development.py` 在项目旁生成受管理的 `.neko-dev/love_with_you/`，该副本不包含归档。
@@ -35,3 +37,9 @@ node --test --test-name-pattern="desktop navigation|short host panels" tools/tes
 ```
 
 `test:adventure` 包含耗时较长的游戏浏览器回归，日常规则检查用 `test:rules`。游戏规则测试直接使用随插件发布的 A* 库，无需单独安装 `tools/game/node_modules/`。
+
+游戏浏览器测试显式分配 `neko-adventure-test-*` 临时目录，关闭服务器后删除测试存档；预览失败也执行清理。手动预览不指定 `--data` 时使用临时目录，指定时使用该目录并保留数据。
+
+发布检查扫描当前源码、全部本地 Git 引用可达的历史对象和导入包，输出仅含规则、文件位置、行号与指纹，不回显疑似密钥。扫描覆盖常见凭据格式和直接写入代码的高熵配置值，不能保证发现所有编码或自定义形式的秘密。它同时检查发布文件范围，拒绝开发记录、存档、日志、私有配置和密钥文件。
+
+`precheck_release.py` 将已跟踪及未忽略的新文件导出到临时目录，再调用相邻宿主的官方 SDK 预检，包含 lint、sync 和 release-check。它检查当前工作内容，不要求先提交；结束后清理副本，包写入 `dist/precheck/`。本地 `.build-env` 需安装宿主锁定的检查依赖；本次使用 pytest 9.1.1、pytest-randomly 4.1.0、pytest-asyncio 1.4.0 和 Ruff 0.12.4。

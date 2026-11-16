@@ -14,6 +14,8 @@ import zipfile
 from pathlib import Path
 from types import ModuleType
 
+from audit_release import package_path_allowed, scan_package
+
 
 def smoke_backend(archive: zipfile.ZipFile, prefix: str) -> int:
     """Load only extracted code/data and exercise a synthetic pre-v13 save."""
@@ -105,24 +107,19 @@ def main() -> None:
         "static/journey.json", "static/journey.mjs", "static/journey-rules.mjs", "backend/adventure/journey.py",
         "static/mastery.json", "static/fire-art.mjs", "static/fire-line.json", "static/fire-line.mjs", "static/art/fx-fire-slash.jpg", "static/art/fx-lava-pool.png", "static/art/fx-hellfire.png", "static/art/fx-fire-bird.jpg", "static/ultimate.mjs", "static/art/ultimate-fire-cutin.jpg", "static/art/ult-fire-blast.jpg",
         "static/art/ult-fire-rune.jpg", "static/art/ult-fire-sun.jpg",
-        "docs/adventure/adventure-frost-2026-11-12.md", "docs/adventure/adventure-encounters-2026-11-13.md",
+        "docs/guide.md", "docs/gifts.md",
         "static/actor-art.mjs", "static/companion-art.mjs", "static/art/companion-yui.png",
         "static/art/companion-yui-guardian.png", "static/art/companion-yui-mage.png", "static/forest-art.mjs", "static/battle-art.mjs",
-        "docs/adventure/adventure-visual-sample-2026-11-13.md",
         "static/terrain-rules.mjs", "static/forest-map.mjs",
         "static/engine/astar-0.4.1.js", "static/engine/ASTAR-LICENSE.txt",
-        "docs/adventure/adventure-map-2026-11-13.md",
+        "static/engine/NEKO-LICENSE.txt", "static/engine/NEKO-NOTICE.txt",
         "static/skills-expanded.json", "static/routes.json", "static/expanded-combat.mjs",
-        "docs/adventure/adventure-build-expansion-2026-11-13.md",
         "static/build-mods.json", "static/buildcraft.mjs",
-        "docs/adventure/adventure-free-builds-2026-11-13.md",
         "static/fx-art.mjs", "static/zone-art.mjs", "static/foe-art.mjs",
         "static/art/foe-slime.png", "static/art/foe-wisp.png", "static/art/foe-brute.png",
         "static/art/foe-charger.png", "static/art/foe-caster.png", "static/art/foe-sentinel.png",
         "static/art/foe-oracle.png", "static/art/foe-boss.png",
         "static/art/player-traveller.png", "static/art/player-traveller-guardian.png", "static/art/player-traveller-mage.png",
-        "docs/adventure/adventure-foe-sprites-2026-11-15.md",
-        "docs/adventure/adventure-combat-feedback-2026-11-14.md",
     }
     required.update(path.relative_to(root).as_posix() for path in (root / "backend").rglob("*.py"))
     compared = set()
@@ -135,6 +132,7 @@ def main() -> None:
             if member.is_dir() or not member.filename.startswith(prefix):
                 continue
             relative = member.filename.removeprefix(prefix)
+            assert package_path_allowed(relative), relative
             assert not any(part in {"tests", "tools", "dist", "archive", "__pycache__", "node_modules"}
                            for part in Path(relative).parts)
             assert not ("/" not in relative and relative.startswith("_") and relative != "__init__.py")
@@ -147,10 +145,13 @@ def main() -> None:
             compared.add(relative)
         loaded_modules = smoke_backend(archive, prefix)
     assert required <= compared
+    findings, payload_files = scan_package(args.package)
+    assert not findings, findings
     print(json.dumps({
         "version": inspected.version, "payload_hash_verified": True, "crc_verified": True,
         "source_files_compared": len(compared), "bytes": args.package.stat().st_size,
         "extracted_backend_modules_loaded": loaded_modules, "synthetic_legacy_save_verified": True,
+        "release_hygiene_verified": True, "payload_files": payload_files,
         "sha256": hashlib.sha256(args.package.read_bytes()).hexdigest(),
     }, indent=2))
 

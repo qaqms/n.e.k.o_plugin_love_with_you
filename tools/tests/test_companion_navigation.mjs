@@ -1,13 +1,14 @@
 import assert from "node:assert/strict"
 import { before, after, beforeEach, afterEach, test } from "node:test"
 import { spawn } from "node:child_process"
-import { readFileSync, readdirSync, mkdirSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { existsSync, readFileSync, readdirSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { basename, dirname, join, resolve } from "node:path"
 import { dependency, fixture, pluginRoot, startPreview } from "../preview/ui_preview.mjs"
 
 const { chromium } = dependency("playwright")
 const artifacts = resolve(process.env.NEKO_UI_ARTIFACTS || join(pluginRoot, "archive/reviews/navigation"))
-let browser, backend, preview, backendUrl
+let browser, backend, preview, backendUrl, backendData
 async function waitForPlay(frame, elapsed) {
   const deadline = Date.now() + 12000
   let state
@@ -30,7 +31,8 @@ before(async () => {
   })
 })
 beforeEach(async () => {
-  backend = spawn(process.env.NEKO_PYTHON || "python", ["-B", "tools/preview/adventure_preview.py", "--port", "0"], {
+  backendData = mkdtempSync(join(tmpdir(), "neko-adventure-test-"))
+  backend = spawn(process.env.NEKO_PYTHON || "python", ["-B", "tools/preview/adventure_preview.py", "--port", "0", "--data", backendData], {
     cwd: pluginRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
   })
   backendUrl = await new Promise((resolve, reject) => {
@@ -52,10 +54,16 @@ after(async () => {
   await new Promise(resolve => preview?.server.close(resolve))
 })
 afterEach(async () => {
-  if (backend && backend.exitCode === null) {
+  if (backend?.pid && backend.exitCode === null && backend.signalCode === null) {
     const exited = new Promise(resolve => backend.once("exit", resolve))
     backend.kill()
     await exited
+  }
+  if (backendData && existsSync(backendData)) {
+    const target = realpathSync(backendData)
+    assert.equal(dirname(target), realpathSync(tmpdir()))
+    assert.match(basename(target), /^neko-adventure-test-[a-z0-9]+$/i)
+    rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
   }
 })
 

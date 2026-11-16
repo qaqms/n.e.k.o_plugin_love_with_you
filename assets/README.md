@@ -1,4 +1,14 @@
-# Shared Portrait Library
+# Image Assets
+
+## Plugin Icon
+
+`icon.png` is the unchanged `1.png` supplied by the project owner on
+2026-11-16 for the README and plugin-market icon. The market submission's icon
+field uses `assets/icon.png`, relative to the plugin directory. The original
+file and repository copy have the same SHA256. This source record does not
+assign a new license to the image.
+
+## Shared Portrait Library
 
 `portraits/catalog.json` describes the bundled library. Images are shared by
 all host characters. Users choose Fixed, Random or Off under Settings.
@@ -36,11 +46,16 @@ future images; an empty list means no random candidates.
 The bundled library contains 64 images in 8 game categories: 18 from the
 user-supplied `千恋万花_立绘` folder and 46 retained from `精选立绘_Key与Qruppo`.
 All `ぬきたし (Qruppo)` images and selected swimsuit/underwear variants from
-`天使☆嚣嚣_RE-BOOT` are excluded by `tools/portrait_exclusions.json`.
+`天使☆嚣嚣_RE-BOOT` are excluded by `tools/assets/portrait_exclusions.json`.
 Existing IDs are preserved when changing categories. The optional
 `source_file` field records the original relative filename. Original PNGs
 remain outside this plugin. This provenance does not assign a license to the
 artwork; the plugin's source-code license does not cover these images.
+
+The release audit on 2026-11-16 found no redistribution permission records for
+this bundled library in the repository. Its files are retained pending the
+owner's decision; the audit does not establish permission for a market release.
+Custom import support remains independent of the bundled library.
 
 ## Custom Imports
 

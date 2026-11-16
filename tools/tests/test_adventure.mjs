@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtempSync, mkdirSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
 
@@ -21,65 +21,85 @@ async function harness(options = {}) {
   const server = spawn(python, ["-B", join(root, "tools/preview/adventure_preview.py"), "--port", "0", "--data", data], {
     cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
   })
-  const url = await new Promise((resolve, reject) => {
-    let output = "", errors = ""
-    const timer = setTimeout(() => reject(new Error(`preview timeout ${errors}`)), 15000)
-    server.stderr.on("data", value => { errors += value })
-    server.stdout.on("data", value => {
-      output += value
-      if (output.includes("\n")) {
-        clearTimeout(timer)
-        try { resolve(JSON.parse(output.split("\n")[0]).url) } catch (e) { reject(e) }
+  let browser
+  const close = async () => {
+    try { await browser?.close() } finally {
+      if (server.pid && server.exitCode === null && server.signalCode === null) {
+        const exited = new Promise(resolve => server.once("exit", resolve))
+        server.kill()
+        await exited
       }
-    })
-    server.on("error", reject)
-    server.on("exit", code => { if (code) { clearTimeout(timer); reject(new Error(errors)) } })
-  })
-  const browser = await chromium.launch({
-    executablePath: process.env.NEKO_UI_BROWSER, headless: true,
-    args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
-  })
-  const context = await browser.newContext({ viewport: { width: 1280, height: 820 }, ...browserOptions })
-  const page = await context.newPage()
-  const errors = []
-  page.on("pageerror", error => errors.push(error.message))
-  await page.goto(url)
-  const frame = page.frameLocator("#surface")
-  try {
-    await frame.getByRole("button", { name: "进入林地", exact: true }).waitFor()
-  } catch (error) {
-    await browser.close(); server.kill()
-    throw new Error(`${error.message}\nPage errors: ${errors.join("\n")}`)
-  }
-  const actual = () => page.frames().find(f => f.url().includes("/ui/index.html"))
-  const state = (fn, args) => actual().evaluate(async ({ source, args }) => {
-    const { controller } = await import("./adventure.mjs")
-    return new Function("c", "args", `return (${source})(c, args)`)(controller, args)
-  }, { source: fn.toString(), args })
-  const start = async () => {
-    if (legacy || rules) {
-      await frame.locator("#player-class").focus()
-      await state((c, rules) => c.start({ character: "YUI", player_class: rules === 1 ? "guardian" : "mage", companion_class: "mage", rules }), rules || 1)
-    } else {
-      await frame.locator("#player-class").focus()
-      await state(c => c.start({
-        character: document.querySelector("#character").value,
-        player_class: document.querySelector("#player-class").value,
-        companion_class: document.querySelector("#partner-class").value, rules: 3,
-      }))
+      if (existsSync(data)) {
+        const target = realpathSync(data)
+        assert.equal(dirname(target), realpathSync(tmpdir()))
+        assert.match(basename(target), /^neko-adventure-test-[a-z0-9]+$/i)
+        rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
+      }
     }
-    if (rules === 7) await chooseStarters({ frame, state })
-    await frame.locator("#screen").waitFor({ state: "hidden" })
-    await poll(() => state(c => !c.saving && c.lastSaved === 0))
   }
-  if (displayRules) await state((c, rules) => {
-    const read = c.api.read.bind(c.api)
-    c.api.read = async () => { const view = await read(); view.rules = rules; return view }
-    c.api.view.rules = rules; c.preflight(c.api.view)
-  }, displayRules)
-  return {
-    page, frame, browser, url, state, start, errors,
-    async close() { await browser.close(); server.kill(); await new Promise(resolve => server.once("exit", resolve)) },
+  try {
+    const url = await new Promise((resolve, reject) => {
+      let output = "", errors = ""
+      const timer = setTimeout(() => reject(new Error(`preview timeout ${errors}`)), 15000)
+      server.stderr.on("data", value => { errors += value })
+      server.stdout.on("data", value => {
+        output += value
+        if (output.includes("\n")) {
+          clearTimeout(timer)
+          try { resolve(JSON.parse(output.split("\n")[0]).url) } catch (e) { reject(e) }
+        }
+      })
+      server.on("error", reject)
+      server.on("exit", code => { if (code) { clearTimeout(timer); reject(new Error(errors)) } })
+    })
+    browser = await chromium.launch({
+      executablePath: process.env.NEKO_UI_BROWSER, headless: true,
+      args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+    })
+    const context = await browser.newContext({ viewport: { width: 1280, height: 820 }, ...browserOptions })
+    const page = await context.newPage()
+    const errors = []
+    page.on("pageerror", error => errors.push(error.message))
+    await page.goto(url)
+    const frame = page.frameLocator("#surface")
+    try {
+      await frame.getByRole("button", { name: "进入林地", exact: true }).waitFor()
+    } catch (error) {
+      throw new Error(`${error.message}\nPage errors: ${errors.join("\n")}`)
+    }
+    const actual = () => page.frames().find(f => f.url().includes("/ui/index.html"))
+    const state = (fn, args) => actual().evaluate(async ({ source, args }) => {
+      const { controller } = await import("./adventure.mjs")
+      return new Function("c", "args", `return (${source})(c, args)`)(controller, args)
+    }, { source: fn.toString(), args })
+    const start = async () => {
+      if (legacy || rules) {
+        await frame.locator("#player-class").focus()
+        await state((c, rules) => c.start({ character: "YUI", player_class: rules === 1 ? "guardian" : "mage", companion_class: "mage", rules }), rules || 1)
+      } else {
+        await frame.locator("#player-class").focus()
+        await state(c => c.start({
+          character: document.querySelector("#character").value,
+          player_class: document.querySelector("#player-class").value,
+          companion_class: document.querySelector("#partner-class").value, rules: 3,
+        }))
+      }
+      if (rules === 7) await chooseStarters({ frame, state })
+      await frame.locator("#screen").waitFor({ state: "hidden" })
+      await poll(() => state(c => !c.saving && c.lastSaved === 0))
+    }
+    if (displayRules) await state((c, rules) => {
+      const read = c.api.read.bind(c.api)
+      c.api.read = async () => { const view = await read(); view.rules = rules; return view }
+      c.api.view.rules = rules; c.preflight(c.api.view)
+    }, displayRules)
+    return {
+      page, frame, browser, url, state, start, errors,
+      close,
+    }
+  } catch (error) {
+    await close()
+    throw error
   }
 }
 async function chooseStarters(h, player = "fire", companion = "wind") {

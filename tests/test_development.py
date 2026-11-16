@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,22 +40,31 @@ def source(tmp_path):
     return root
 
 
-def test_prepare_builds_importable_package_and_refreshes_deleted_files(prepare, source, monkeypatch):
+def test_prepare_builds_importable_package_and_refreshes_deleted_files(prepare, source):
+    previously_loaded = sys.modules.get("love_with_you")
     target = prepare(source)
     assert target == source.parent / ".neko-dev" / "love_with_you"
     assert not (target / "tests").exists()
     assert not (target / "archive").exists()
     assert (target / "backend" / "relationship" / "engine.py").read_text(encoding="utf-8") == "VALUE = 1\n"
     assert (target / "ui" / "panel.tsx").read_bytes() == (source / "ui" / "panel.tsx").read_bytes()
-    monkeypatch.syspath_prepend(str(target.parent))
-    spec = importlib.util.find_spec("love_with_you")
-    assert Path(spec.origin) == target / "__init__.py"
+    imported = subprocess.run(
+        [
+            sys.executable, "-I", "-B", "-X", "utf8", "-c",
+            "import importlib, sys; sys.path.insert(0, sys.argv[1]); "
+            "module = importlib.import_module('love_with_you'); "
+            "assert hasattr(module, 'LoveWithYouPlugin'); print(module.__file__)",
+            str(target.parent),
+        ],
+        text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    )
+    assert Path(imported.stdout.strip()) == target / "__init__.py"
     (source / "backend" / "relationship" / "engine.py").unlink()
     (source / "__init__.py").write_text("class LoveWithYouPlugin: VALUE = 2\n", encoding="utf-8")
     assert prepare(source) == target
     assert not (target / "backend" / "relationship" / "engine.py").exists()
     assert "VALUE = 2" in (target / "__init__.py").read_text(encoding="utf-8")
-    assert "love_with_you" not in sys.modules
+    assert sys.modules.get("love_with_you") is previously_loaded
 
 
 def test_prepare_refuses_to_replace_unmanaged_directory(prepare, source):

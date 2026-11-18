@@ -220,6 +220,8 @@ export class SkillCombat {
       if (Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) > half) continue
       const amount = this.damage(owner, p.damage) * multiplier
       const hit = this.frost?.strike(enemy, owner, skill.id, amount) ?? amount
+      const cel = this.modern && skill.id === "slash" && skill.evolution !== "fusion"
+      if (cel) this.s.art?.impact?.(enemy, angle, "slash")
       if (this.swordLine) this.swordLine.strike(enemy, owner, hit)
       else this.deal(enemy, hit, owner)
       if (this.s.outcome !== "playing") return
@@ -233,9 +235,10 @@ export class SkillCombat {
       x: actor.x + Math.cos(a) * p.range, y: actor.y + Math.sin(a) * p.range,
     }))
     const form = skill.evolution === "fusion" ? "fusion" : skill.level === 5 ? "awakened" : "base"
-    this.flash(actor.x, actor.y, Math.min(65, p.range), COLORS[skill.id], this.modern ? form : "base")
-    this.lastSlash = { x: actor.x, y: actor.y, lines, angle, half, range: p.range,
-      until: this.s.elapsed + (this.modern ? 220 : 130), color: form === "fusion" && this.modern ? COLORS.wind : COLORS[skill.id] }
+    const cel = this.modern && skill.id === "slash" && form !== "fusion"
+    if (!cel) this.flash(actor.x, actor.y, Math.min(65, p.range), COLORS[skill.id], this.modern ? form : "base")
+    this.lastSlash = { x: actor.x, y: actor.y, lines, angle, half, range: p.range, kind: cel ? "slash" : "",
+      until: this.s.elapsed + (cel ? 240 : this.modern ? 220 : 130), color: form === "fusion" && this.modern ? COLORS.wind : COLORS[skill.id] }
     if (this.modern && skill.evolution === "fusion" && this.s.outcome === "playing") {
       const echo = { ...p, range: 500, count: 1, pierce: 1, damage: p.damage * .35 }
       if (!this.emit(actor, owner, { id: "wind", level: 1, evolution: "" }, echo, angle)) {

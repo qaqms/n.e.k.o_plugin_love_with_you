@@ -1,3 +1,4 @@
+import { paintCelSlash } from "./cel-fx.mjs"
 import { palette } from "./fx-art.mjs"
 
 // Painters for standing zones, beams and sword arcs. They read combat state and never change it.
@@ -255,6 +256,7 @@ export function paintLines(combat, art, now) {
 
 export function paintSlash(art, now) {
   const slash = art.slash
+  if (!art.reduced && (slash?.source.kind || !slash)) return paintCelSlash(art, now)
   if (!slash) return
   const src = slash.source, G = art.graphics, A = art.glow
   const life = Math.max(1, src.until - slash.born), fade = clamp(1 - (now - slash.born) / life, 0, 1)

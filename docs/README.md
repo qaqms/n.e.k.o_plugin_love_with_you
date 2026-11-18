@@ -46,6 +46,7 @@
 - [走出口选路与首领圣所](adventure/adventure-exits-sanctuary-2026-11-16.md)
 - [怪物卡通化与攻击动作](adventure/adventure-cartoon-foes-2026-11-16.md)
 - [突进手动线与一键连招](adventure/adventure-dash-line-2026-11-16.md)
+- [卡通描边特效样板与新人物](adventure/adventure-cel-art-2026-11-18.md)
 
 ## 审计与方案
 

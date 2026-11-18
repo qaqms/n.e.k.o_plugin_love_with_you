@@ -1,9 +1,10 @@
-import { FRAME_COUNTS, directionFor } from "./actor-art.mjs"
+import { FRAME_COUNTS, FRAME_TIME, actorKey, directionFor } from "./actor-art.mjs"
 import { DEPTH } from "./terrain-rules.mjs"
 import { isBoss } from "./encounter-rules.mjs"
 import { installFxTextures, palette, paletteName, mix, FOE_COLORS } from "./fx-art.mjs"
 import { foeSheet } from "./foe-art.mjs"
 import { paintZones, paintLines, paintSlash } from "./zone-art.mjs"
+import { celImpact, paintHits } from "./cel-fx.mjs"
 
 // Presentation only. Nothing here reads the run RNG, writes the snapshot or changes a collision body.
 export const MAX_PARTICLES = 180
@@ -12,6 +13,7 @@ const TAU = Math.PI * 2, GOLDEN = 2.399963
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 const MANUAL = new Set(["flame", "frost", "dash", "quake", "whirl", "meteor"])
 const SUPPORT = new Set(["pull", "armor", "heal", "beacon"])
+const CHANNELLED = new Set(["flame", "frost", "quake", "meteor"])
 const MELEE = new Set(["slash", "guard"])
 const ELITES = new Set(["brute", "charger", "caster"])
 const NUMBER_TINT = { player: 0xfff0c4, companion: 0xa9e2ff, shatter: 0xd6fbff, hurt: 0xff8b7d, block: 0xbcdcf5 }
@@ -142,6 +144,8 @@ export class BattleArt {
     const state = this.actors.get(actor) || { direction: "down" }
     state.direction = directionFor(Math.cos(angle) * 10, Math.sin(angle) * 10, state.direction)
     state.castAt = s.elapsed; state.castUntil = s.elapsed + 320
+    // Manual and support skills hold a channelling pose; everything else plays the strike and follow-through.
+    state.channel = SUPPORT.has(skill) || CHANNELLED.has(skill)
     this.actors.set(actor, state)
     const pal = palette(skill), heavy = MANUAL.has(skill) || SUPPORT.has(skill)
     this.swing = MELEE.has(skill) ? { at: s.elapsed, x: actor.x, y: actor.y } : null
@@ -286,7 +290,7 @@ export class BattleArt {
     this.foes.set(enemy, state)
     // Small repeated ticks should not strobe the whole pack; they keep the number and skip the flash.
     if (amount < 10 && now - state.flashAt < 450) return
-    state.flashAt = now; state.flashUntil = now + (this.reduced ? 50 : 55 + Math.min(45, amount))
+    state.flashAt = now; state.flashUntil = now + (this.reduced ? 50 : 40 + Math.min(25, amount / 4))
     state.kickAt = now; state.kick = (enemy.x >= actor.x ? 1 : -1) * (isBoss(enemy) ? 3 : Math.min(12, 5 + amount / 6))
     if (this.reduced || this.sparks++ > 10) return
     const away = Math.atan2(enemy.y - actor.y, enemy.x - actor.x)
@@ -317,6 +321,7 @@ export class BattleArt {
     const image = this.shades.pop() || this.s.add.image(0, 0, source.texture.key)
     image.setTexture(source.texture.key, source.frame.name).setVisible(true).setPosition(o.x, o.y)
       .setScale(source.scaleX, source.scaleY).setFlipX(source.flipX).setDepth(source.depth).setAngle(source.angle)
+      .setOrigin(source.originX, source.originY)
     if (o.pop) image.setTintFill(0xffffff).setBlendMode(Phaser.BlendModes.NORMAL)
     else image.setTintFill(o.tint).setBlendMode(Phaser.BlendModes.ADD)
     this.ghosts.push({ image, born: this.s.elapsed, life: o.life, pop: Boolean(o.pop), alpha: o.alpha ?? 1, tint: o.tint, death: o.death || null,
@@ -378,10 +383,13 @@ export class BattleArt {
     const casting = state.castUntil > now
     if (!casting) state.direction = directionFor(velocity.x, velocity.y, state.direction)
     const hurt = state.hurtUntil > now
-    const pose = hurt ? "hurt" : casting ? "cast" : Math.hypot(velocity.x, velocity.y) > 3 ? "walk" : "idle"
-    const frame = Math.floor((hurt ? now - state.hurtAt : casting ? now - state.castAt : now) / (pose === "idle" ? 230 : 80)) % FRAME_COUNTS[pose]
+    const pose = hurt ? "hurt" : casting ? state.channel ? "channel" : "cast" : Math.hypot(velocity.x, velocity.y) > 3 ? "walk" : "idle"
+    const elapsed = hurt ? now - state.hurtAt : casting ? now - state.castAt : now
+    // One-shot poses hold their last frame instead of looping.
+    const step = Math.floor(elapsed / FRAME_TIME[pose]), count = FRAME_COUNTS[pose]
+    const frame = pose === "idle" || pose === "walk" ? step % count : Math.min(count - 1, step)
     const texture = `${owner === "companion" ? "companion-" : ""}${kind}-${state.direction}-${pose}-${frame}`
-    if (actor.frame.name !== texture) actor.setTexture("actors-v2", texture)
+    if (actor.frame.name !== texture) actor.setTexture(actorKey(texture), texture)
     this.actors.set(actor, state)
   }
   update() {
@@ -582,7 +590,9 @@ export class BattleArt {
       }
     }
     paintSlash(this, now)
+    if (!this.reduced) paintHits(this, now)
   }
+  impact(enemy, angle, kind) { if (!this.reduced && enemy.active) celImpact(this, enemy, angle, kind) }
   numberFrame(now) {
     let kept = 0
     for (const n of this.numbers) {
@@ -648,7 +658,7 @@ export function paintCombat(combat) {
   paintZones(combat, art, now)
   if (combat.lastSlash?.until > now) {
     if (art.slash?.source !== combat.lastSlash) art.slash = { source: combat.lastSlash, born: now, flip: art.serial++ % 2 === 0 }
-  } else art.slash = null
+  } else if (!combat.lastSlash?.kind) art.slash = null
   paintLines(combat, art, now)
   combat.frost?.paint(combat.graphics)
 }

@@ -71,6 +71,8 @@ README 面向插件用户；安装、功能和隐私集中在首页，开发入�
 | `static/hazards.mjs`，`terrain-rules.mjs` 的 `HAZARDS`，`forest-map.mjs` 的 `removeProp` | 规则 16 的地形机制：遗迹石柱磨损与倒塌（存档 `terrain`）、深处荆棘减速与毒雾 | 改其他布局、消费战斗随机数 | `tests/test_adventure.py` 的规则 16 用例、浏览器 `rule16` 用例 |
 | `static/journey.mjs` 的出口部分（`walking`、`drawExits`、`walk`）与 `hazards.mjs` 的 `sanctuary` | 规则 17：打完一段后在场地边缘亮出出口，走进去选路，暂停仍可用面板；首领圣所第二阶段立石发光，第三阶段根须封场 | 改快照格式 | 浏览器 `rule17` 用例 |
 | `static/foe-art.mjs` 的 `FOE_SHEETS`，`battle-art.mjs` 的 `motionOf`、`lunge`、`strikeFx` | 步骤 0.9.7 卡通怪物：16 格动作表（移动、蓄力、出招、受击、死亡），蓄力跟随遭遇战 AI，出手和接触时播放出招与特效，面向玩家；只改画面 | 改碰撞体或缩放 | 浏览器 `cartoon enemies`、`raster` 用例 |
+| `static/cel-fx.mjs`，`zone-art.mjs` 的 `paintSlash`，`battle-art.mjs` 的 `impact` | 卡通描边特效：迅斩刀光（扫开、停顿、从尾部消失）、命中十字星和碎片、地面划痕；只改画面 | 写快照、改命中判定 | 浏览器 `sword is an area`、`combat feedback` 用例 |
+| `static/actor-art.mjs` 的 `PLAYER_SHEET`、`COMPANION_SHEET`、`FRAME_TIME`、`actorKey`、`fitPlayer`、`fitCompanion` | 新人物动作表：160×150 帧，脚在精灵位置下方 24，帧留在各自贴图上；碰撞框不变 | 改碰撞框、改精灵缩放 | 浏览器 `raster player traveller`、`art sample` 用例 |
 | `static/dash-line.json`、`dash-line.mjs`，`sword-art.mjs` 的 `DASH_ART` | 规则 18 的突进手动线（连斩、回身斩、八方斩、残影、剑域）与一键连招；每刀走 `swordLine.strike`，连招队列和剑域计时不存档 | 写快照、绕过地形落点检查 | `tools/tests/test_strikes.mjs`、`tests/test_adventure.py` 的规则 18 用例、浏览器 `rule18` 用例 |
 | `static/encounters.mjs`、`encounter-rules.mjs`（规则 12 部分） | 精英词缀的目录、出现概率与抽取，分裂与援兵的生成，守关强敌和首领按阶段选择的预警排布；精英光环在同一个预警图层绘制 | `tools/tests/test_adventure.mjs` 的 rule12 用例、`tests/test_adventure.py` 的 rule12 用例 |
 | `static/fire-art.mjs` | 火系的贴图特效：爆炸图池与焰环法阵；只读战斗状态，不参与结算，贴图缺失时由调用方回退到矢量爆炸 | 浏览器截图检查 |

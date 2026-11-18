@@ -1,7 +1,10 @@
 // Native sprite artwork, kept at the original frame size so physics stays unchanged.
 import { companionSprite } from "./companion-art.mjs"
 const svg = body => `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="72" viewBox="0 0 64 72">${body}</svg>`
-export const FRAME_COUNTS = { idle: 4, walk: 6, cast: 4, hurt: 2 }
+// Columns of the raster sheets, in this order: idle 4, walk 4, cast 4 (strike, follow-through), channel 2, hurt 2.
+export const FRAME_COUNTS = { idle: 4, walk: 4, cast: 4, channel: 2, hurt: 2 }
+// Time each frame stays on screen, in milliseconds.
+export const FRAME_TIME = { idle: 230, walk: 105, cast: 80, channel: 160, hurt: 80 }
 export const DIRECTIONS = ["down", "left", "right", "up"]
 
 function actor(kind, direction, pose, frame, owner = "player") {
@@ -61,13 +64,17 @@ function actor(kind, direction, pose, frame, owner = "player") {
 
 // The companion uses the default YUI look; the player keeps the original traveller.
 const sprite = (kind, direction, pose, frame, owner) => owner === "companion"
-  ? companionSprite(kind, direction, pose, frame, FRAME_COUNTS[pose]) : actor(kind, direction, pose, frame, owner)
-// Raster YUI frames: one 80x90 cell per frame, drawn at display size (sprite scale 1) so the game does not
-// resample them. Rows guardian then mage (each down/left/right/up), columns idle, walk, cast, hurt.
-// The vector frames above remain the fallback when the sheet fails to load.
-export const COMPANION_SHEET = { key: "companion-yui", url: "art/companion-yui.png", cell: [80, 90] }
+  ? companionSprite(kind, direction, pose === "channel" ? "cast" : pose, frame, FRAME_COUNTS[pose]) : actor(kind, direction, pose === "channel" ? "cast" : pose, frame, owner)
+// Raster frames: one 160x150 cell per frame, drawn at display size (sprite scale 1) so the game does not
+// resample them. Rows guardian then mage (each down/left/right/up), columns as FRAME_COUNTS.
+// The feet sit 24 below the sprite position, as with the old 80x90 frames, so the art grows upward only.
+// The vector frames above remain the fallback when a sheet fails to load.
+export const COMPANION_SHEET = { key: "companion-yui", url: "art/companion-yui.png", cell: [160, 150], origin: 112 }
 // The player traveller uses the same sheet layout as the companion.
-export const PLAYER_SHEET = { key: "player-traveller", url: "art/player-traveller.png", cell: [80, 90] }
+export const PLAYER_SHEET = { key: "player-traveller", url: "art/player-traveller.png", cell: [160, 150], origin: 112 }
+// Which texture holds each actor frame: a loaded raster sheet, or the vector atlas.
+export const ACTOR_KEYS = {}
+export const actorKey = name => ACTOR_KEYS[name] || "actors-v2"
 const RASTER_AVATAR = /art\/(companion-yui|player-traveller)-(guardian|mage)\.png$/
 const COMPANION_CELLS = {}, PLAYER_CELLS = {}
 export const ACTOR_TEXTURES = {}
@@ -127,42 +134,40 @@ export function installActorAtlas(scene) {
   const source = name => sheets.find(sheet => sheet.cells[name])
   const frames = [...Object.keys(ACTOR_TEXTURES), ...Object.keys(ENEMY_TEXTURES)], columns = 16
   const vector = frames.filter(name => !source(name)), raster = frames.filter(source)
-  const [cw, ch] = COMPANION_SHEET.cell, rasterColumns = Math.floor(columns * 64 / cw), top = Math.ceil(vector.length / columns) * 72
-  const atlas = scene.textures.createCanvas("actors-v2", columns * 64, top + Math.ceil(raster.length / rasterColumns) * ch)
+  // Raster frames stay on their own sheet textures; only vector frames go into the shared atlas.
+  for (const sheet of sheets) {
+    const texture = scene.textures.get(sheet.key), [cw, ch] = (sheet.key === COMPANION_SHEET.key ? COMPANION_SHEET : PLAYER_SHEET).cell
+    for (const name of raster.filter(name => source(name) === sheet)) {
+      const [column, row] = sheet.cells[name]
+      texture.add(name, 0, column * cw, row * ch, cw, ch)
+      ACTOR_KEYS[name] = sheet.key
+      if (scene.textures.exists(name)) scene.textures.remove(name)
+    }
+  }
+  const atlas = scene.textures.createCanvas("actors-v2", columns * 64, Math.ceil(vector.length / columns) * 72)
   for (const [index, name] of vector.entries()) {
     const x = index % columns * 64, y = Math.floor(index / columns) * 72
     atlas.context.drawImage(scene.textures.get(name).getSourceImage(), x, y)
     atlas.add(name, 0, x, y, 64, 72)
     scene.textures.remove(name)
   }
-  for (const [index, name] of raster.entries()) {
-    const x = index % rasterColumns * cw, y = top + Math.floor(index / rasterColumns) * ch, sheet = source(name), [column, row] = sheet.cells[name]
-    atlas.context.drawImage(sheet.image, column * cw, row * ch, cw, ch, x, y, cw, ch)
-    atlas.add(name, 0, x, y, cw, ch)
-    scene.textures.remove(name)
-  }
-  for (const sheet of sheets) scene.textures.remove(sheet.key)
   atlas.refresh()
 }
 
-// Show the companion on its atlas frame at the right scale: 1 for raster YUI frames, 0.66 for vector ones.
-// The world-space body stays 17.16 x 18.48, 8.58 left of and 0.66 above the sprite position, as before.
-export function fitCompanion(sprite, kind = "mage") {
-  sprite.setTexture("actors-v2", `companion-${kind === "guardian" ? "guardian" : "mage"}-down-idle-0`)
-  const scale = sprite.frame.width === COMPANION_SHEET.cell[0] ? 1 : .66
-  sprite.setScale(scale)
-  sprite.body?.setSize(17.16 / scale, 18.48 / scale)
-    .setOffset(sprite.frame.width / 2 - 8.58 / scale, sprite.frame.height / 2 - .66 / scale)
+// Fit an actor to its first frame. Raster frames show at scale 1 with the feet 24 below the sprite position;
+// vector frames keep their old scale and centre origin. Either way the world-space body is the same as before.
+function fit(sprite, name, sheet, vectorScale, width, height, left, up) {
+  const key = actorKey(name)
+  sprite.setTexture(key, name)
+  const raster = key !== "actors-v2", scale = raster ? 1 : vectorScale
+  sprite.setScale(scale).setOrigin(.5, raster ? sheet.origin / sheet.cell[1] : .5)
+  sprite.body?.setSize(width / scale, height / scale)
+    .setOffset(sprite.displayOriginX - left / scale, sprite.displayOriginY - up / scale)
   return sprite
 }
-
-// The player on its atlas frame: scale 1 for raster traveller frames, 0.7 for vector ones.
-// The world-space body stays 19.6 x 21, 9.8 left of and 1.4 above the sprite position, as before.
-export function fitPlayer(sprite, kind = "guardian") {
-  sprite.setTexture("actors-v2", `${kind === "mage" ? "mage" : "guardian"}-down-idle-0`)
-  const scale = sprite.frame.width === PLAYER_SHEET.cell[0] ? 1 : .7
-  sprite.setScale(scale)
-  sprite.body?.setSize(19.6 / scale, 21 / scale)
-    .setOffset(sprite.frame.width / 2 - 9.8 / scale, sprite.frame.height / 2 - 1.4 / scale)
-  return sprite
-}
+// The companion's body is 17.16 x 18.48, 8.58 left of and 0.66 above the sprite position.
+export const fitCompanion = (sprite, kind = "mage") =>
+  fit(sprite, `companion-${kind === "guardian" ? "guardian" : "mage"}-down-idle-0`, COMPANION_SHEET, .66, 17.16, 18.48, 8.58, .66)
+// The player's body is 19.6 x 21, 9.8 left of and 1.4 above the sprite position.
+export const fitPlayer = (sprite, kind = "guardian") =>
+  fit(sprite, `${kind === "mage" ? "mage" : "guardian"}-down-idle-0`, PLAYER_SHEET, .7, 19.6, 21, 9.8, 1.4)

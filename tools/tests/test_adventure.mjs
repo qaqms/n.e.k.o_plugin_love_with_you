@@ -2465,7 +2465,7 @@ test("all eight raster enemies play cut-out frames on the unchanged world-space 
   } finally { await h.close() }
 })
 
-test("the raster player traveller keeps the world-space body and animates on the shared actor atlas", async () => {
+test("the raster player traveller keeps the world-space body and animates on its own sheet with the feet below the position", async () => {
   const h = await harness()
   try {
     await startFree(h)
@@ -2478,11 +2478,12 @@ test("the raster player traveller keeps the world-space body and animates on the
       for (const [vx, vy] of [[0, 0], [90, 0], [-90, 0], [0, -90], [0, 90]]) { p.body.velocity.set(vx, vy); s.art.update(); frames.push(p.frame.name) }
       p.body.velocity.set(0, 0)
       s.art.cast("player", "fire", 0); s.art.update()
-      return { body, frames, cast: p.frame.name, width: p.frame.width, scale: p.scaleX, kind: s.meta.player_class,
+      return { body, frames, cast: p.frame.name, width: p.frame.width, scale: p.scaleX, kind: s.meta.player_class, key: p.texture.key, origin: p.displayOriginY,
         avatar: document.getElementById("player-avatar").getAttribute("src") }
     })
     assert.deepEqual(result.body, [19.6, 21, -9.8, -1.4])
-    assert.equal(result.width, 80); assert.equal(result.scale, 1)
+    assert.equal(result.width, 160); assert.equal(result.scale, 1)
+    assert.deepEqual([result.key, result.origin], ["player-traveller", 112])
     const k = result.kind
     assert.match(result.frames[0], new RegExp(`^${k}-down-idle-\\d$`))
     assert.match(result.frames[1], new RegExp(`^${k}-right-walk-\\d$`)); assert.match(result.frames[2], new RegExp(`^${k}-left-walk-\\d$`))

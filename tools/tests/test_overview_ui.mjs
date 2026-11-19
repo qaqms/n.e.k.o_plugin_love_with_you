@@ -48,6 +48,38 @@ async function populate(page) {
 const home = page => page.locator(".lwy-nav").getByRole("button", { name: "关系概览", exact: true }).click()
 const writes = page => page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "experience_action"))
 
+test("together activity starts from the overview and returns as a resumable last activity", async () => {
+  const page = await pageFor({ viewport: { width: 420, height: 800 } })
+  await populate(page)
+  const summary = page.locator(".lwy-together")
+  await summary.getByRole("button", { name: "一起相处", exact: true }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByLabel("相处方式").selectOption("screen")
+  await dialog.getByRole("button", { name: "开始相处", exact: true }).click()
+  await dialog.waitFor({ state: "hidden" })
+  await home(page)
+  await summary.getByText("相处中", { exact: true }).waitFor()
+  await summary.getByRole("button", { name: "结束并填写记录", exact: true }).click()
+  await dialog.getByLabel("歌名或内容标题", { exact: true }).fill("深夜电台纪录片")
+  await dialog.getByLabel("进度（可选）").fill("第二集 18:40")
+  await noOverflow(page)
+  await dialog.getByRole("button", { name: "确认留存", exact: true }).click()
+  await dialog.waitFor({ state: "hidden" })
+  await home(page)
+  await summary.getByText("上次相处", { exact: true }).waitFor()
+  await summary.getByText("第二集 18:40", { exact: true }).waitFor()
+  await page.screenshot({ path: `${artifacts}/activities-mobile.png` })
+  await summary.getByRole("button", { name: "查看上次相处", exact: true }).click()
+  await page.getByRole("button", { name: "继续这次相处", exact: true }).click()
+  assert.equal(await dialog.getByLabel("歌名或内容标题（可稍后填写）").inputValue(), "深夜电台纪录片")
+  assert.equal(await dialog.getByLabel("相处方式").inputValue(), "screen")
+  const calls = await writes(page)
+  assert.deepEqual(calls.map(call => call.args.operation), ["start_activity", "save_activity"])
+  assert.deepEqual(calls.map(call => call.args.character), ["YUI", "YUI"])
+  assert.deepEqual(page.errors, [])
+  await page.close()
+})
+
 async function noOverflow(page) {
   assert.deepEqual(await page.evaluate(() =>
     [...document.querySelectorAll(".lwy-together,.lwy-together-row,.lwy-together-copy,.lwy-sidebar,.lwy-workspace,.neko-modal,.neko-button")]

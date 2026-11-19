@@ -55,6 +55,26 @@ def test_start_and_checkpoint_survive_reload_without_restoring_control(store, mo
     assert reloaded.view("client_00000001")["owns_control"]
 
 
+def test_resume_summary_for_legacy_run_hides_finished_runs(store):
+    assert store.resume_summary() is None
+    call(store)
+    assert store.resume_summary() == {"character": "YUI"}
+    call(store, "finish", "finish_request_01", snapshot=snapshot(outcome="retreated"))
+    assert store.resume_summary() is None
+
+
+def test_resume_summary_uses_saved_journey_and_keeps_control_unchanged(store, module):
+    call(store, rules=8)
+    assert store.resume_summary() == {"character": "YUI", "area": "edge", "segment": 1, "total": 9}
+    saved = journey_snapshot(module, node=3)
+    saved["encounters"]["milestones"]["sentinel"] = {"spawned": True, "defeated": True, "enemy": 0}
+    call(store, "release", "release_request_01", snapshot=saved)
+    reloaded = module.AdventureStore(store.file)
+    assert reloaded.resume_summary() == {"character": "YUI", "area": "ruin", "segment": 4, "total": 9}
+    assert not reloaded.view("client_00000001")["owns_control"]
+    assert reloaded.view()["run"]["snapshot"] == saved
+
+
 def test_start_replay_keeps_original_identity_and_relation_snapshot(store):
     first = call(store)
     original = store.view()

@@ -310,6 +310,17 @@ class AdventureStore:
                 "economy": copy.deepcopy(self.state["economy"]), "shop": economy.catalog(),
             }
 
+    def resume_summary(self) -> dict[str, Any] | None:
+        with self.lock:
+            if self.error or not (run := self.state["run"]) or run["status"] != "active":
+                return None
+            progress = {"character": run["character"]}
+            if run["rules"] >= 8:
+                snapshot = run["snapshot"]
+                node = snapshot["journey"]["node"] if snapshot else 0
+                progress.update(area=journey.NODES[node]["area"], segment=node + 1, total=len(journey.NODES))
+            return progress
+
     def execute(
         self, operation: Any, request_id: Any, revision: Any, client: Any, epoch: Any,
         values: Any, *, character: str = "", stage_index: int = 0,

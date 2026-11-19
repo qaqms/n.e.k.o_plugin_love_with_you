@@ -191,7 +191,19 @@ const previewApi = {
           record.note = null;
         }
         if (args.operation === "cancel_note") record.note = null;
-        if (args.operation === "edit_memory") Object.assign(memory,{title:values.title,text:values.text});
+        if (args.operation === "start_activity") record.activity = {
+          id:result.id,kind:values.kind,title:values.title,progress:values.progress,
+        };
+        if (args.operation === "save_activity") {
+          record.memories.unshift({...record.activity,title:values.title,progress:values.progress,text:values.text,
+            status:"saved",recall:true,created_at:Date.now()/1000});
+          record.activity = null;
+        }
+        if (args.operation === "cancel_activity") record.activity = null;
+        if (args.operation === "edit_memory") {
+          Object.assign(memory,{title:values.title,text:values.text});
+          if (memory.kind) memory.progress = values.progress;
+        }
         if (args.operation === "toggle_memory") memory.recall = values.recall;
         if (args.operation === "delete_memory") record.memories = record.memories.filter(item => item.id !== values.id);
         if (args.operation === "propose_followup") record.followups.unshift({

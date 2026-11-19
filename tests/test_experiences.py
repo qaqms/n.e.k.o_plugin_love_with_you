@@ -42,6 +42,44 @@ def test_default_is_opt_in_and_disabled_writes_do_not_create_records(experiences
     assert not state["characters"]
 
 
+@pytest.mark.parametrize("kind", ["music", "screen"])
+def test_activities_share_one_review_flow_and_keep_notes_and_roles_separate(experiences, state, kind):
+    apply(experiences, state, "start_note", {"title": "Existing draft"})
+    started = apply(experiences, state, "start_activity", {"kind": kind, "title": "Our activity"})
+    record = state["characters"]["YUI"]
+    assert not record["memories"]
+    assert "Our activity" in experiences.context(state, "YUI", DAY)[0]
+    assert "Our activity" not in experiences.context(state, "MIO", DAY)[0]
+    with pytest.raises(experiences.ExperienceError, match="experience_stale"):
+        apply(experiences, state, "start_activity", {"kind": kind})
+    assert experiences.normalize(state) == state
+    values = {"id": started["id"], "progress": "18:40"}
+    revision = record["revision"]
+    apply(experiences, state, "save_activity", values, request_id="activity_save", revision=revision)
+    replay = apply(experiences, state, "save_activity", values, request_id="activity_save", revision=revision)
+    assert replay["replay"]
+    assert record["activity"] is None and record["note"]["title"] == "Existing draft"
+    assert [item["kind"] for item in record["memories"]] == [kind]
+    assert "18:40" in experiences.context(state, "YUI", DAY)[0]
+    apply(experiences, state, "toggle_memory", {"id": started["id"], "recall": False})
+    assert "18:40" not in experiences.context(state, "YUI", DAY)[0]
+    assert experiences.normalize(state) == state
+
+
+def test_old_records_load_and_cancel_leaves_no_activity_memory(experiences, state):
+    saved_note(experiences, state)
+    del state["characters"]["YUI"]["activity"]
+    restored = experiences.normalize(state)
+    with pytest.raises(experiences.ExperienceError, match="experience_invalid"):
+        apply(experiences, restored, "start_activity", {"kind": "unavailable"})
+    started = apply(experiences, restored, "start_activity", {"kind": "music"})
+    restored["enabled"] = False
+    apply(experiences, restored, "cancel_activity", {"id": started["id"]})
+    record = restored["characters"]["YUI"]
+    assert record["activity"] is None
+    assert len(record["memories"]) == 1 and "kind" not in record["memories"][0]
+
+
 def test_note_draft_review_edit_and_delete_roundtrip(experiences, state):
     result = apply(experiences, state, "start_note", {"title": "Together", "text": "First line"})
     record = state["characters"]["YUI"]

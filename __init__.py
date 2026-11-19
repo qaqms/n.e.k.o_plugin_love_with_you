@@ -2148,11 +2148,13 @@ class LoveWithYouPlugin(NekoPluginBase):
             host_online = self._host_online
             income_error = self._income_error
             portrait_library, appearance_prefs = self._portraits, self._appearance
+            adventure_store = self._adventure
         data = dashboard_view.project(state, today)
         return {
             **data,
             "host_online": host_online,
             "auto_status": auto_status,
+            "adventure_resume": await asyncio.to_thread(adventure_store.resume_summary) if adventure_store else None,
             "decoration": await asyncio.to_thread(self._decoration_meta),
             "portraits": await asyncio.to_thread(portrait_library.summary) if portrait_library else None,
             "appearance": appearance_prefs.summary() if appearance_prefs else dict(appearance.DEFAULTS),

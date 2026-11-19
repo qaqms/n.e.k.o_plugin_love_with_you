@@ -89,7 +89,11 @@ window.addEventListener("message",async event=>{
   const d=event.data;
   if(d?.type!=="neko-hosted-surface-request")return;
   let response;
-  if(d.method==="refresh")response={ok:true,result:context};
+  if(d.method==="refresh"){
+    const {result}=await (await fetch("/preview/action",{method:"POST",body:JSON.stringify({operation:"read"})})).json();
+    context.state.adventure_resume=result?.result?.adventure?.resume_summary ?? null;
+    response={ok:true,result:context};
+  }
   else if(d.method==="call" && d.payload.actionId==="adventure_action"){
     response=await (await fetch("/preview/action",{method:"POST",body:JSON.stringify(d.payload.args)})).json();
   }else response={ok:true,result:{ok:true}};
@@ -199,7 +203,14 @@ window.addEventListener("message",async event=>{
     if (!staleFocus && width === 1100) {
       // Reload creates a new client while the real isolated backend retains the old owner.
       await page.reload()
-      await panel.getByRole("button", { name: "同行游戏", exact: true }).click()
+      const together = panel.locator(".lwy-together")
+      await together.getByText("林缘 · 第 1 / 9 段", { exact: true }).waitFor()
+      const role = panel.getByLabel("选择角色", { exact: true })
+      await role.selectOption("茉子")
+      await together.getByRole("button", { name: "继续同行", exact: true }).waitFor({ state: "hidden" })
+      await role.selectOption("YUI")
+      await page.screenshot({ path: join(artifacts, "together-game-resume.png") })
+      await together.getByRole("button", { name: "继续同行", exact: true }).click()
       await game.getByRole("button", { name: "继续旅程", exact: true }).click()
       await game.getByRole("heading", { name: "旅程由其他页面持有", exact: true }).waitFor()
       await page.screenshot({ path: join(artifacts, "companion-control-conflict.png") })

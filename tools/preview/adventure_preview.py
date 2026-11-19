@@ -96,7 +96,8 @@ def make_server(port: int, data_dir: Path) -> ThreadingHTTPServer:
                     args = args["args"]
                 if args.get("operation") == "read":
                     result = store.view(args.get("client", ""))
-                    result.update(characters=["YUI", "MIO"], current_character="YUI")
+                    result.update(characters=["YUI", "MIO"], current_character="YUI",
+                                  resume_summary=store.resume_summary())
                 else:
                     result = store.execute(
                         args.get("operation"), args.get("request_id"), args.get("revision"),

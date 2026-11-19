@@ -28,6 +28,7 @@ import type { Addressing, StageAddress } from "./addressing"
 import { Experiences, EXPERIENCE_STYLE } from "./experiences"
 import type { ExperienceDestination, ExperienceState } from "./experiences"
 import { Together, TOGETHER_STYLE } from "./together"
+import type { AdventureResume } from "./together"
 import { errorCode, submitAction, unwrap } from "./requests"
 import { CompanionGame, GAME_STYLE } from "./companion-game"
 import { PortraitLightbox, PORTRAIT_LIGHTBOX_STYLE } from "./portrait-lightbox"
@@ -99,6 +100,7 @@ type Scope = {
 
 type Dashboard = {
   experiences?: ExperienceState
+  adventure_resume?: AdventureResume | null
   shop?: ShopState
   appearance?: Appearance
   per_character?: boolean
@@ -748,7 +750,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const closeAnn = useCallback(() => { if (!busyRef.current) { setAnnOpen(false); setFeedback(null) } }, [])
   const workspaceRef = useRef<HTMLElement | null>(null)
   const [lightbox, setLightbox] = useState<{ origin: DOMRect; ratio: number; key: string; character: string } | null>(null)
-  const [gameFromPortrait, setGameFromPortrait] = useState(false)
+  const [gameReturn, setGameReturn] = useState<"heart" | "experiences" | null>(null)
   const dialogOpen = Boolean(gallery || importOpen || editing || metOpen || metImportOpen || annOpen || shopDialog)
   const onShopDialog = useCallback((open: boolean) => setShopDialog(open), [])
   useEffect(() => {
@@ -1338,7 +1340,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function changeSection(next: Section) {
     if (!busyRef.current) setFeedback(null)
     if (next !== "experiences") setExperienceDestination(null)
-    setGameFromPortrait(false)
+    setGameReturn(null)
     setSection(next)
     workspaceRef.current?.scrollTo({ top: 0 })
   }
@@ -1346,6 +1348,11 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function openExperiences(destination?: ExperienceDestination) {
     setExperienceDestination(destination || null)
     changeSection("experiences")
+  }
+
+  function openGame(from: "heart" | "experiences") {
+    changeSection("game")
+    setGameReturn(from)
   }
 
   function renderNavigation(key: Section) {
@@ -1497,7 +1504,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         </details>
         <Together data={state.experiences}
           character={state.per_character ? current.label || "" : state.current_character || ""}
-          busy={busy} t={t} open={openExperiences} />
+          adventureResume={state.adventure_resume} busy={busy} t={t} open={openExperiences}
+          onGame={() => openGame("heart")} />
         <div className="lwy-summary">
           <div className="lwy-summary-item">
             <span className="lwy-sub">{t("overview.firstMet", { defaultValue: "相识的日子" })}</span>
@@ -2130,7 +2138,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
                   today={state.today || ""} api={api} t={t} useLocalState={props.useLocalState}
                   busy={busy} stale={refreshError} run={run} refresh={refreshPanel}
                   dialog={onShopDialog} feedback={() => renderFeedback(true)}
-                  destination={experienceDestination} arrived={experienceArrived} />
+                  destination={experienceDestination} arrived={experienceArrived}
+                  onGame={() => openGame("experiences")} />
               ) : activeSection === "shop" ? (
                 <Shop data={state.shop} characters={state.known_characters || []} current={state.current_character}
                   perCharacter={Boolean(state.per_character)} scopes={scopes} dailyGain={limits.daily_gain}
@@ -2167,14 +2176,15 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           {activeSection === "heart" && scope ? renderOverviewDates(scope) : null}
         </div>
         <CompanionGame active={activeSection === "game"} api={api} title={sectionLabel("game")} locale={props.locale}
-          backLabel={t("nav.heart")} onBack={gameFromPortrait ? () => changeSection("heart") : undefined} />
+          backLabel={gameReturn ? sectionLabel(gameReturn) : undefined}
+          onBack={gameReturn ? () => changeSection(gameReturn) : undefined} />
       </main>
       {/* Keep this slot mounted so the host preserves page nodes and focus. */}
       <div className="lwy-feedback-slot">{!dialogOpen && !portraitOpen ? renderFeedback() : null}</div>
       {portraitOpen && lightbox ? <PortraitLightbox art={art} origin={lightbox.origin} ratio={lightbox.ratio}
         preset={touchPreset} character={lightbox.character} online={!refreshError && state.host_online !== false}
         api={api} t={t} onClose={closePortrait}
-        onPlay={() => { closePortrait(); changeSection("game"); setGameFromPortrait(true) }}
+        onPlay={() => { closePortrait(); openGame("heart") }}
         bag={<Shop compactBag data={state.shop} characters={[]} current={state.host_online === false ? null : currentCharacter}
           perCharacter={Boolean(state.per_character)} scopes={scopes} dailyGain={limits.daily_gain} dailyChat={limits.daily_chat ?? 4}
           api={api} t={t} useLocalState={props.useLocalState} busy={busy} stale={refreshError} run={run}

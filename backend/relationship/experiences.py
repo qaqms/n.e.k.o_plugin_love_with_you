@@ -18,6 +18,7 @@ FOLLOWUP_LIMIT = 20
 TEXT_LIMIT = 600
 SUMMARY_LIMIT = 160
 TITLE_LIMIT = 40
+ACTIVITY_KINDS = ("music", "screen")
 RECEIPT_LIMIT = 64
 MAX_BYTES = 768 * 1024
 _IDENTIFIER = re.compile(r"^[a-zA-Z0-9_-]{8,80}$")
@@ -25,7 +26,7 @@ _OPERATIONS = {
     "start_note", "draft_note", "save_note", "cancel_note", "edit_memory",
     "delete_memory", "toggle_memory", "propose_followup", "confirm_followup",
     "edit_followup", "propose_outcome", "save_outcome", "close_followup",
-    "delete_followup", "invite",
+    "delete_followup", "invite", "start_activity", "save_activity", "cancel_activity",
 }
 MODEL_OPERATIONS = {"draft_note", "propose_followup", "propose_outcome"}
 
@@ -39,7 +40,7 @@ def new_state() -> dict[str, Any]:
 
 
 def new_record() -> dict[str, Any]:
-    return {"revision": 0, "epoch": 0, "note": None, "memories": [], "followups": []}
+    return {"revision": 0, "epoch": 0, "note": None, "activity": None, "memories": [], "followups": []}
 
 
 def normalize(raw: Any) -> dict[str, Any]:
@@ -98,6 +99,21 @@ def normalize(raw: Any) -> dict[str, Any]:
                 or not isinstance(item.get("title"), str) or not isinstance(item.get("text"), str)
             ):
                 raise ExperienceError("experience_recovery_required")
+            if "kind" in item and (
+                item["kind"] not in ACTIVITY_KINDS
+                or not isinstance(item.get("progress"), str) or len(item["progress"]) > SUMMARY_LIMIT
+                or not item["title"].strip()
+            ):
+                raise ExperienceError("experience_recovery_required")
+        activity = record.setdefault("activity", None)
+        if activity is not None and (
+            not isinstance(activity, dict) or not isinstance(activity.get("id"), str)
+            or not _IDENTIFIER.fullmatch(activity["id"]) or activity["id"] in ids
+            or activity.get("kind") not in ACTIVITY_KINDS
+            or not isinstance(activity.get("title"), str) or len(activity["title"]) > TITLE_LIMIT
+            or not isinstance(activity.get("progress"), str) or len(activity["progress"]) > SUMMARY_LIMIT
+        ):
+            raise ExperienceError("experience_recovery_required")
         for item in record["followups"]:
             if (
                 item.get("status") not in {"pending", "active", "closed"}
@@ -187,7 +203,7 @@ def apply(
         state["revision"] += 1
         result = {"operation": operation, "revision": state["revision"]}
     else:
-        if not state["enabled"] and operation not in {"delete_memory", "delete_followup", "cancel_note"}:
+        if not state["enabled"] and operation not in {"delete_memory", "delete_followup", "cancel_note", "cancel_activity"}:
             raise ExperienceError("experience_disabled")
         if not character:
             raise ExperienceError("experience_invalid")
@@ -210,6 +226,33 @@ def apply(
 def _change(record: dict[str, Any], operation: str, values: dict[str, Any], today: str, now: float) -> dict[str, Any]:
     note = record["note"]
     item_id = values.get("id")
+    activity = record.get("activity")
+    if operation == "start_activity":
+        if activity:
+            raise ExperienceError("experience_stale")
+        kind = values.get("kind")
+        if kind not in ACTIVITY_KINDS:
+            raise ExperienceError("experience_invalid")
+        record["activity"] = {
+            "id": uuid.uuid4().hex, "kind": kind,
+            "title": _text(values.get("title", ""), TITLE_LIMIT, required=False),
+            "progress": _text(values.get("progress", ""), SUMMARY_LIMIT, required=False),
+        }
+        return {"id": record["activity"]["id"]}
+    if operation in {"save_activity", "cancel_activity"}:
+        if not activity or activity["id"] != item_id:
+            raise ExperienceError("experience_not_found")
+        if operation == "save_activity":
+            if len(record["memories"]) >= NOTE_LIMIT:
+                raise ExperienceError("experience_limit")
+            record["memories"].insert(0, {
+                **activity, "title": _text(values.get("title", activity["title"]), TITLE_LIMIT),
+                "progress": _text(values.get("progress", activity["progress"]), SUMMARY_LIMIT, required=False),
+                "text": _text(values.get("text", ""), TEXT_LIMIT, required=False),
+                "status": "saved", "created_at": now, "recall": True,
+            })
+        record["activity"] = None
+        return {"id": item_id}
     if operation == "start_note":
         if note:
             raise ExperienceError("experience_note_active")
@@ -252,8 +295,11 @@ def _change(record: dict[str, Any], operation: str, values: dict[str, Any], toda
                 raise ExperienceError("experience_invalid")
             memory["recall"] = values["recall"]
         else:
-            memory["title"] = _text(values.get("title"), TITLE_LIMIT)
-            memory["text"] = _text(values.get("text"), TEXT_LIMIT)
+            title = _text(values.get("title"), TITLE_LIMIT)
+            text = _text(values.get("text"), TEXT_LIMIT, required="kind" not in memory)
+            if "kind" in memory:
+                memory["progress"] = _text(values.get("progress", memory["progress"]), SUMMARY_LIMIT, required=False)
+            memory.update(title=title, text=text)
         return {"id": item_id}
     if operation == "propose_followup":
         if len(record["followups"]) >= FOLLOWUP_LIMIT:
@@ -307,6 +353,7 @@ def restart(state: dict[str, Any], characters: list[str]) -> None:
             continue
         record = state["characters"][name]
         record["note"] = None
+        record["activity"] = None
         for item in record["followups"]:
             item["status"] = "closed"
             item["pending_outcome"] = ""
@@ -332,10 +379,15 @@ def context(state: dict[str, Any], character: str, today: str, *, user_turn: boo
     record = record_for(state, character)
     due = due_item(state, character, today) if user_turn else None
     memories = [
-        {"id": item["id"], "title": item["title"], "text": item["text"][:240]}
+        {
+            "id": item["id"], "title": item["title"], "text": item["text"][:240],
+            **({"kind": item["kind"], "progress": item["progress"]} if "kind" in item else {}),
+        }
         for item in record["memories"] if item.get("recall") is True
     ][:2]
     data: dict[str, Any] = {"memories": memories}
+    if activity := record.get("activity"):
+        data["active_activity"] = {key: activity[key] for key in ("kind", "title", "progress")}
     if record["note"]:
         data["note_draft"] = {key: record["note"][key] for key in ("id", "title", "text")}
     if due:
@@ -346,6 +398,8 @@ def context(state: dict[str, Any], character: str, today: str, *, user_turn: boo
         "关心事项只可轻声问一次，不追问、不施压；玩家不想谈就尊重。"
         "不要编造现实结果、共同经历或不存在的感官观察。没有相关话题时不必提及回忆。"
         "只将玩家亲口报告的结果作为待确认草稿，最终留存在面板确认。\n"
+        "active_activity 表示玩家在面板选择的活动：music 是一起听歌，screen 是一起看屏幕。"
+        "仅在相关时自然陪伴，选择活动不代表实际开始播放或共享；不要声称听到了音频或看到了未提供的画面。\n"
         "不继续沿用旧提示中已经取消的便签或本条未提供的共同回忆。\n"
         + json.dumps(data, ensure_ascii=False, separators=(",", ":")),
         due["id"] if due else "",

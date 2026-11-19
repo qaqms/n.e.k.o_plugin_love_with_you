@@ -3,6 +3,10 @@ import type { PluginSurfaceProps } from "@neko/plugin-ui"
 import { Icon } from "./icons"
 import type { ExperienceDestination, ExperienceState } from "./experiences"
 
+export type AdventureResume = {
+  character: string; area?: "edge" | "ruin" | "deep"; segment?: number; total?: number
+}
+
 export const TOGETHER_STYLE = `
 .lwy-together { min-width:0;padding:4px 0 10px; }
 .lwy-together .lwy-card-head { margin-bottom:2px;gap:2px 12px; }
@@ -23,18 +27,24 @@ export const TOGETHER_STYLE = `
 
 export function Together(props: {
   data?: ExperienceState; character: string; busy: boolean
+  adventureResume?: AdventureResume | null; onGame: () => void
   t: PluginSurfaceProps["t"]; open: (destination?: ExperienceDestination) => void
 }) {
   const { data, character, t } = props
   const record = data?.enabled && character ? data.characters[character] : undefined
   const note = record?.note
+  const journey = character && props.adventureResume?.character === character ? props.adventureResume : null
+  const activity = record?.activity
+  const lastActivity = record?.memories.find(item => item.kind)
   const followup = record?.followups.filter(item => item.status === "pending" || item.status === "active")
     .sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending") ||
       Number(Boolean(b.pending_outcome)) - Number(Boolean(a.pending_outcome)) || a.due.localeCompare(b.due))[0]
-  const memory = record?.memories.reduce((latest, item) =>
+  const memory = record?.memories.filter(item => !item.kind).reduce((latest, item) =>
     !latest || item.created_at > latest.created_at ? item : latest, undefined as typeof record.memories[number] | undefined)
   const open = (kind: ExperienceDestination["kind"], id?: string) =>
     props.open({ character, tab: kind === "followup" ? "followups" : "notes", kind, id })
+  const openActivity = (kind?: "activity", id?: string) =>
+    props.open({ character, tab: "activities", kind, id })
 
   return <section className="lwy-together" aria-label={t("overview.together")}>
     <div className="lwy-card-head">
@@ -44,10 +54,40 @@ export function Together(props: {
         {t("overview.allExperiences")}<Icon name="ChevronRight" />
       </button>
     </div>
-    {data?.enabled && character ? <p className="lwy-together-person">{t("overview.participant", { name: character })}</p> : null}
+    {data && character ? <div className="lwy-card-head">
+      {data.enabled ? <p className="lwy-together-person">{t("overview.participant", { name: character })}</p> : null}
+      <Button disabled={props.busy} onClick={() => openActivity(data.enabled && !activity && (record?.memories.length || 0) < 30 ? "activity" : undefined)}>
+        <Icon name="Heart" />{t("xp.activities")}
+      </Button>
+    </div> : null}
+    {journey ? <div className="lwy-together-row">
+      <Icon name="Gamepad2" />
+      <div className="lwy-together-copy">
+        <strong>{t("nav.game")}</strong>
+        <p>{journey.area ? t("xp.gameProgress", {
+          area: t(`xp.gameArea.${journey.area}`), segment: journey.segment, total: journey.total,
+        }) : t("xp.gameSaved")}</p>
+      </div>
+      <Button disabled={props.busy} onClick={props.onGame}>
+        <Icon name="ChevronRight" />{t("xp.gameContinue")}
+      </Button>
+    </div> : null}
     {!data ? <p className="lwy-note">{t("xp.notReady")}</p>
       : !data.enabled ? <p className="lwy-note">{t("xp.off")}</p>
       : !character ? <p className="lwy-note">{t("xp.noCharacter")}</p> : <>
+        {activity || lastActivity ? <div className="lwy-together-row">
+          <Icon name="History" />
+          <div className="lwy-together-copy">
+            <p>{t(activity ? "xp.activeActivity" : "xp.lastActivity")}</p>
+            <strong>{activity?.title || (activity ? t(`xp.activity.${activity.kind}`) : lastActivity?.title)}</strong>
+            <p className="lwy-together-preview">{activity?.progress || (!activity && (lastActivity?.progress || lastActivity?.text))}</p>
+          </div>
+          {activity ? <Button disabled={props.busy} onClick={() => openActivity("activity")}>
+            <Icon name="Save" />{t("xp.finishActivity")}
+          </Button> : <Button disabled={props.busy} onClick={() => openActivity("activity", lastActivity?.id)}>
+            <Icon name="ChevronRight" />{t("xp.viewActivity")}
+          </Button>}
+        </div> : null}
         {note ? <div className="lwy-together-row">
           <Icon name="Pencil" />
           <div className="lwy-together-copy">
@@ -81,7 +121,7 @@ export function Together(props: {
             <Icon name="BookOpen" />{t("overview.viewMemory")}
           </Button>
         </div> : null}
-        {!note && !followup && !memory ? <div className="lwy-btns">
+        {!note && !followup && !memory && !activity && !lastActivity ? <div className="lwy-btns">
           <Button tone="primary" disabled={props.busy} onClick={() => open("draft")}><Icon name="Plus" />{t("xp.start")}</Button>
           <Button tone="default" disabled={props.busy} onClick={() => open("followup")}><Icon name="CalendarDays" />{t("xp.add")}</Button>
         </div> : null}

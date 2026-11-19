@@ -24,6 +24,7 @@ import hashlib
 import inspect
 import json
 import queue
+import re
 import secrets
 import threading
 import time
@@ -111,6 +112,8 @@ _ART_MIME = {
 # oversized frames, so each image is capped well below that.
 _ART_MAX_BYTES = 1024 * 1024
 _ART_CACHE_LIMIT = 6
+_TOUCH_COOLDOWN = 8.0
+_TOUCH_REQUEST_ID = re.compile(r"[a-zA-Z0-9_-]{8,80}")
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,8 @@ class LoveWithYouPlugin(NekoPluginBase):
         self._last_tool_verify = _NEVER
         # image path -> (version, data URL); insertion-ordered for eviction
         self._art_cache: dict[str, tuple[str, str]] = {}
+        self._touch_receipts: dict[str, tuple[str, str, str]] = {}
+        self._touch_ready_at = _NEVER
         self._portraits: portraits.PortraitLibrary | None = None
         self._appearance: appearance.AppearancePrefs | None = None
         self._adventure: adventure.AdventureStore | None = None
@@ -266,6 +271,8 @@ class LoveWithYouPlugin(NekoPluginBase):
                 self._context.clear()
                 self._latest_message_ts.clear()
                 self._art_cache.clear()
+                self._touch_receipts.clear()
+                self._touch_ready_at = _NEVER
                 self._confession_turns.clear()
                 self._auto.update(bus_ok=None, bus_error="", conversation_sources={})
                 self._bus_read_error = ""
@@ -2153,6 +2160,73 @@ class LoveWithYouPlugin(NekoPluginBase):
         }
 
     # ------------------------------------------------------------ gifts
+
+    @ui.action(label=tr("portrait.touch", default="抚摸"), refresh_context=False)
+    @plugin_entry(id="touch_portrait", name=tr("portrait.touch", default="抚摸"), input_schema={
+        "type": "object", "properties": {
+            "request_id": {"type": "string"}, "character": {"type": "string"},
+            "zone": {"type": "string", "enum": list(prompts.PORTRAIT_TOUCH_ACTIONS)},
+        }, "required": ["request_id", "character", "zone"],
+    })
+    async def touch_portrait(self, request_id: Any = None, character: Any = None, zone: Any = None, **_: Any):
+        if (not isinstance(request_id, str) or not _TOUCH_REQUEST_ID.fullmatch(request_id)
+                or not isinstance(character, str) or not 0 < len(character) <= 256
+                or not isinstance(zone, str) or zone not in prompts.PORTRAIT_TOUCH_ACTIONS):
+            return Err(SdkError("touch_invalid"))
+
+        def check_request() -> Any:
+            if not self._ready or self._stopping.is_set():
+                return Err(SdkError("touch_unavailable"))
+            previous = self._touch_receipts.get(request_id)
+            if previous is not None:
+                if previous[:2] != (character, zone):
+                    return Err(SdkError("touch_invalid"))
+                return Ok({"status": previous[2], "request_id": request_id})
+            if time.monotonic() < self._touch_ready_at:
+                return Err(SdkError("touch_cooldown"))
+            return None
+
+        with self._lock:
+            existing = check_request()
+            if existing is not None:
+                return existing
+            generation = self._lifecycle_generation
+        active = await asyncio.to_thread(host.fetch_characters)
+        with self._lock:
+            existing = check_request()
+            if existing is not None:
+                return existing
+            if active is None or generation != self._lifecycle_generation:
+                return Err(SdkError("touch_unavailable"))
+            if active[1] != character:
+                return Err(SdkError("touch_character_changed"))
+            scope = engine.scope_key_for(self._state, character)
+            record = engine.get_record(self._state, scope, create=False) or engine.new_record()
+            stage = record["stage"]
+            prompt = prompts.portrait_touch_prompt(
+                zone, stage, engine.effective_nickname(record, stage),
+                addressing=engine.resolve_addressing(record), confirmed=record.get("confessed") is True,
+            )
+            self._touch_ready_at = time.monotonic() + _TOUCH_COOLDOWN
+            status = "unknown"
+            try:
+                receipt = self.push_message(
+                    source=self.plugin_id, target_lanlan=character, visibility=[], ai_behavior="respond",
+                    parts=[{"type": "text", "text": prompt}],
+                    coalesce_key=f"{self.plugin_id}:portrait-touch:{character}",
+                    metadata={"event_type": "portrait_touch", "expires_in_s": 10},
+                )
+                if isinstance(receipt, dict):
+                    if receipt.get("submitted") is True:
+                        status = "submitted"
+                    elif receipt.get("submitted") is False:
+                        status = "unavailable"
+            except Exception as exc:
+                self.logger.warning("与你相恋: portrait touch submission unconfirmed: {}", type(exc).__name__)
+            self._touch_receipts[request_id] = (character, zone, status)
+            if len(self._touch_receipts) > 64:
+                self._touch_receipts.pop(next(iter(self._touch_receipts)))
+            return Ok({"status": status, "request_id": request_id})
 
     def _shop_transaction(self, action: str, request_id: Any, revision: Any,
                           item_id: Any = "", character: Any = "", *, expected_gain: Any = None,

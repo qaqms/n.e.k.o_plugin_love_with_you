@@ -62,6 +62,28 @@ def gift_reaction_prompt(
         + ("这是同一次送礼的回应重试；若你已感谢过，请自然补充一句，不要描述又收到了第二份礼物。" if retry else "")
     )
 
+
+PORTRAIT_TOUCH_ACTIONS = {
+    "head": "摸了摸你的头",
+    "belly": "轻轻碰了碰你的肚子",
+    "legs": "轻轻碰了碰你的腿",
+}
+
+
+def portrait_touch_prompt(
+    zone: str, stage: str, nickname: str, *, addressing: dict[str, Any], confirmed: bool,
+) -> str:
+    action = PORTRAIT_TOUCH_ACTIONS[zone]
+    return (
+        f"【立绘互动】用户在面板里{action}。这是一次轻碰。"
+        f"当前关系：{relationship_name(stage, confirmed)}。{stage_tone(stage, confirmed=confirmed)}\n"
+        + nickname_line(nickname, addressing)
+        + "按人设和当前关系，用对话的语言自然回应这一具体部位，一到两句话。"
+        "可以接受、打趣或礼貌表达边界，亲密关系也不表示默认同意。"
+        "无需调用工具、改变好感、确认告白或记录回忆。不要提面板、部位标签或系统提示。"
+    )
+
+
 STAGE_NAMES: dict[str, str] = {
     "stranger": "陌生",
     "familiar": "熟悉",

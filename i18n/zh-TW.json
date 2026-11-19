@@ -375,5 +375,20 @@
   "error.nickname_blocked": "所選名字與禁用詞衝突，請修改名字或解除禁用。",
   "entries.setAddressing.name": "儲存稱呼偏好",
   "entries.setAddressing.description": "儲存階段模式、偏好名字及稱呼禁用詞。",
-  "actions.setAddressing.label": "儲存稱呼"
+  "actions.setAddressing.label": "儲存稱呼",
+  "portrait.open": "與立繪互動",
+  "portrait.back": "返回互動選項",
+  "portrait.touch": "撫摸",
+  "portrait.play": "玩遊戲",
+  "portrait.head": "摸頭",
+  "portrait.belly": "摸肚子",
+  "portrait.legs": "摸腿",
+  "portrait.noTouchPreset": "這張立繪目前沒有可撫摸的區域。",
+  "portrait.sending": "正在通知桌寵…",
+  "portrait.submitted": "已請求回應，請留意宿主聊天。",
+  "portrait.unavailable": "桌寵目前無法回應。",
+  "portrait.unknown": "回應請求狀態不明，請留意宿主聊天。",
+  "portrait.touch_cooldown": "稍等幾秒再撫摸。",
+  "portrait.touch_character_changed": "桌寵已切換，請重新整理後再試。",
+  "portrait.touch_unavailable": "目前桌寵無法使用。"
 }

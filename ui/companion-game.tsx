@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from "@neko/plugin-ui"
 import type { HostedApi } from "@neko/plugin-ui"
+import { Icon } from "./icons"
 
 export const GAME_STYLE = `
 .lwy-workspace.is-game { padding: 0; overflow: hidden; scrollbar-gutter: auto; }
 .lwy-page-layout[hidden], .lwy-game[hidden] { display: none !important; }
-.lwy-game { width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.lwy-game { display: grid; grid-template-rows: auto minmax(0,1fr); width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.lwy-game:not(:has(.lwy-game-back)) { grid-template-rows: minmax(0,1fr); }
 .lwy-game iframe { display: block; width: 100%; height: 100%; border: 0; }
+.lwy-game-back { display: flex; padding: 6px 12px; border-bottom: 1px solid var(--line); }
 `
 
-export function CompanionGame(props: { active: boolean; api: HostedApi; title: string; locale: string }) {
+export function CompanionGame(props: { active: boolean; api: HostedApi; title: string; locale: string
+  backLabel?: string; onBack?: () => void }) {
   const [visited, setVisited] = useState(props.active)
   const frame = useRef<HTMLIFrameElement | null>(null)
   const syncVisibility = () => frame.current?.contentWindow?.postMessage({
@@ -38,6 +42,8 @@ export function CompanionGame(props: { active: boolean; api: HostedApi; title: s
   }, [props.api])
   useEffect(syncVisibility, [props.active])
   return <div className="lwy-game" hidden={!props.active}>
+    {props.onBack ? <div className="lwy-game-back"><button type="button" className="neko-button" onClick={props.onBack}>
+      <Icon name="ChevronLeft" />{props.backLabel}</button></div> : null}
     {visited ? <iframe ref={frame} title={props.title} onLoad={syncVisibility}
       src={`/plugin/love_with_you/ui/index.html?locale=${encodeURIComponent(props.locale)}`} /> : null}
   </div>

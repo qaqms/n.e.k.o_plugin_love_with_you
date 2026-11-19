@@ -3,6 +3,7 @@ import { createRequire } from "node:module"
 import { copyFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { panelEntry } from "./panel_entry.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const host = process.env.NEKO_HOST_ROOT || resolve(root, "../N.E.K.O")
@@ -72,7 +73,7 @@ setInterval(function() {
     && !document.activeElement?.matches("input, textarea, select")) loadPanel();
 }, 5000);
 </script>`
-writeFileSync(join(root, "static/panel.html"), html.replace("</body>", `${startup}\n</body>`))
+writeFileSync(join(root, panelEntry), html.replace("</body>", `${startup}\n</body>`))
 copyFileSync(join(host, "LICENSE"), join(root, "static/engine/NEKO-LICENSE.txt"))
 copyFileSync(join(host, "NOTICE"), join(root, "static/engine/NEKO-NOTICE.txt"))
-console.log("Built static/panel.html using the host TSX renderer and UI kit.")
+console.log(`Built ${panelEntry} using the host TSX renderer and UI kit.`)

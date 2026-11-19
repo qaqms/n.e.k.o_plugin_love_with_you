@@ -216,6 +216,7 @@ const previewApi = {
       character:current.label || state.current_character, source:"host_recent_history", scanned_roles:state.per_character ? 1 : 2,
     };
     if (action === "choose_portrait") return fixture.items.find(item => item.id === state.portraits.settings.selected_id) || {available:false};
+    if (action === "touch_portrait") return {status:"submitted",request_id:args.request_id};
     if (action === "get_portrait") {
       const item = fixture.items.find(item => item.id === args.item_id);
       if (!item) return {available:false};

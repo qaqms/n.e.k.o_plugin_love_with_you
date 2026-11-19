@@ -116,6 +116,49 @@ def prepare_gift(plugin):
     plugin.push_message = Mock(return_value={"submitted": True})
 
 
+def test_portrait_touch_uses_live_character_and_stage_without_changing_state(
+    plugin, runtime, monkeypatch, module_clock,
+):
+    fetch = Mock(return_value=(["YUI", "MIO"], "YUI"))
+    monkeypatch.setattr(runtime.host, "fetch_characters", fetch)
+    module_clock.monotonic = lambda: 123.0
+    plugin.push_message = Mock(return_value={"submitted": True})
+    before = copy.deepcopy(plugin._state)
+
+    def touch(request, zone, character="YUI"):
+        return asyncio.run(plugin.touch_portrait(request, character, zone))
+
+    assert str(touch("touch_wrong_role", "head", "MIO").error) == "touch_character_changed"
+    assert str(touch("touch_wrong_zone", "arm").error) == "touch_invalid"
+    first = touch("touch_head_event", "head")
+    assert first.value["status"] == "submitted"
+    assert touch("touch_head_event", "head").value == first.value
+    assert str(touch("touch_head_event", "belly").error) == "touch_invalid"
+    assert str(touch("touch_belly_event", "belly").error) == "touch_cooldown"
+    plugin.push_message.assert_called_once()
+    request = plugin.push_message.call_args.kwargs
+    assert request["target_lanlan"] == "YUI" and request["ai_behavior"] == "respond"
+    assert request["metadata"] == {"event_type": "portrait_touch", "expires_in_s": 10}
+    assert "摸了摸你的头" in request["parts"][0]["text"]
+    assert "当前关系：陌生" in request["parts"][0]["text"]
+    assert plugin._state == before
+
+    module_clock.monotonic = lambda: 140.0
+    plugin._state["shared"] = runtime.engine.new_record(90)
+    plugin._state["shared"].update(stage="lover", confessed=True)
+    assert touch("touch_belly_event", "belly").value["status"] == "submitted"
+    text = plugin.push_message.call_args.kwargs["parts"][0]["text"]
+    assert "轻轻碰了碰你的肚子" in text and "当前关系：恋人" in text
+    assert str(touch("touch_legs_event", "legs").error) == "touch_cooldown"
+
+    module_clock.monotonic = lambda: 150.0
+    before = copy.deepcopy(plugin._state)
+    assert touch("touch_legs_event", "legs").value["status"] == "submitted"
+    text = plugin.push_message.call_args.kwargs["parts"][0]["text"]
+    assert "轻轻碰了碰你的腿" in text and "当前关系：恋人" in text
+    assert plugin._state == before
+
+
 def restart_args(plugin, scope="shared"):
     module = sys.modules[plugin.__class__.__module__]
     record = module.engine.get_record(plugin._state, scope)

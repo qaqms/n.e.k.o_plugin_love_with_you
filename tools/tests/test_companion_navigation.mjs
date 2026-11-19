@@ -4,6 +4,7 @@ import { spawn } from "node:child_process"
 import { existsSync, readFileSync, readdirSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
+import { panelUrl } from "../build/panel_entry.mjs"
 import { dependency, fixture, pluginRoot, startPreview } from "../preview/ui_preview.mjs"
 
 const { chromium } = dependency("playwright")
@@ -80,7 +81,7 @@ for (const [width, staleFocus] of [[1100, false], [390, false], [1100, true]]) t
     config: { schema: {}, value: {} }, i18n: { default_locale: "zh-CN", messages } }
   await page.route(`${preview.url}/companion-host`, route => route.fulfill({
     contentType: "text/html; charset=utf-8", body: `<!doctype html><meta charset="utf-8"><style>html,body{height:100%;margin:0}iframe{width:100%;height:100%;border:0;display:block}</style>
-<iframe id="surface" sandbox="allow-scripts allow-forms allow-same-origin allow-modals" src="/plugin/love_with_you/ui/panel.html"></iframe>
+<iframe id="surface" sandbox="allow-scripts allow-forms allow-same-origin allow-modals" src="${panelUrl}"></iframe>
 <script>
 const frame=document.getElementById("surface"), context=${JSON.stringify(context)};
 window.addEventListener("message",async event=>{
@@ -173,7 +174,7 @@ window.addEventListener("message",async event=>{
       const { controller } = await import("./adventure.mjs")
       return controller.scene.player.x > x + 10
     }, position))
-    const panelFrame = page.frames().find(frame => frame.url().includes("/ui/panel.html"))
+    const panelFrame = page.frames().find(frame => new URL(frame.url()).pathname === panelUrl)
     await panelFrame.evaluate(() => window.NekoUiKit.api.refresh())
     assert.equal(await identity.evaluate(node => node === document.querySelector(".lwy-game iframe")), true)
     assert.equal(await gameFrame.evaluate(async () => {

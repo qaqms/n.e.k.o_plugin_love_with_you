@@ -48,8 +48,7 @@ def smoke_backend(archive: zipfile.ZipFile, prefix: str) -> int:
             paths = importlib.import_module(f"{package_name}.backend.paths")
             assert paths.STATIC_ROOT == root / "static"
             service = importlib.import_module(f"{package_name}.backend.adventure.service")
-            assert service.RULES == 12 and service.VERSION == 13
-            assert service.skills.CATALOGS[12] and len(service.journey.NODES) == 9
+            assert service.skills.CATALOGS[service.RULES] and len(service.journey.NODES) == 9
             state_file = service.StateFile(Path(temporary) / "data" / "adventure.json")
             store = service.AdventureStore(state_file)
             store.execute(
@@ -73,7 +72,7 @@ def smoke_backend(archive: zipfile.ZipFile, prefix: str) -> int:
             )
             backups = list(state_file.path.parent.glob("adventure.v12-*.backup.json"))
             assert len(backups) == 1 and backups[0].read_bytes() == original
-            assert state_file.load()[0]["version"] == 13
+            assert state_file.load()[0]["version"] == service.VERSION
             return len(modules)
         finally:
             for name in tuple(sys.modules):
@@ -90,7 +89,10 @@ def main() -> None:
     sys.path.insert(0, str(args.host))
     from plugin.neko_plugin_cli.core import inspect_package
 
-    expected = tomllib.loads((root / "plugin.toml").read_text(encoding="utf-8"))["plugin"]["version"]
+    manifest_plugin = tomllib.loads((root / "plugin.toml").read_text(encoding="utf-8"))["plugin"]
+    expected = manifest_plugin["version"]
+    panel_entry = next(panel["entry"] for panel in manifest_plugin["ui"]["panel"] if panel["id"] == "main")
+    assert panel_entry == f"static/panel-{expected}.html"
     inspected = inspect_package(args.package)
     assert inspected.payload_hash_verified is True
     assert inspected.version == expected
@@ -99,7 +101,7 @@ def main() -> None:
         "backend/adventure/__init__.py", "backend/infrastructure/__init__.py",
         "backend/relationship/__init__.py", "backend/infrastructure/storage.py",
         "backend/infrastructure/json_codec.py", "backend/adventure/economy.py",
-        "static/panel.html", "ui/companion-game.tsx",
+        panel_entry, "ui/companion-game.tsx", "ui/portrait-touch-presets.ts",
         "backend/adventure/service.py", "backend/adventure/skills.py", "static/adventure.mjs", "static/skills.json",
         "static/skills-v2.json", "static/skills.mjs", "static/combat.mjs", "static/frost.mjs",
         "static/study.mjs", "static/icons.mjs", "static/index.html", "static/adventure.css",

@@ -30,6 +30,8 @@ import type { ExperienceDestination, ExperienceState } from "./experiences"
 import { Together, TOGETHER_STYLE } from "./together"
 import { errorCode, submitAction, unwrap } from "./requests"
 import { CompanionGame, GAME_STYLE } from "./companion-game"
+import { PortraitLightbox, PORTRAIT_LIGHTBOX_STYLE } from "./portrait-lightbox"
+import { portraitTouchPresets } from "./portrait-touch-presets"
 
 type HistoryItem = { ts: number; delta: number; value: number; reason: string; source: string }
 
@@ -747,6 +749,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const closeMetImport = useCallback(() => { if (!busyRef.current) { setMetImportOpen(false); setFeedback(null) } }, [])
   const closeAnn = useCallback(() => { if (!busyRef.current) { setAnnOpen(false); setFeedback(null) } }, [])
   const workspaceRef = useRef<HTMLElement | null>(null)
+  const [lightbox, setLightbox] = useState<{ origin: DOMRect; ratio: number; key: string; character: string } | null>(null)
+  const [gameFromPortrait, setGameFromPortrait] = useState(false)
   const dialogOpen = Boolean(gallery || importOpen || editing || metOpen || metImportOpen || annOpen || shopDialog)
   const onShopDialog = useCallback((open: boolean) => setShopDialog(open), [])
   useEffect(() => {
@@ -1256,6 +1260,35 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   }
 
   const hasArt = activeSection === "heart" && portraitMode !== "off" && Boolean(art)
+  const portraitKey = portraitMode === "legacy" ? `legacy:${artVersion}` : `${portrait?.id}:${artVersion}`
+  const touchPreset = portraitMode !== "legacy" && portrait && !portrait.custom ? portraitTouchPresets[portrait.id] : undefined
+  const currentCharacter = state.current_character || ""
+  const portraitOpen = Boolean(lightbox && hasArt && lightbox.key === portraitKey && lightbox.character === currentCharacter)
+  useEffect(() => { if (lightbox && !portraitOpen) setLightbox(null) }, [portraitOpen, lightbox])
+  const wasPortraitOpen = useRef(false)
+  useEffect(() => {
+    const closed = wasPortraitOpen.current && !portraitOpen
+    wasPortraitOpen.current = portraitOpen
+    if (!closed || !hasArt) return
+    const restore = requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(".lwy-art button")?.focus({ preventScroll: true }))
+    return () => cancelAnimationFrame(restore)
+  }, [portraitOpen, hasArt])
+
+  function openPortrait(event: MouseEvent) {
+    const image = (event.currentTarget as HTMLButtonElement).querySelector("img")
+    if (!image?.naturalWidth || !image.naturalHeight) return
+    const box = image.getBoundingClientRect()
+    const ratio = image.naturalWidth / image.naturalHeight
+    const width = Math.min(box.width, box.height * ratio)
+    setFeedback(null)
+    setLightbox({ origin: new DOMRect(box.right - width, box.top, width, width / ratio),
+      ratio, key: portraitKey, character: currentCharacter })
+  }
+
+  function closePortrait() {
+    setLightbox(null)
+    if (!busyRef.current) setFeedback(null)
+  }
   const settings = state.settings || { require_confession: true, decay: false, auto_score: true, proactive_confession: false }
   const decayRules = state.decay_rules || { grace_days: 3, per_day: 1 }
   const autoStatus = state.auto_status
@@ -1307,6 +1340,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function changeSection(next: Section) {
     if (!busyRef.current) setFeedback(null)
     if (next !== "experiences") setExperienceDestination(null)
+    setGameFromPortrait(false)
     setSection(next)
     workspaceRef.current?.scrollTo({ top: 0 })
   }
@@ -2028,7 +2062,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   return (
     <div className={sidebarCollapsed ? "lwy sidebar-collapsed" : "lwy"}>
-      <style>{STYLE + GAME_STYLE + SHOP_STYLE + EXPERIENCE_STYLE + TOGETHER_STYLE + PORTRAIT_IMPORT_STYLE + INTERACTION_STYLE + SCROLLBAR_STYLE + themeCss(liveAppearance)}</style>
+      <style>{STYLE + GAME_STYLE + SHOP_STYLE + EXPERIENCE_STYLE + TOGETHER_STYLE + PORTRAIT_IMPORT_STYLE + PORTRAIT_LIGHTBOX_STYLE + INTERACTION_STYLE + SCROLLBAR_STYLE + themeCss(liveAppearance)}</style>
 
       <aside className="lwy-sidebar">
         <div className="lwy-sidebar-head">
@@ -2158,16 +2192,29 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             </article>
           </div>
           {hasArt ? (
-            <aside className="lwy-art" aria-hidden="true">
-              <img key={artVersion} src={art} alt="" onError={handleArtError} />
+            <aside className="lwy-art">
+              <button type="button" onClick={openPortrait} data-expanded={portraitOpen ? "true" : "false"}
+                aria-haspopup="dialog" title={t("portrait.open")} aria-label={t("portrait.open")}>
+                <img key={artVersion} src={art} alt="" onError={handleArtError} />
+              </button>
             </aside>
           ) : null}
           {activeSection === "heart" && scope ? renderOverviewDates(scope) : null}
         </div>
-        <CompanionGame active={activeSection === "game"} api={api} title={sectionLabel("game")} locale={props.locale} />
+        <CompanionGame active={activeSection === "game"} api={api} title={sectionLabel("game")} locale={props.locale}
+          backLabel={t("nav.heart")} onBack={gameFromPortrait ? () => changeSection("heart") : undefined} />
       </main>
       {/* Keep this slot mounted so the host preserves page nodes and focus. */}
-      <div className="lwy-feedback-slot">{!dialogOpen ? renderFeedback() : null}</div>
+      <div className="lwy-feedback-slot">{!dialogOpen && !portraitOpen ? renderFeedback() : null}</div>
+      {portraitOpen && lightbox ? <PortraitLightbox art={art} origin={lightbox.origin} ratio={lightbox.ratio}
+        preset={touchPreset} character={lightbox.character} online={!refreshError && state.host_online !== false}
+        api={api} t={t} onClose={closePortrait}
+        onPlay={() => { closePortrait(); changeSection("game"); setGameFromPortrait(true) }}
+        bag={<Shop compactBag data={state.shop} characters={[]} current={state.host_online === false ? null : currentCharacter}
+          perCharacter={Boolean(state.per_character)} scopes={scopes} dailyGain={limits.daily_gain} dailyChat={limits.daily_chat ?? 4}
+          api={api} t={t} useLocalState={props.useLocalState} busy={busy} stale={refreshError} run={run}
+          refresh={refreshPanel} dialog={onShopDialog} feedback={() => renderFeedback(true)} beginEdit={() => setFeedback(null)} />}
+      /> : null}
 
       {importOpen ? <PortraitImport api={api} t={t} collections={library?.collections || []}
         initialCollection={galleryCollection} onClose={closePortraitImport} errorText={errorText}

@@ -94,6 +94,7 @@ export function Shop(props: {
   useLocalState: PluginSurfaceProps["useLocalState"]; busy: boolean; stale: boolean; run: RunAction
   refresh: () => Promise<void>; dialog: (open: boolean) => void; feedback: () => any
   beginEdit: () => void
+  compactBag?: boolean
 }) {
   const { t, data, run } = props
   const [tab, setTab] = props.useLocalState<string>("lwy:shop-tab", "store")
@@ -110,9 +111,14 @@ export function Shop(props: {
   const close = useCallback(() => {
     if (!locked.current) setSelection(null)
   }, [])
-  useEffect(() => { props.dialog(Boolean(selection)); return () => props.dialog(false) }, [Boolean(selection)])
+  useEffect(() => {
+    if (props.compactBag) return
+    props.dialog(Boolean(selection))
+    return () => props.dialog(false)
+  }, [Boolean(selection), props.compactBag])
   const characters = [...new Set([props.current || "", ...props.characters].filter(Boolean))]
-  const character = characters.includes(recipient) ? recipient : props.current || characters[0] || ""
+  const character = props.compactBag ? props.current || ""
+    : characters.includes(recipient) ? recipient : props.current || characters[0] || ""
   const productName = (id: string) => t(`shop.item.${id}`)
   useBackgroundRefresh(() => props.api.refresh(), props.busy || Boolean(selection))
   useEffect(() => {
@@ -175,6 +181,50 @@ export function Shop(props: {
       reward: reward.reward, period: reward.period,
     })}><Icon name="Coins" />{t("shop.claimReward")}</Button> : null
   const products = tab === "bag" ? data.catalog.filter(product => product.quantity > 0) : data.catalog
+  const canSend = (chosen: NonNullable<typeof selection>) =>
+    chosen.gesture ? data.can_gesture : gainFor(chosen.product, chosen.character) > 0
+  function confirmGift() {
+    if (pending) return perform(pending.action, pending.args, true)
+    if (selection) return perform("send_shop_gift", {
+      item_id: selection.product.id, character: selection.character, gesture: selection.gesture,
+      expected_gain: selection.gesture ? 0 : gainFor(selection.product, selection.character),
+      relationship_revision: recipientScope(selection.character)?.gain_revision ?? 0,
+    })
+  }
+
+  if (props.compactBag) {
+    const owned = data.catalog.filter(product => product.quantity > 0)
+    return <div className="lwy-portrait-bag-items">
+      {props.feedback()}
+      {pending ? <div className="lwy-notice-row">
+        <Alert tone="warning" message={t("shop.unconfirmed")} />
+        <Button disabled={props.busy || props.stale} onClick={() => perform(pending.action, pending.args, true)}>
+          <Icon name="RotateCw" />{t("shop.checkRequest")}
+        </Button>
+      </div> : null}
+      {props.stale ? <Button disabled={props.busy} onClick={props.refresh}><Icon name="RotateCw" />{t("common.refresh")}</Button> : null}
+      {!character ? <Alert tone="info" message={t("shop.noCharacter")} /> : null}
+      {selection && !pending ? <div className="lwy-shop-confirm">
+        <strong>{t("shop.confirmGift", { name: productName(selection.product.id), character: selection.character })}</strong>
+        <span>{t("shop.confirmGain", { n: selection.gesture ? 0 : gainFor(selection.product, selection.character) })}</span>
+        <div className="lwy-btns">
+          <Button disabled={props.busy} onClick={close}>{t("common.cancel")}</Button>
+          <Button tone="primary" disabled={blocked || selection.character !== character || !canSend(selection)}
+            onClick={confirmGift}><Icon name="Gift" />{t("shop.confirmSend")}</Button>
+        </div>
+      </div> : owned.length ? owned.map(product => {
+        const gain = gainFor(product, character)
+        const gestureOnly = gain <= 0
+        return <div className="lwy-portrait-bag-item" key={product.id}>
+          <span><Icon name={product.icon as any} />{productName(product.id)} · {t("shop.owned", { n: product.quantity })}</span>
+          <Button disabled={blocked || !character || (gestureOnly && !data.can_gesture)}
+            onClick={() => { props.beginEdit(); setSelection({ product, character, gesture: gestureOnly }) }}>
+            <Icon name="Gift" />{t(gestureOnly ? "shop.giftGesture" : "shop.send")}
+          </Button>
+        </div>
+      }) : <p className="lwy-empty">{t("shop.bagEmpty")}</p>}
+    </div>
+  }
 
   return <div className="lwy-sections">
     <div className="lwy-shop-wallet">
@@ -298,15 +348,7 @@ export function Shop(props: {
         <Button disabled={props.busy} onClick={close}>{t("common.cancel")}</Button>
         {props.stale ? <Button disabled={props.busy} onClick={props.refresh}><Icon name="RotateCw" />{t("common.refresh")}</Button> : null}
         <Button tone="primary" disabled={props.busy || props.stale || !selection ||
-          (!pending && (selection.gesture ? !data.can_gesture : gainFor(selection.product, selection.character) <= 0))}
-          onClick={() => {
-            if (pending) return perform(pending.action, pending.args, true)
-            if (selection) return perform("send_shop_gift", {
-              item_id: selection.product.id, character: selection.character, gesture: selection.gesture,
-              expected_gain: selection.gesture ? 0 : gainFor(selection.product, selection.character),
-              relationship_revision: recipientScope(selection.character)?.gain_revision ?? 0,
-            })
-          }}>
+          (!pending && !canSend(selection))} onClick={confirmGift}>
           <Icon name={props.busy || pending ? "RotateCw" : "Gift"} />
           <span className="lwy-action-label">
             <span aria-hidden={props.busy || pending ? "true" : undefined}>{t("shop.confirmSend")}</span>

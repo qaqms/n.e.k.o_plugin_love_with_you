@@ -26,7 +26,7 @@ python -B tools/build/audit_release.py --history --package dist/love_with_you-0.
 .\tools\.build-env\Scripts\python.exe -B tools/build/precheck_release.py --report archive/reviews/release-audit-20261116/market-precheck.json
 ```
 
-`build:panel` 只读取相邻 `N.E.K.O` 的渲染器并生成本插件的 `static/panel.html`。`preview` 是模拟关系数据；游戏预览是实际游戏后端配临时存档。`prepare_development.py` 在项目旁生成受管理的 `.neko-dev/love_with_you/`，该副本不包含归档。
+`build:panel` 读取相邻 `N.E.K.O` 的渲染器，在 `plugin.toml` 声明的 `static/panel-<版本>.html` 生成主面板。发布时同步更新入口文件名和版本号，生成新版页面后将旧页面移入归档。`preview` 是模拟关系数据；游戏预览是实际游戏后端配临时存档。`prepare_development.py` 在项目旁生成受管理的 `.neko-dev/love_with_you/`，该副本不包含归档。
 
 浏览器测试可用 `NEKO_PYTHON` 指定 Python、`NEKO_UI_BROWSER` 指定 Chromium。默认截图在 `archive/reviews/browser/`，导航截图在 `archive/reviews/navigation/`；`NEKO_UI_ARTIFACTS` 可覆盖输出位置。测试不会启动或操作用户桌面上的浏览器。
 

@@ -1,6 +1,6 @@
 # 模块职责与玩法扩展入口
 
-结构覆盖至版本：0.9.2（2026-11-16；0.9.0 由原开发编号 0.12.4 调整；0.9.2 包含开发步骤 0.9.1–0.9.8）。文中的源码路径均相对插件根目录。本文描述当前结构；[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
+结构覆盖至版本：0.9.7（2026-11-19）。文中的源码路径均相对插件根目录。[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
 
 发布工具 `tools/build/audit_release.py` 扫描源码、历史与导入包并隐去疑似凭据值；`verify_adventure_package.py` 验证运行资源、文件范围、哈希及合成旧存档迁移；`precheck_release.py` 在临时源码副本调用官方 SDK 预检。对应路径与凭据泄漏回归见 `tests/test_release_hygiene.py`，检查结果及素材许可待办见[发布审计](audits/release-readiness-2026-11-16.md)。浏览器测试拥有自己的临时存档目录，并在正常结束及启动失败时清理。
 
@@ -35,7 +35,8 @@ README 面向插件用户；安装、功能和隐私集中在首页，开发入�
 | 文件 | 状态与职责 | 验证入口 |
 | --- | --- | --- |
 | `ui/panel.tsx` | 导航、当前展示关系、跨页称呼和外观草稿、全局操作互斥、反馈及弹窗编排 | `tools/tests/test_ui.mjs` |
-| `ui/companion-game.tsx`、`static/panel.html` | 「专属称呼」下方的「同行游戏」入口；主面板由 TSX 编译为同源静态入口，内嵌游戏并只代理指定子窗口的冒险动作；同步显示状态，离开暂停、返回保留文档；真实游戏交互确认前台，控制权冲突提供显式接管恢复 | `tools/tests/test_companion_navigation.mjs`（计时、移动、焦点失效、切页、刷新及接管）；生成入口用 `npm --prefix tools run build:panel` |
+| `ui/portrait-lightbox.tsx`、`ui/portrait-touch-presets.ts` | 关系概览灯箱、内置立绘的部位预设、抚摸光标、背包及同行游戏入口 | `tools/tests/test_portrait_lightbox.mjs` |
+| `ui/companion-game.tsx`、`static/panel-<版本>.html` | 「专属称呼」下方的「同行游戏」入口；主面板由 TSX 编译为带发布号的同源静态入口，内嵌游戏并只代理指定子窗口的冒险动作；同步显示状态，离开暂停、返回保留文档；真实游戏交互确认前台，控制权冲突提供显式接管恢复 | `tools/tests/test_companion_navigation.mjs`（计时、移动、焦点失效、切页、刷新及接管）；生成入口用 `npm --prefix tools run build:panel` |
 | `static/index.html`、`static/adventure.css` | 游戏文档和布局；顶部常驻测试版提示，桌面与窄屏均完整显示 | `tools/tests/test_companion_navigation.mjs`；截图检查 |
 | `ui/shop.tsx` | 商店页签、送礼参与者、送礼确认、原请求、商店回执字段核对 | `tools/tests/test_ui.mjs` 中商店用例 |
 | `ui/experiences.tsx` | 经历参与者、页签、绑定角色与修订的表单、原请求、经历回执核对 | `tools/tests/test_experiences_ui.mjs` |

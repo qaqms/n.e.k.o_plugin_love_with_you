@@ -548,5 +548,20 @@
   "error.nickname_blocked": "A selected name is on the avoid list. Change it or allow it again.",
   "entries.setAddressing.name": "Save name preferences",
   "entries.setAddressing.description": "Save stage modes, preferred name and names to avoid.",
-  "actions.setAddressing.label": "Save names"
+  "actions.setAddressing.label": "Save names",
+  "portrait.open": "Interact with portrait",
+  "portrait.back": "Back to interactions",
+  "portrait.touch": "Pat",
+  "portrait.play": "Play together",
+  "portrait.head": "Pat head",
+  "portrait.belly": "Pat belly",
+  "portrait.legs": "Pat legs",
+  "portrait.noTouchPreset": "This portrait has no areas to pat.",
+  "portrait.sending": "Notifying your companion…",
+  "portrait.submitted": "Reply requested. Check the host chat.",
+  "portrait.unavailable": "Your companion cannot reply right now.",
+  "portrait.unknown": "Could not confirm the request. Check the host chat.",
+  "portrait.touch_cooldown": "Wait a few seconds before patting again.",
+  "portrait.touch_character_changed": "The active companion changed. Refresh and try again.",
+  "portrait.touch_unavailable": "Your companion is unavailable."
 }

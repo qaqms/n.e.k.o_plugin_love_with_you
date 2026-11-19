@@ -114,7 +114,9 @@ window.addEventListener("message",async event=>{
     await page.goto(`${preview.url}/companion-host`)
     const panel = page.frameLocator("#surface")
     await panel.getByRole("heading", { name: "关系概览", exact: true }).waitFor()
-    await panel.getByText("67", { exact: true }).first().waitFor()
+    const affinity = panel.getByRole("meter", { name: "好感度" })
+    await affinity.waitFor()
+    assert.equal(await affinity.getAttribute("aria-valuenow"), "67")
     assert.deepEqual(await panel.locator(".lwy-nav button").evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))),
       ["关系概览", "共同经历", "礼物商店", "心动记录", "纪念日", "专属称呼", "同行游戏", "设置"])
     assert.equal(await panel.locator(".lwy-game iframe").count(), 0)

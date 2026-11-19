@@ -1,4 +1,6 @@
 {
+  "overview.todayChanges": "Cambios de hoy",
+  "shop.incomeAvailable": "{n} monedas por reclamar",
   "nav.game": "Juego en compañía",
   "adventure.action": "Progreso y tienda de aventura",
   "adventure.description": "Gestiona el progreso independiente, las monedas de aventura y las mejoras permanentes.",

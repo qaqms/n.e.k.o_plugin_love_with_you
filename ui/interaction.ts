@@ -158,7 +158,6 @@ button:disabled { cursor: not-allowed; }
 .lwy-action-label > span { grid-area: 1 / 1; }
 .lwy-action-label > [aria-hidden="true"] { visibility: hidden; }
 .lwy-button-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 18px; height: 18px; }
-.lwy-shop-modes button { border-radius: 4px 4px 0 0; }
 .lwy-details summary { border-radius: 3px; }
 @media (hover: hover) and (pointer: fine) {
   :root[data-lwy-pointer="pointer"] :is(button, summary, label.lwy-portrait-choice):not(:disabled):not([aria-disabled="true"]):not(:has(input:disabled)):hover {

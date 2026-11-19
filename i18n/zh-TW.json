@@ -1,4 +1,6 @@
 {
+  "overview.todayChanges": "今日變化",
+  "shop.incomeAvailable": "可領取 {n} 金幣",
   "nav.game": "同行遊戲",
   "adventure.action": "冒險進度與商店",
   "adventure.description": "管理獨立冒險進度、冒險金幣與局外強化。",

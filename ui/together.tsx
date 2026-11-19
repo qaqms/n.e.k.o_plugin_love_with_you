@@ -4,8 +4,8 @@ import { Icon } from "./icons"
 import type { ExperienceDestination, ExperienceState } from "./experiences"
 
 export const TOGETHER_STYLE = `
-.lwy-together { grid-column:1 / -1;min-width:0;padding-bottom:24px;border-bottom:1px solid var(--border);margin-bottom:24px; }
-.lwy-together .lwy-card-head { margin-bottom:8px; }
+.lwy-together { min-width:0;padding:4px 0 10px; }
+.lwy-together .lwy-card-head { margin-bottom:2px;gap:2px 12px; }
 .lwy-together-person { margin:0 0 8px;color:var(--muted);font-size:12px;overflow-wrap:anywhere; }
 .lwy-together-row { display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:12px;align-items:center;padding:14px 0; }
 .lwy-together-row + .lwy-together-row { border-top:1px solid var(--border); }
@@ -44,7 +44,7 @@ export function Together(props: {
         {t("overview.allExperiences")}<Icon name="ChevronRight" />
       </button>
     </div>
-    {character ? <p className="lwy-together-person">{t("overview.participant", { name: character })}</p> : null}
+    {data?.enabled && character ? <p className="lwy-together-person">{t("overview.participant", { name: character })}</p> : null}
     {!data ? <p className="lwy-note">{t("xp.notReady")}</p>
       : !data.enabled ? <p className="lwy-note">{t("xp.off")}</p>
       : !character ? <p className="lwy-note">{t("xp.noCharacter")}</p> : <>

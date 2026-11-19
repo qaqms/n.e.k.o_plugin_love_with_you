@@ -1,4 +1,6 @@
 {
+  "overview.todayChanges": "今日变化",
+  "shop.incomeAvailable": "可领取 {n} 金币",
   "nav.game": "同行游戏",
   "adventure.action": "冒险进度与商店",
   "adventure.description": "管理独立冒险进度、冒险金币与局外强化。",

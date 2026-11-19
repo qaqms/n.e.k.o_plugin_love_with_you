@@ -27,37 +27,41 @@ export type ShopState = {
 type Request = { action: string; args: Record<string, unknown> }
 
 export const SHOP_STYLE = `
-.lwy-shop-wallet { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
-  padding-bottom:20px; border-bottom:1px solid var(--line); }
+.lwy-shop { gap:12px; }
+.lwy-shop-wallet { display:flex; align-items:center; justify-content:space-between; gap:8px 12px; flex-wrap:wrap; }
 .lwy-shop-balance { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .lwy-shop-balance strong { font-size:26px; line-height:1.3; font-variant-numeric:tabular-nums; }
 .lwy-shop-balance .lwy-icon { color:var(--warning); width:24px; height:24px; }
-.lwy-shop-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:16px; justify-content:space-between; }
-.lwy-shop-modes { display:flex; flex-wrap:wrap; gap:4px; border-bottom:1px solid var(--line); min-width:0; }
-.lwy-shop-modes button { border:0; border-bottom:2px solid transparent; background:transparent; font:inherit;
-  padding:10px 12px; color:var(--hint); cursor:pointer; }
-.lwy-shop-modes button[aria-pressed="true"] { color:var(--accent-strong); border-color:var(--accent-strong); font-weight:600; }
-.lwy-shop-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:14px; }
-.lwy-shop-product { display:flex; flex-direction:column; gap:12px; min-width:0; padding:18px;
+.lwy-shop-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:8px 16px;
+  justify-content:space-between; border-bottom:1px solid var(--line); }
+.lwy-shop-toolbar .lwy-shop-recipient { padding-bottom:8px; }
+.lwy-shop-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr)); gap:12px; }
+.lwy-shop-product { display:flex; flex-direction:column; gap:8px; min-width:0; padding:14px;
   border:1px solid var(--line); border-radius:8px; background:var(--card); }
 .lwy-shop-product h3 { margin:0; font-size:16px; line-height:1.5; overflow-wrap:anywhere; }
 .lwy-shop-product p { margin:0; color:var(--hint); font-size:13px; overflow-wrap:anywhere; }
-.lwy-shop-art { display:grid; place-items:center; height:88px; border-radius:6px; background:var(--accent-soft); color:var(--accent-strong); }
-.lwy-shop-art .lwy-icon { width:44px; height:44px; }
-.lwy-shop-product[data-product="tea"] .lwy-shop-art { color:var(--gain); background:var(--surface-strong); }
-.lwy-shop-product[data-product="flowers"] .lwy-shop-art { color:var(--danger); background:var(--surface-strong); }
-.lwy-shop-product[data-product="book"] .lwy-shop-art { color:var(--warning); background:var(--surface-strong); }
+.lwy-shop-art { display:grid; place-items:center; height:64px; color:var(--accent-strong); }
+.lwy-shop-art .lwy-icon { width:34px; height:34px; }
+.lwy-shop-product[data-product="tea"] .lwy-shop-art { color:var(--gain); }
+.lwy-shop-product[data-product="flowers"] .lwy-shop-art { color:var(--danger); }
+.lwy-shop-product[data-product="book"] .lwy-shop-art { color:var(--warning); }
 .lwy-shop-product .neko-button { width:100%; margin-top:auto; }
 .lwy-shop-meta { display:flex; flex-wrap:wrap; gap:6px 16px; justify-content:space-between; font-size:13px; }
 .lwy-shop-recipient { display:grid; gap:6px; min-width:0; max-width:100%; }
+.lwy-shop-recipient select { max-width:100%; }
+.lwy-shop-allowances { display:grid; gap:2px; overflow-wrap:anywhere; }
 .lwy-shop-log { padding:16px 0; border-bottom:1px solid var(--line); display:grid; gap:8px; min-width:0; }
 .lwy-shop-log-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
 .lwy-shop-log-head strong, .lwy-shop-log p { overflow-wrap:anywhere; margin:0; }
 .lwy-shop-log-status { display:flex; align-items:center; flex-wrap:wrap; gap:8px; color:var(--hint); font-size:13px; }
 .lwy-shop-confirm { display:grid; gap:14px; }
 .lwy-shop-confirm .lwy-shop-art { height:100px; }
-.lwy-shop-income { display:grid; gap:14px; padding-bottom:18px; border-bottom:1px solid var(--line); }
-.lwy-shop-income-head, .lwy-shop-week { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.lwy-shop-income { border-block:1px solid var(--line); }
+.lwy-shop-income-head { display:flex; align-items:baseline; flex-wrap:wrap; gap:2px 12px; min-width:0; overflow-wrap:anywhere; }
+.lwy-shop-income-head .lwy-sub { font-weight:400; }
+.lwy-shop-available { color:var(--accent-strong); font-size:13px; }
+.lwy-shop-income-body { display:grid; gap:12px; padding:4px 0 12px; }
+.lwy-shop-week { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 .lwy-shop-income-steps { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .lwy-shop-step { display:grid; align-content:start; gap:6px; min-width:0; font-size:13px; overflow-wrap:anywhere; }
 .lwy-shop-step progress { width:100%; height:6px; accent-color:var(--accent); }
@@ -69,8 +73,7 @@ export const SHOP_STYLE = `
 .lwy-shop-smaller { display:flex; flex-wrap:wrap; gap:8px; }
 .lwy-shop-ledger-amount { font-variant-numeric:tabular-nums; }
 @media(max-width:479px) { .lwy-shop-income-steps { grid-template-columns:1fr; }
-  .lwy-shop-product { padding:14px; } .lwy-shop-toolbar { align-items:stretch; }
-  .lwy-shop-recipient { width:100%; } .lwy-shop-wallet > .neko-button { width:100%; } }
+  .lwy-shop-toolbar { align-items:stretch; } .lwy-shop-recipient { width:100%; } }
 `
 
 function resultOf(value: any, action: string): any {
@@ -176,6 +179,10 @@ export function Shop(props: {
     if (ok) setSelection(null)
   }
   const blocked = props.busy || Boolean(pending) || props.stale
+  const claimable = data.income && !data.income.clock_error
+    ? [...data.income.steps, data.income.weekly, ...data.income.pending]
+      .reduce((total, reward) => total + (reward.ready && !reward.claimed ? reward.coins : 0), 0)
+    : 0
   const claimButton = (reward: Reward) => reward.ready ? <Button tone="primary"
     disabled={blocked || Boolean(selection)} onClick={() => perform("claim_shop_coins", {
       reward: reward.reward, period: reward.period,
@@ -226,7 +233,7 @@ export function Shop(props: {
     </div>
   }
 
-  return <div className="lwy-sections">
+  return <div className="lwy-sections lwy-shop">
     <div className="lwy-shop-wallet">
       <div className="lwy-shop-balance"><Icon name="Coins" /><strong>{data.coins}</strong><span>{t("shop.currency")}</span></div>
       <div className="lwy-btns">
@@ -235,31 +242,36 @@ export function Shop(props: {
       </div>
     </div>
     <div className="lwy-shop-income-notice" role="status" aria-live="polite">{incomeNotice}</div>
-    {data.income ? <section className="lwy-shop-income" aria-label={t("shop.incomeTitle")}>
-      <div className="lwy-shop-income-head"><strong>{t("shop.incomeTitle")}</strong>
-        <span className="lwy-sub">{t("shop.incomeToday", { n: data.income.earned, max: data.daily_coins })}</span></div>
-      <div className="lwy-shop-income-steps">{data.income.steps.map(step =>
-        <div className="lwy-shop-step" key={step.turns}>
-          <strong>{t(`shop.incomeStep.${step.turns}`)}</strong>
-          <progress aria-label={t(`shop.incomeStep.${step.turns}`)} max={step.turns}
-            value={step.claimed ? step.turns : Math.min(data.income.count, step.turns)} />
-          <span>{step.claimed ? t("shop.incomeDone", { n: step.coins })
-            : t("shop.incomeProgress", { n: Math.min(data.income.count, step.turns), max: step.turns, coins: step.coins })}</span>
-          {claimButton(step)}
-        </div>)}</div>
-      <div className="lwy-shop-week"><span>{t("shop.weekProgress", {
-        n: Math.min(data.income.weekly_days, data.income.weekly_goal), max: data.income.weekly_goal,
-      })}</span><span className="lwy-sub">{data.income.weekly_paid
-        ? t("shop.incomeDone", { n: data.income.weekly_coins }) : t("shop.weekReward", { n: data.income.weekly_coins })}</span>
-        {claimButton(data.income.weekly)}</div>
-      {data.income.pending.length ? <div className="lwy-shop-unclaimed">
-        <strong>{t("shop.pendingRewards")}</strong>
-        {data.income.pending.map(reward => <div className="lwy-shop-week" key={`${reward.period}:${reward.reward}`}>
-          <span className="lwy-sub">{reward.period} · {t(`shop.ledger.${reward.reward}`)} · +{t("shop.price", { n: reward.coins })}</span>
-          {claimButton(reward)}
-        </div>)}
-      </div> : null}
-    </section> : null}
+    {data.income ? <details key="shop-income" className="lwy-shop-income lwy-disclosure">
+      <summary><span className="lwy-shop-income-head">
+        <span>{t("shop.incomeTitle")}</span>
+        <span className="lwy-sub">{t("shop.incomeToday", { n: data.income.earned, max: data.daily_coins })}</span>
+        {claimable ? <span className="lwy-shop-available">{t("shop.incomeAvailable", { n: claimable })}</span> : null}
+      </span><Icon name="ChevronRight" /></summary>
+      <div className="lwy-shop-income-body">
+        <div className="lwy-shop-income-steps">{data.income.steps.map(step =>
+          <div className="lwy-shop-step" key={step.turns}>
+            <strong>{t(`shop.incomeStep.${step.turns}`)}</strong>
+            <progress aria-label={t(`shop.incomeStep.${step.turns}`)} max={step.turns}
+              value={step.claimed ? step.turns : Math.min(data.income.count, step.turns)} />
+            <span>{step.claimed ? t("shop.incomeDone", { n: step.coins })
+              : t("shop.incomeProgress", { n: Math.min(data.income.count, step.turns), max: step.turns, coins: step.coins })}</span>
+            {claimButton(step)}
+          </div>)}</div>
+        <div className="lwy-shop-week"><span>{t("shop.weekProgress", {
+          n: Math.min(data.income.weekly_days, data.income.weekly_goal), max: data.income.weekly_goal,
+        })}</span><span className="lwy-sub">{data.income.weekly_paid
+          ? t("shop.incomeDone", { n: data.income.weekly_coins }) : t("shop.weekReward", { n: data.income.weekly_coins })}</span>
+          {claimButton(data.income.weekly)}</div>
+        {data.income.pending.length ? <div className="lwy-shop-unclaimed">
+          <strong>{t("shop.pendingRewards")}</strong>
+          {data.income.pending.map(reward => <div className="lwy-shop-week" key={`${reward.period}:${reward.reward}`}>
+            <span className="lwy-sub">{reward.period} · {t(`shop.ledger.${reward.reward}`)} · +{t("shop.price", { n: reward.coins })}</span>
+            {claimButton(reward)}
+          </div>)}
+        </div> : null}
+      </div>
+    </details> : null}
     {data.bus_ok === false ? <Alert tone="warning" message={t("shop.incomeDisconnected")} /> : null}
     {data.income_error ? <Alert tone="warning" message={t("shop.incomePending")} /> : null}
     {data.income?.clock_error || recipientScope(character)?.clock_error
@@ -274,7 +286,7 @@ export function Shop(props: {
       <Button onClick={async () => { await props.refresh() }}>{t("common.refresh")}</Button>
     </div> : null}
     <div className="lwy-shop-toolbar">
-      <div className="lwy-shop-modes" role="group" aria-label={t("nav.shop")}>
+      <div className="lwy-section-nav" role="group" aria-label={t("nav.shop")}>
         {["store", "bag", "log", "ledger"].map(mode => <button key={mode} type="button" disabled={props.busy}
           aria-pressed={tab === mode ? "true" : "false"} onClick={() => setTab(mode)}>{t(`shop.tab.${mode}`)}</button>)}
       </div>
@@ -285,12 +297,14 @@ export function Shop(props: {
         </select>
       </label>
     </div>
-    <p className="lwy-note">{t("shop.allowance", { n: data.gift_remaining, max: data.gift_daily_cap })}
-      {!props.perCharacter ? ` · ${t("shop.shared")}` : ""}</p>
-    {character ? <p className="lwy-note">{t("shop.chatAllowance", {
-      n: recipientScope(character)?.chat_room ?? Math.max(0, props.dailyChat - (recipientScope(character)?.gained_chat || 0)),
-      max: props.dailyChat,
-    })}</p> : null}
+    {tab === "store" || tab === "bag" ? <div className="lwy-shop-allowances">
+      <p className="lwy-note">{t("shop.allowance", { n: data.gift_remaining, max: data.gift_daily_cap })}
+        {!props.perCharacter ? ` · ${t("shop.shared")}` : ""}</p>
+      {character ? <p className="lwy-note">{t("shop.chatAllowance", {
+        n: recipientScope(character)?.chat_room ?? Math.max(0, props.dailyChat - (recipientScope(character)?.gained_chat || 0)),
+        max: props.dailyChat,
+      })}</p> : null}
+    </div> : null}
     {tab === "bag" ? <label className="lwy-shop-recipient"><span id="lwy-shop-mode-label">{t("shop.giftMode")}</span>
       <select className="neko-select" aria-labelledby="lwy-shop-mode-label" value={gesture ? "gesture" : "normal"} disabled={blocked || Boolean(selection)}
         onChange={(event: any) => { setGesture(event.target.value === "gesture") }}>

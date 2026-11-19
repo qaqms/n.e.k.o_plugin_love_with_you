@@ -1,4 +1,6 @@
 {
+  "overview.todayChanges": "今日の変化",
+  "shop.incomeAvailable": "受け取れるコイン：{n}",
   "nav.game": "同行ゲーム",
   "adventure.action": "冒険の進行とショップ",
   "adventure.description": "独立した冒険の進行、冒険コイン、永続強化を管理します。",

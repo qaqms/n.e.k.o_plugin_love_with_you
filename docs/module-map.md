@@ -1,6 +1,6 @@
 # 模块职责与玩法扩展入口
 
-结构覆盖至版本：0.9.7（2026-11-19）。文中的源码路径均相对插件根目录。[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
+结构覆盖至版本：0.9.8（2026-11-19）。文中的源码路径均相对插件根目录。[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
 
 发布工具 `tools/build/audit_release.py` 扫描源码、历史与导入包并隐去疑似凭据值；`verify_adventure_package.py` 验证运行资源、文件范围、哈希及合成旧存档迁移；`precheck_release.py` 在临时源码副本调用官方 SDK 预检。对应路径与凭据泄漏回归见 `tests/test_release_hygiene.py`，检查结果及素材许可待办见[发布审计](audits/release-readiness-2026-11-16.md)。浏览器测试拥有自己的临时存档目录，并在正常结束及启动失败时清理。
 

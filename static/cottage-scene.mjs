@@ -1,5 +1,6 @@
 import * as T from "./engine/three.module.min.js"
 import { RoundedBoxGeometry } from "./engine/three-rounded-box.mjs"
+import { buildHouse } from "./cottage-house.mjs?v=0.9.26"
 
 const PI = Math.PI
 const standard = (color, options = {}) => new T.MeshStandardMaterial({ color, roughness: .85, ...options })
@@ -296,8 +297,7 @@ function shelves(parent, wood, trim) {
 function structure(scene, wood, darkWood, trim) {
   const plaster = standard(0xc8d5be, { roughness: .95 })
   const sidePlaster = standard(0xe3ccbb, { roughness: .95 })
-  box(scene, standard(0x60796e), 0, -.25, 0, 6.64, .44, 5.44, .12, false)
-  box(scene, darkWood, 0, -.07, 0, 6.51, .12, 5.31, .04, false)
+  // The base under the floor now spans the whole house (cottage-house.mjs).
   const plankColors = [0xd5a775, 0xdcb285, 0xcfa070, 0xe0b78a, 0xc79466, 0xd7a878]
     .map(color => standard(color, { map: wood.map, roughness: .66 }))
   const rand = sampler(85)
@@ -681,8 +681,8 @@ export function buildRoom(scene) {
     ctx.fillStyle = gradient
     ctx.fillRect(0, 0, w, h)
   })
-  const shadow = mesh(scene, new T.PlaneGeometry(9.8, 8.3), unlit({ map: shadowMap, transparent: true, depthWrite: false }),
-    .22, -.483, .28, false)
+  const shadow = mesh(scene, new T.PlaneGeometry(17.5, 8.3), unlit({ map: shadowMap, transparent: true, depthWrite: false }),
+    3.4, -.483, .28, false)
   shadow.rotation.x = -PI / 2
 
   const hits = [
@@ -703,5 +703,6 @@ export function buildRoom(scene) {
     object.updateMatrixWorld()
     return { id, object }
   })
-  return { ...lamp, sun, curtains, views, hits, record, picture, notebook, seat, shelf, calendar, projector }
+  const house = buildHouse(scene, { box, cylinder, mesh, group, standard, fabric, glaze, texture, wood, darkWood, trim, views })
+  return { ...lamp, sun, curtains, views, hits, house, record, picture, notebook, seat, shelf, calendar, projector }
 }

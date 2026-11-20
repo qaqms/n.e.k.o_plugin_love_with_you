@@ -1,8 +1,10 @@
 import * as T from "./engine/three.module.min.js"
 import { EffectComposer, GTAOPass, OutputPass, RenderPass, RoomEnvironment, ShaderPass, UnrealBloomPass }
   from "./engine/three-post.mjs?v=0.9.25"
-import { icon } from "./cottage-icons.mjs?v=0.9.22"
-import { buildRoom } from "./cottage-scene.mjs?v=0.9.25"
+import { icon } from "./cottage-icons.mjs?v=0.9.26"
+import { buildRoom } from "./cottage-scene.mjs?v=0.9.26"
+import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.26"
+import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
 import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.18"
 import { createPicturePages } from "./cottage-picture.mjs?v=0.9.21"
 import { createGiftShelf, createNotebook, createSeat, livingLabels, localPeriod } from "./cottage-living.mjs?v=0.9.22"
@@ -17,6 +19,48 @@ const LABELS = {
   ko: ["우리의 작은 집", "방 조작", "탁상 조명", "커튼", "왼쪽으로 돌리기", "시점 초기화", "오른쪽으로 돌리기", "이 브라우저에서는 3D 공간을 열 수 없습니다."],
   pt: ["Nossa casinha", "Controles da sala", "Luminária", "Cortinas", "Girar para a esquerda", "Redefinir vista", "Girar para a direita", "A sala 3D não está disponível neste navegador."],
   ru: ["Наш домик", "Управление комнатой", "Настольная лампа", "Шторы", "Повернуть влево", "Сбросить вид", "Повернуть вправо", "3D-комната недоступна в этом браузере."],
+}
+// Rooms, the view menu, light and quality settings, and the item list.
+const HOUSE_LABELS = {
+  "zh-CN": ["房间", "总览", "客厅", "厨房", "门廊小院", "卧室", "阁楼书房", "光线与时段", "画质", "自动", "低", "中", "高", "物品", "时段"],
+  "zh-TW": ["房間", "總覽", "客廳", "廚房", "門廊小院", "臥室", "閣樓書房", "光線與時段", "畫質", "自動", "低", "中", "高", "物品", "時段"],
+  en: ["Rooms", "Whole house", "Living room", "Kitchen", "Porch & yard", "Bedroom", "Attic study", "Light & time", "Quality", "Auto", "Low", "Medium", "High", "Items", "Time of day"],
+  es: ["Habitaciones", "Toda la casa", "Sala", "Cocina", "Porche y patio", "Dormitorio", "Estudio del ático", "Luz y hora", "Calidad", "Auto", "Baja", "Media", "Alta", "Objetos", "Momento del día"],
+  ja: ["部屋", "家全体", "リビング", "キッチン", "ポーチと庭", "寝室", "屋根裏の書斎", "明かりと時間", "画質", "自動", "低", "中", "高", "アイテム", "時間帯"],
+  ko: ["방", "집 전체", "거실", "주방", "현관과 마당", "침실", "다락 서재", "조명과 시간", "화질", "자동", "낮음", "보통", "높음", "물건", "시간대"],
+  pt: ["Cômodos", "Casa inteira", "Sala", "Cozinha", "Varanda e quintal", "Quarto", "Estúdio no sótão", "Luz e horário", "Qualidade", "Auto", "Baixa", "Média", "Alta", "Itens", "Hora do dia"],
+  ru: ["Комнаты", "Весь дом", "Гостиная", "Кухня", "Крыльцо и двор", "Спальня", "Кабинет на чердаке", "Свет и время", "Качество", "Авто", "Низкое", "Среднее", "Высокое", "Предметы", "Время суток"],
+}
+const VIEW_IDS = ["overview", ...ROOMS.map(room => room.id)]
+const VIEW_SECONDS = .95
+// Each view frames a box: the living room keeps its 0.9.25 framing, the others follow the layout.
+function viewFrame(id) {
+  if (id === "living") {
+    return { center: new T.Vector3(0, 1.18, -.12), upper: false, corners: [
+      ...[-3.35, 3.35].flatMap(x => [-2.73, 2.73].map(z => new T.Vector3(x, -.47, z))),
+      ...[-3.35, 3.35].map(x => new T.Vector3(x, 3.53, -2.73)),
+      new T.Vector3(-3.35, 3.53, 1.98),
+    ] }
+  }
+  if (id === "overview") {
+    const top = STOREYS[1].y + STOREYS[1].height + UPPER_LIFT
+    return { center: new T.Vector3(3.3, 2.9, -.12), upper: true, corners: [
+      ...[-3.35, 10.12].flatMap(x => [-2.73, 2.73].map(z => new T.Vector3(x, -.47, z))),
+      ...[-3.35, 7.1].map(x => new T.Vector3(x, top + .1, -2.73)),
+      ...[-3.35, 7.1].map(x => new T.Vector3(x, top + 2.1, -.35)),
+      new T.Vector3(-3.35, top + .1, 2.7),
+    ] }
+  }
+  const room = ROOMS.find(item => item.id === id)
+  const storey = STOREYS[room.storey]
+  const base = room.storey ? storey.y + UPPER_LIFT - .16 : -.47
+  const top = room.outdoor ? 2.95 : storey.y + storey.height + (room.storey ? UPPER_LIFT : 0) + .13
+  const [x0, x1] = [room.x[0] - .1, room.x[1] + .1]
+  return { center: new T.Vector3((x0 + x1) / 2, base + 1.65, -.12), upper: room.storey === 1, corners: [
+    ...[x0, x1].flatMap(x => [-2.73, 2.73].map(z => new T.Vector3(x, base, z))),
+    ...[x0, x1].map(x => new T.Vector3(x, top, -2.73)),
+    new T.Vector3(x0, top, 2.7),
+  ] }
 }
 const STORAGE_KEY = "love_with_you:cottage:v1"
 const START_ANGLE = .69
@@ -91,6 +135,10 @@ export function startCottage() {
   document.documentElement.lang = locale
   document.title = document.querySelector("#title").textContent = title
   controls.setAttribute("aria-label", toolbarLabel)
+  const [roomsLabel, ...houseLabels] = HOUSE_LABELS[locale]
+  const viewNames = Object.fromEntries(VIEW_IDS.map((id, index) => [id, houseLabels[index]]))
+  const [moodLabel, qualityLabel, ...qualityNames] = houseLabels.slice(VIEW_IDS.length, VIEW_IDS.length + 6)
+  const [itemsLabel, periodLabel] = houseLabels.slice(VIEW_IDS.length + 6)
   const names = livingLabels(locale)
   const companyNames = companyLabels(locale)
   const actions = [...buttons, ...keepsakeButtons, ["seat", "Armchair"]]
@@ -103,7 +151,56 @@ export function startCottage() {
     button.append(icon(symbol))
     return [id, button]
   }))
-  document.querySelector("#keepsakes").hidden = !linked
+  for (const [id, label, symbol] of [["rooms", roomsLabel, "House"], ["mood", moodLabel, "SunMoon"], ["items", itemsLabel, "Package"]]) {
+    const button = document.getElementById(id)
+    button.setAttribute("aria-label", label)
+    button.title = label
+    button.append(icon(symbol))
+    elements[id] = button
+  }
+  // Items in the list also show their names, since the list is how keyboard and screen reader users reach them.
+  for (const [id] of keepsakeButtons) {
+    const text = document.createElement("span")
+    text.textContent = elements[id].title
+    elements[id].append(text)
+  }
+  elements.items.hidden = !linked
+  const roomName = document.querySelector("#room-name")
+  const hoverLabel = document.querySelector("#hover-label")
+  const roomMenu = document.querySelector("#room-menu")
+  const moodMenu = document.querySelector("#mood-menu")
+  const itemMenu = document.querySelector("#item-menu")
+  const menus = [[roomMenu, elements.rooms], [moodMenu, elements.mood], [itemMenu, elements.items]]
+  const textButton = (parent, label, id) => {
+    const button = document.createElement("button")
+    button.type = "button"
+    if (id) button.id = id
+    button.textContent = label
+    button.setAttribute("aria-pressed", "false")
+    parent.append(button)
+    return button
+  }
+  roomMenu.setAttribute("aria-label", roomsLabel)
+  for (const id of VIEW_IDS) textButton(roomMenu, viewNames[id]).dataset.view = id
+  moodMenu.setAttribute("aria-label", moodLabel)
+  itemMenu.setAttribute("aria-label", itemsLabel)
+  document.querySelector("#mood-period-title").textContent = periodLabel
+  document.querySelector("#mood-quality-title").textContent = qualityLabel
+  const periodRow = document.querySelector("#mood-periods")
+  const qualityRow = document.querySelector("#mood-qualities")
+  periodRow.setAttribute("aria-label", periodLabel)
+  qualityRow.setAttribute("aria-label", qualityLabel)
+  const periodButtons = ["auto", ...periods].map((period, index) => [period, textButton(periodRow, names.periods[index], `mood-${period}`)])
+  const qualityButtons = qualities.map((level, index) => [level, textButton(qualityRow, qualityNames[index], `quality-${level}`)])
+  // Group the item list by the room each item lives in, following the layout's slots.
+  const featureRoom = Object.fromEntries(SLOTS.flatMap(slot => (slot.features || []).map(feature => [feature, slot.room])))
+  const itemList = document.querySelector("#keepsakes")
+  for (const roomId of [...new Set(keepsakeButtons.map(([id]) => featureRoom[id]))]) {
+    const heading = document.createElement("p")
+    heading.className = "menu-title"
+    heading.textContent = viewNames[roomId]
+    itemList.before(heading)
+  }
   const showFallback = () => {
     controls.hidden = true
     stage.hidden = true
@@ -158,12 +255,19 @@ export function startCottage() {
 
   const preferences = loadPreferences()
   const reduced = matchMedia("(prefers-reduced-motion: reduce)")
-  const center = new T.Vector3(0, 1.18, -.12)
-  const corners = [
-    ...[-3.35, 3.35].flatMap(x => [-2.73, 2.73].map(z => new T.Vector3(x, -.47, z))),
-    ...[-3.35, 3.35].map(x => new T.Vector3(x, 3.53, -2.73)),
-    new T.Vector3(-3.35, 3.53, 1.98),
-  ]
+  const views = Object.fromEntries(VIEW_IDS.map(id => [id, viewFrame(id)]))
+  const center = new T.Vector3()
+  let currentView = "living"
+  // A room change blends from the framing on screen when it started, so a second change mid-flight does not jump.
+  let viewMotion = null
+  let viewAmount = 1
+  let lastBase = null
+  let pendingOpen = null
+  let upperLift = 1
+  let houseMoving = false
+  // The first frame places walls and the upper storey directly instead of animating from defaults.
+  let houseSettled = false
+  let returnToMenu = false
   const raycaster = new T.Raycaster()
   const pointer = new T.Vector2()
   let azimuth = START_ANGLE
@@ -303,8 +407,8 @@ export function startCottage() {
     camera.updateMatrixWorld()
   }
 
-  function fitCamera() {
-    aimCamera(center, azimuth, elevation, 11)
+  function fitView({ center: viewCenter, corners }) {
+    aimCamera(viewCenter, azimuth, elevation, 11)
     const points = corners.map(corner => corner.clone().applyMatrix4(camera.matrixWorldInverse))
     const xs = points.map(point => point.x)
     const ys = points.map(point => point.y)
@@ -327,6 +431,22 @@ export function startCottage() {
     midX += (left + right) / 2 * span * aspect / 2
     midY += (bottom + top) / 2 * span / 2
     span *= Math.max((top - bottom) / 2 / usableY, (right - left) / 2 / usableX)
+    return { span, midX, midY }
+  }
+
+  function fitCamera() {
+    const aspect = viewportWidth / viewportHeight
+    const view = views[currentView]
+    let { span, midX, midY } = fitView(view)
+    center.copy(view.center)
+    if (viewMotion) {
+      const { from } = viewMotion
+      center.lerpVectors(from.center, view.center, viewAmount)
+      span = zoom(from.span, span, viewAmount)
+      midX = T.MathUtils.lerp(from.midX, midX, viewAmount)
+      midY = T.MathUtils.lerp(from.midY, midY, viewAmount)
+    }
+    lastBase = { center: center.clone(), span, midX, midY }
     aimCamera(center, azimuth, elevation, 11)
     let fov = FOV.room
     let amount = 0
@@ -498,7 +618,23 @@ export function startCottage() {
       motionFinished = progress === 1
       if (motionFinished) focusMotion = null
     }
+    let arrived = false
+    if (viewMotion) {
+      viewMotion.start ??= timestamp
+      const progress = reduced.matches ? 1 : clamp((timestamp - viewMotion.start) / (VIEW_SECONDS * 1000), 0, 1)
+      viewAmount = T.MathUtils.smoothstep(progress, 0, 1)
+      if (progress === 1) {
+        viewMotion = null
+        arrived = true
+      }
+    }
     fitCamera()
+    houseMoving = updateHouse(dt)
+    if (arrived && pendingOpen) {
+      const id = pendingOpen
+      pendingOpen = null
+      openKeepsake(id)
+    }
     if (closeup === "picture") {
       // Read the same timeline backward so a mid-flight exit does not jump.
       const phase = (start, end) => T.MathUtils.smoothstep(focus, start, end)
@@ -591,14 +727,19 @@ export function startCottage() {
         if (next) openKeepsake(next)
         else {
           controls.hidden = false
-          elements[previous].focus({ preventScroll: true })
+          // Opened from the item list: reopen it on the same item. Opened in the scene: focus the list button.
+          if (returnToMenu && itemMenu.contains(elements[previous])) {
+            toggleMenu(itemMenu, true)
+            elements[previous].focus({ preventScroll: true })
+          } else (itemMenu.contains(elements[previous]) ? elements.items : elements[previous]).focus({ preventScroll: true })
+          returnToMenu = false
         }
       }
     }
     if (composer) composer.render(dt)
     else renderer.render(scene, camera)
     const animating = azimuth !== targetAzimuth || elevation !== targetElevation || lamp !== Number(preferences.lamp) ||
-      curtains !== Number(preferences.curtains) || time !== wantedTime || focusMotion || spinning
+      curtains !== Number(preferences.curtains) || time !== wantedTime || focusMotion || spinning || viewMotion || houseMoving
     // When "auto" quality cannot keep up during motion, step down one tier.
     slowFrames = animating && dt > .045 ? slowFrames + 1 : 0
     if (slowFrames > 24 && quality !== "low" && !qualities.includes(requestedQuality) && preferences.quality === "auto") {
@@ -607,6 +748,57 @@ export function startCottage() {
     }
     if (animating) invalidate()
     else lastFrame = 0
+  }
+
+  // Upstairs lifts away like a dollhouse lid for ground-floor rooms; side walls in front of the view fade out.
+  function updateHouse(dt) {
+    const { storeys, overhead, fadeWalls } = room.house
+    const instant = reduced.matches || !houseSettled
+    houseSettled = true
+    const wanted = views[currentView].upper ? 0 : 1
+    upperLift = instant || Math.abs(upperLift - wanted) < .002 ? wanted : T.MathUtils.damp(upperLift, wanted, 5.5, dt)
+    for (const group of [storeys[1], overhead]) {
+      group.position.y = 4.2 * upperLift ** 2
+      group.visible = upperLift < .995
+    }
+    let moving = upperLift !== wanted
+    for (const wall of fadeWalls) {
+      const shown = wall.storey === 0 || upperLift < .995
+      // Closeups keep the room's wall state: the camera leaning in should not bring a faded wall back.
+      const blocking = closeup ? wall.goal === 0 : (camera.position.x - wall.at) * (center.x - wall.at) < 0
+      const goal = wall.goal = blocking ? 0 : 1
+      wall.opacity = instant || Math.abs(wall.opacity - goal) < .01 ? goal : T.MathUtils.damp(wall.opacity, goal, 9, dt)
+      if (wall.opacity !== goal) moving = true
+      for (const material of wall.materials) {
+        const transparent = wall.opacity < 1
+        if (material.transparent !== transparent) {
+          material.transparent = transparent
+          material.needsUpdate = true
+        }
+        material.opacity = wall.opacity
+        material.depthWrite = !transparent
+      }
+      for (const mesh of wall.meshes) {
+        mesh.visible = shown && wall.opacity > .02
+        mesh.castShadow = wall.opacity > .5
+      }
+    }
+    return moving
+  }
+
+  function goTo(id) {
+    if (closeup || !Object.hasOwn(views, id)) return
+    closeMenus()
+    if (id !== currentView || viewMotion) {
+      viewMotion = { from: lastBase || { center: views[currentView].center.clone(), span: 1, midX: 0, midY: 0 }, start: null }
+      viewAmount = 0
+    }
+    currentView = id
+    roomView.dataset.room = id
+    roomName.textContent = viewNames[id]
+    for (const button of roomMenu.querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.view === id))
+    delete canvas.dataset.target
+    invalidate()
   }
 
   function applyQuality(level = resolveQuality()) {
@@ -669,6 +861,9 @@ export function startCottage() {
   function syncControls() {
     elements.lamp.setAttribute("aria-pressed", String(preferences.lamp))
     elements.curtains.setAttribute("aria-pressed", String(preferences.curtains))
+    for (const [period, button] of periodButtons) button.setAttribute("aria-pressed", String(preferences.period === period))
+    const shownQuality = qualities.includes(requestedQuality) ? requestedQuality : preferences.quality
+    for (const [level, button] of qualityButtons) button.setAttribute("aria-pressed", String(shownQuality === level))
     seat.sync(preferences)
   }
 
@@ -702,6 +897,8 @@ export function startCottage() {
     if (id === "picture" && recentNote && pages.select(recentNote.character, recentNote.id)) recentNote = null
     opening = true
     controls.hidden = true
+    closeMenus()
+    hoverLabel.hidden = true
     delete canvas.dataset.target
     roomView.dataset.view = "approaching"
     backButton.hidden = false
@@ -749,6 +946,10 @@ export function startCottage() {
     window.parent.postMessage({ type: "love-with-you-cottage-ready" }, location.origin)
   }
   document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && !event.defaultPrevented && closeMenus()) {
+      event.preventDefault()
+      return
+    }
     if (opening && event.key === "Escape" && !event.defaultPrevented) {
       event.preventDefault()
       closeKeepsake()
@@ -759,23 +960,68 @@ export function startCottage() {
   setInterval(() => { if (!document.hidden && time !== periodIndex()) invalidate() }, 30_000)
 
   function activate(id) {
-    if (id === "lamp" || id === "curtains") toggle(id)
+    closeMenus()
+    if (id.startsWith("room:")) goTo(id.slice(5))
+    else if (id === "lamp" || id === "curtains") toggle(id)
     else if (id === "occasion") calendar.writeToday()
-    else if ((linked || id === "seat") && Object.hasOwn(closeups, id)) openKeepsake(id)
+    else if ((linked || id === "seat") && Object.hasOwn(closeups, id)) {
+      // Everything that opens today lives in the living room; walk there first when looking elsewhere.
+      if (currentView !== "living" || viewMotion) {
+        pendingOpen = id
+        goTo("living")
+      } else openKeepsake(id)
+    }
+  }
+
+  function toggleMenu(menu, opening = menu.hidden) {
+    closeMenus()
+    if (!opening) return
+    const [, button] = menus.find(([item]) => item === menu)
+    menu.hidden = false
+    button.setAttribute("aria-expanded", "true")
+    menu.querySelector('[aria-pressed="true"], button:not([hidden])')?.focus({ preventScroll: true })
+  }
+
+  function closeMenus() {
+    let closed = false
+    for (const [menu, button] of menus) {
+      if (!menu.hidden) closed = true
+      menu.hidden = true
+      button.setAttribute("aria-expanded", "false")
+    }
+    return closed
   }
 
   const hitLookup = new Map(room.hits
     .filter(({ id }) => linked || ["lamp", "curtains", "seat"].includes(id))
     .map(({ id, object }) => [object, id]))
   const hitObjects = [...hitLookup.keys()]
+  const roomLookup = new Map(room.house.rooms.map(({ id, object }) => [object, id]))
   function hitAt(event) {
     const bounds = canvas.getBoundingClientRect()
     pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1,
       1 - (event.clientY - bounds.top) / bounds.height * 2)
     raycaster.setFromCamera(pointer, camera)
-    const intersection = raycaster.intersectObjects(hitObjects, false)
-      .find(hit => showOccasion || hitLookup.get(hit.object) !== "occasion")
-    return intersection ? hitLookup.get(intersection.object) : undefined
+    if (currentView === "living" && !viewMotion) {
+      const intersection = raycaster.intersectObjects(hitObjects, false)
+        .find(hit => showOccasion || hitLookup.get(hit.object) !== "occasion")
+      if (intersection) return hitLookup.get(intersection.object)
+    }
+    // Any other room can be entered by clicking it; upstairs only while it is in place.
+    const upperShown = upperLift < .5
+    const rooms = [...roomLookup].filter(([, id]) => id !== currentView &&
+      (upperShown || ROOMS.find(item => item.id === id).storey === 0)).map(([object]) => object)
+    const roomHit = raycaster.intersectObjects(rooms, false)[0]
+    return roomHit ? `room:${roomLookup.get(roomHit.object)}` : undefined
+  }
+
+  function showHover(id, event) {
+    const label = !id ? "" : id.startsWith("room:") ? viewNames[id.slice(5)] : elements[id]?.title || ""
+    hoverLabel.hidden = !label
+    if (!label) return
+    hoverLabel.textContent = label
+    const bounds = roomView.getBoundingClientRect()
+    hoverLabel.style.transform = `translate(${event.clientX - bounds.left + 14}px, ${event.clientY - bounds.top + 16}px)`
   }
 
   function clearDrag() {
@@ -785,6 +1031,8 @@ export function startCottage() {
 
   canvas.addEventListener("pointerdown", event => {
     if (event.button !== 0 || drag || closeup) return
+    closeMenus()
+    hoverLabel.hidden = true
     drag = { id: event.pointerId, startX: event.clientX, startY: event.clientY,
       azimuth: targetAzimuth, elevation: targetElevation, moved: false }
     canvas.setPointerCapture(event.pointerId)
@@ -795,6 +1043,7 @@ export function startCottage() {
       const id = hitAt(event)
       if (id) canvas.dataset.target = id
       else delete canvas.dataset.target
+      showHover(id, event)
       return
     }
     if (event.pointerId !== drag.id) return
@@ -813,14 +1062,31 @@ export function startCottage() {
     if (id) activate(id)
   })
   canvas.addEventListener("lostpointercapture", clearDrag)
-  canvas.addEventListener("pointerleave", () => { delete canvas.dataset.target })
+  canvas.addEventListener("pointerleave", () => {
+    delete canvas.dataset.target
+    hoverLabel.hidden = true
+  })
   elements.lamp.onclick = () => toggle("lamp")
   elements.curtains.onclick = () => toggle("curtains")
-  for (const [id] of keepsakeButtons) elements[id].onclick = () => activate(id)
+  for (const [id] of keepsakeButtons) elements[id].onclick = () => {
+    returnToMenu = !itemMenu.hidden
+    activate(id)
+  }
   elements.seat.onclick = () => activate("seat")
   elements.left.onclick = () => changeView(targetAzimuth - .24, targetElevation)
   elements.right.onclick = () => changeView(targetAzimuth + .24, targetElevation)
   elements.reset.onclick = () => changeView(START_ANGLE, START_HEIGHT)
+  for (const [menu, button] of menus) button.onclick = () => toggleMenu(menu)
+  for (const button of roomMenu.querySelectorAll("button")) button.onclick = () => goTo(button.dataset.view)
+  for (const [period, button] of periodButtons) button.onclick = () => {
+    preferences.period = period
+    savePreferences()
+  }
+  for (const [level, button] of qualityButtons) button.onclick = () => {
+    preferences.quality = level
+    savePreferences()
+    applyQuality()
+  }
   const observer = new ResizeObserver(([entry]) => {
     viewportWidth = entry.contentRect.width
     viewportHeight = entry.contentRect.height
@@ -863,5 +1129,7 @@ export function startCottage() {
   })
   applyQuality()
   syncControls()
+  goTo("living")
+  viewMotion = null
   controls.hidden = false
 }

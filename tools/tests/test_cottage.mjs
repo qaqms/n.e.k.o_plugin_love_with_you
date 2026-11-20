@@ -59,12 +59,21 @@ function verifyPixels(pixels, minimumCoverage) {
     const index = (y * 100 + x) * 4
     const rgb = pixels.slice(index, index + 3)
     if (rgb.some((value, channel) => Math.abs(value - background[channel]) > 18)) {
-      assert.ok(x > 0 && x < 99, `model is clipped at ${x},${y}`)
+      // The neighbouring kitchen may run off the right edge; the room's own left wall must stay in frame.
+      assert.ok(x > 0, `model is clipped at ${x},${y}`)
       colored++
     }
     swatches.add(rgb.map(value => Math.floor(value / 12)).join(","))
   }
   assert.ok(colored > minimumCoverage && swatches.size > 55, `scene was blank or too small (${colored} px)`)
+}
+
+// Keepsakes are reached through the item list in the toolbar.
+async function openItem(frame, name, action = "click") {
+  // Wait for the toolbar: after a closeup the list may reopen by itself once the camera is back.
+  await frame.locator("#items").waitFor()
+  if (await frame.locator("#item-menu").isHidden()) await frame.locator("#items")[action]()
+  await frame.getByRole("button", { name, exact: true })[action]()
 }
 
 function changedPixels(a, b) {
@@ -126,7 +135,7 @@ test("the cottage calendar flips between events and opens an anniversary noteboo
   const { page, frame, errors } = await roomPage({ width: 390, height: 700 }, true, true)
   try {
     const overview = await capture(page, frame)
-    await frame.getByRole("button", { name: "小屋日历" }).tap()
+    await openItem(frame, "小屋日历", "tap")
     await frame.locator("#calendar-name").getByText("我们的小屋纪念日").waitFor()
     const closeup = await capture(page, frame, "cottage-calendar-mobile.png")
     assert.ok(changedPixels(overview, closeup) > 700)
@@ -142,7 +151,7 @@ test("the cottage calendar flips between events and opens an anniversary noteboo
     await frame.getByRole("button", { name: "确认留存" }).tap()
     await frame.locator("#notebook-status").getByText("共同经历已更新").waitFor()
     await frame.locator("#cottage-back").tap()
-    await frame.getByRole("button", { name: "相框" }).tap()
+    await openItem(frame, "相框", "tap")
     await frame.locator("#picture-entry-title").getByText("我们的小屋纪念日").waitFor()
     assert.deepEqual(errors, [])
   } finally { await page.close() }
@@ -152,7 +161,7 @@ test("the projection screen rolls down and clears its resume link when tracking 
   const { page, frame, errors } = await roomPage({ width: 390, height: 700 }, true, true)
   try {
     const before = await capture(page, frame)
-    await frame.getByRole("button", { name: "投影幕" }).tap()
+    await openItem(frame, "投影幕", "tap")
     await frame.locator("#projector-item").getByText("山间旅行纪录片").waitFor()
     assert.match(await frame.locator("#projector-progress").innerText(), /12:42/)
     assert.match(await frame.getByRole("link", { name: "继续看" }).getAttribute("href"), /\/watch_together\?/)
@@ -165,7 +174,7 @@ test("the projection screen rolls down and clears its resume link when tracking 
     await frame.locator("#projector-item").getByText("暂无观看进度").waitFor()
     assert.equal(await frame.getByRole("link", { name: "继续看" }).count(), 0)
     await frame.locator("#cottage-back").press("Escape")
-    await frame.getByRole("button", { name: "投影幕" }).waitFor()
+    await frame.locator("#items").waitFor()
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
@@ -173,7 +182,7 @@ test("the projection screen rolls down and clears its resume link when tracking 
 test("a notebook entry can be drafted and kept in the frame after retrying a lost receipt", async () => {
   const { page, frame, errors } = await roomPage({ width: 1100, height: 760 }, false, true, "no-preference")
   try {
-    await frame.getByRole("button", { name: "茶几便签本" }).click()
+    await openItem(frame, "茶几便签本", "click")
     const title = frame.getByRole("textbox", { name: "便签标题" })
     await title.fill("第一张小屋便签")
     await frame.getByRole("textbox", { name: "便签内容" }).fill("一起在窗边看日落。")
@@ -192,7 +201,7 @@ test("a notebook entry can be drafted and kept in the frame after retrying a los
     assert.equal(state.experiences.characters.YUI.note, null)
     assert.equal(state.experiences.characters.YUI.memories.filter(item => item.title === "第一张小屋便签").length, 1)
     await frame.locator("#cottage-back").click()
-    await frame.getByRole("button", { name: "相框" }).click()
+    await openItem(frame, "相框", "click")
     await frame.locator("#picture-entry-title").getByText("第一张小屋便签").waitFor()
     assert.deepEqual(errors, [])
   } finally { await page.close() }
@@ -201,7 +210,7 @@ test("a notebook entry can be drafted and kept in the frame after retrying a los
 test("mobile gift shelf models are placed, persisted and removable", async () => {
   const { page, frame, nav, errors } = await roomPage({ width: 390, height: 760 }, true, true)
   try {
-    await frame.getByRole("button", { name: "礼物陈列架" }).tap()
+    await openItem(frame, "礼物陈列架", "tap")
     const picker = frame.getByRole("combobox", { name: "选择已送出的礼物" })
     const before = await capture(page, frame)
     await picker.selectOption("demo-plush")
@@ -212,7 +221,7 @@ test("mobile gift shelf models are placed, persisted and removable", async () =>
     await picker.selectOption("demo-flowers")
     await nav.getByRole("button", { name: "关系概览" }).click()
     await nav.getByRole("button", { name: "我们的小屋" }).click()
-    await frame.getByRole("button", { name: "礼物陈列架" }).tap()
+    await openItem(frame, "礼物陈列架", "tap")
     await frame.getByRole("button", { name: "展示位 2 · 当季花束" }).tap()
     assert.equal(await picker.inputValue(), "demo-flowers")
     await frame.getByRole("button", { name: "移下陈列架" }).tap()
@@ -224,7 +233,7 @@ test("mobile gift shelf models are placed, persisted and removable", async () =>
 test("a new mobile notebook page can be kept directly for a different character", async () => {
   const { page, frame, errors } = await roomPage({ width: 390, height: 700 }, true, true)
   try {
-    await frame.getByRole("button", { name: "茶几便签本" }).tap()
+    await openItem(frame, "茶几便签本", "tap")
     await frame.locator("#notebook-role").selectOption("茉子")
     const title = frame.getByRole("textbox", { name: "便签标题" })
     const text = frame.getByRole("textbox", { name: "便签内容" })
@@ -238,7 +247,7 @@ test("a new mobile notebook page can be kept directly for a different character"
     assert.equal(result["茉子"].memories[0].title, "窗边的黄昏")
     assert.ok(!result.YUI.memories.some(item => item.title === "窗边的黄昏"))
     await frame.locator("#cottage-back").tap()
-    await frame.getByRole("button", { name: "相框" }).tap()
+    await openItem(frame, "相框", "tap")
     await frame.locator("#picture-entry-title").getByText("窗边的黄昏").waitFor()
     assert.deepEqual(errors, [])
   } finally { await page.close() }
@@ -460,7 +469,8 @@ test("the record player approaches first, reveals sleeves, and returns to the sa
     assert.equal(await station.getByText("雨后爵士").count(), 0)
     assert.equal(await station.getByRole("button", { name: "打开原记录" }).count(), 0)
     await page.keyboard.press("Escape")
-    await frame.locator("#record:focus").waitFor()
+    // Opened from the scene, so focus lands on the item list button.
+    await frame.locator("#items:focus").waitFor()
     assert.ok(changedPixels(initial, await capture(page, frame)) < 120)
     assert.equal(await canvas.getAttribute("data-test-mounted"), "yes")
     assert.equal(await page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "experience_action").length), 0)
@@ -472,7 +482,7 @@ test("record sleeves stay below the turntable on touch and clear when memories a
   const { page, frame, errors } = await roomPage({ width: 320, height: 760 }, true, true)
   try {
     const initial = await capture(page, frame)
-    await frame.getByRole("button", { name: "唱机" }).tap()
+    await openItem(frame, "唱机", "tap")
     const station = frame.getByRole("region", { name: "唱片收藏" })
     await station.locator(".record-sleeve").first().tap()
     await station.getByText("听到第三首").waitFor()
@@ -492,7 +502,7 @@ test("record sleeves stay below the turntable on touch and clear when memories a
     assert.equal(await station.locator(".record-sleeve").count(), 0)
     assert.equal(await station.getByText("听到第三首").count(), 0)
     await frame.getByRole("button", { name: "回到小屋" }).tap()
-    await frame.getByRole("button", { name: "唱机" }).waitFor()
+    await frame.locator("#items").waitFor()
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
@@ -529,10 +539,10 @@ test("the wall frame approaches, flips one memory at a time, and restores the ro
     assert.ok(changedPixels(firstCaption, await capture(page, frame, undefined, "#picture-caption")) > 100)
     assert.ok(await pages.getByRole("button", { name: "下一段回忆" }).isDisabled())
     await page.keyboard.press("Escape")
-    await frame.locator("#picture:focus").waitFor()
+    await frame.locator("#items:focus").waitFor()
     assert.ok(changedPixels(initial, await capture(page, frame)) < 120)
     assert.equal(await canvas.getAttribute("data-test-mounted"), "yes")
-    await frame.getByRole("button", { name: "相框" }).click()
+    await openItem(frame, "相框", "click")
     await pages.getByRole("button", { name: "打开原记录" }).click()
     await page.locator('[data-experience-id="demo-film"]').getByRole("heading", { name: "山间旅行纪录片" }).waitFor()
     assert.deepEqual(errors, [])
@@ -542,7 +552,7 @@ test("the wall frame approaches, flips one memory at a time, and restores the ro
 test("the picture frame fits touch screens, switches roles, and clears disabled memories", async () => {
   const { page, frame, errors } = await roomPage({ width: 320, height: 760 }, true, true)
   try {
-    await frame.getByRole("button", { name: "相框" }).tap()
+    await openItem(frame, "相框", "tap")
     const pages = frame.getByRole("region", { name: "相框" })
     await pages.getByText("下雨的傍晚").waitFor()
     const size = await pages.locator("#picture-caption").evaluate(node => ({ width: node.clientWidth, scroll: node.scrollWidth }))
@@ -559,7 +569,7 @@ test("the picture frame fits touch screens, switches roles, and clears disabled 
     await pages.getByText("下雨的傍晚").waitFor()
     await frame.getByRole("button", { name: "回到小屋" }).tap()
     await frame.locator("#picture:focus").waitFor()
-    await frame.getByRole("button", { name: "相框" }).tap()
+    await openItem(frame, "相框", "tap")
     await page.evaluate(() => window.__uiTest.update({
       experiences: { ...window.__uiTest.snapshot().experiences, enabled: false },
     }))
@@ -635,6 +645,42 @@ test("the same picture continues moving as the caption appears and reverses from
     await page.clock.runFor(600)
     assert.equal((await overlay()).view, "room")
     assert.ok(changedPixels(initial, await pixels()) < 120)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("the room menu moves through the house, items open from any room, and the quality choice is kept", async () => {
+  const { page, frame, nav, errors } = await roomPage({ width: 1200, height: 800 }, false, true)
+  try {
+    const room = frame.locator("#room")
+    assert.equal(await room.getAttribute("data-room"), "living")
+    assert.equal(await frame.locator("#room-name").innerText(), "客厅")
+    const living = await capture(page, frame)
+    for (const [name, id] of [["厨房", "kitchen"], ["阁楼书房", "study"], ["总览", "overview"]]) {
+      await frame.locator("#rooms").click()
+      await frame.locator("#room-menu").getByRole("button", { name, exact: true }).click()
+      await frame.locator(`#room[data-room="${id}"]`).waitFor()
+      assert.equal(await frame.locator("#room-name").innerText(), name)
+      assert.ok(await frame.locator("#room-menu").isHidden(), "choosing a room closes the menu")
+    }
+    const overview = await capture(page, frame, "cottage-overview.png")
+    verifyPixels(overview, 1800)
+    assert.ok(changedPixels(living, overview) > 1500, "the whole house should be framed")
+    // The record player lives in the living room: choosing it elsewhere walks back there first.
+    await openItem(frame, "唱机")
+    await frame.getByRole("region", { name: "唱片收藏" }).getByRole("button", { name: "雨后爵士" }).waitFor()
+    assert.equal(await room.getAttribute("data-room"), "living")
+    await page.keyboard.press("Escape")
+    await frame.locator("#record:focus").waitFor()
+    await page.keyboard.press("Escape")
+    assert.ok(await frame.locator("#item-menu").isHidden(), "Escape closes the reopened list")
+    await frame.locator("#mood").click()
+    await frame.locator("#mood-menu").getByRole("button", { name: "中", exact: true }).click()
+    assert.equal(await room.getAttribute("data-quality"), "medium")
+    await nav.getByRole("button", { name: "关系概览" }).click()
+    await nav.getByRole("button", { name: "我们的小屋" }).click()
+    await frame.locator('#room[data-quality="medium"]').waitFor()
+    assert.equal(await frame.locator("#quality-medium").getAttribute("aria-pressed"), "true")
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })

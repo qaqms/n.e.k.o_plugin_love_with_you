@@ -1,14 +1,14 @@
 # 模块职责与玩法扩展入口
 
-结构覆盖至版本 0.9.25（2026-11-20）。文中的源码路径均相对插件根目录。[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
+结构覆盖至版本 0.9.26（2026-11-21）。文中的源码路径均相对插件根目录。[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
 
-「我们的小屋」通过 `ui/cottage.tsx` 按需加载 `static/cottage.html`。房间几何、材质和灯光在 `static/cottage-scene.mjs`，透视镜头、交互、本地偏好、分时段光照和画质档位在 `static/cottage.mjs`；后期处理与环境光照来自打包的 `static/engine/three-post.mjs`。`static/cottage-record.mjs` 布置唱机引线和封套，`static/cottage-picture.mjs` 将便签与一起看过的记录逐页放在木框内。面板接收相框选中的记录 ID，并通过 `ExperienceDestination` 打开原记录。
+「我们的小屋」通过 `ui/cottage.tsx` 按需加载 `static/cottage.html`。客厅几何、材质和灯光在 `static/cottage-scene.mjs`，客厅以外的整栋房子（厨房、门廊小院、二楼、楼梯、屋顶）由 `static/cottage-house.mjs` 按 `static/cottage-layout.mjs` 的布局数据生成；透视镜头、房间切换（总览与各房间视角，一楼视角时二楼整体抬走、挡在镜头前的侧墙淡出）、工具栏菜单（房间、光线与时段及画质、物品清单）、交互、本地偏好、分时段光照和画质档位在 `static/cottage.mjs`；物品清单按布局槽位标注所在房间，在其他房间选择客厅物品会先回到客厅再打开；后期处理与环境光照来自打包的 `static/engine/three-post.mjs`。`static/cottage-record.mjs` 布置唱机引线和封套，`static/cottage-picture.mjs` 将便签与一起看过的记录逐页放在木框内。面板接收相框选中的记录 ID，并通过 `ExperienceDestination` 打开原记录。
 
 `static/cottage-living.mjs` 管理便签编辑、礼物选位及沙发控制。便签通过面板的 `experience_action` 使用角色修订号及请求回执，陈列架按已送礼物的记录 ID 恢复浏览器本地摆放。
 
 `static/cottage-company.mjs` 管理双人杯、日历和投影幕的场景界面。面板读取现有纪念日与观看追踪，并将 `invite_cottage_chat` 交给宿主消息通道。宿主当前角色在提交时重新校验。
 
-小屋改版的双层布局以数据形式放在 `static/cottage-layout.mjs`（房间、墙体开口、楼梯、家具占位和功能槽位），运行时暂未引用；`tools/tests/test_cottage_layout.mjs` 校验槽位不穿墙、不挡门和楼梯、现有功能各占一个槽位。开发用灰盒查看器 `tools/preview/cottage-blockout.*` 由预览服务的 `/blockout` 提供，不进入发布包。
+小屋改版的双层布局以数据形式放在 `static/cottage-layout.mjs`（房间、墙体开口、楼梯、家具占位和功能槽位），运行时用于生成房屋、房间视角和物品分组；`tools/tests/test_cottage_layout.mjs` 校验槽位不穿墙、不挡门和楼梯、现有功能各占一个槽位。开发用灰盒查看器 `tools/preview/cottage-blockout.*` 由预览服务的 `/blockout` 提供，不进入发布包。
 
 发布工具 `tools/build/audit_release.py` 扫描源码、历史与导入包并隐去疑似凭据值；`verify_adventure_package.py` 验证运行资源、文件范围、哈希及合成旧存档迁移；`precheck_release.py` 在临时源码副本调用官方 SDK 预检。对应路径与凭据泄漏回归见 `tests/test_release_hygiene.py`，检查结果及素材许可待办见[发布审计](audits/release-readiness-2026-11-16.md)。浏览器测试拥有自己的临时存档目录，并在正常结束及启动失败时清理。
 

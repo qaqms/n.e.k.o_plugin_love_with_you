@@ -4,30 +4,45 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>我们的小屋</title>
-  <link rel="stylesheet" href="./cottage.css?v=0.9.25">
+  <link rel="stylesheet" href="./cottage.css?v=0.9.26">
 </head>
 <body>
   <main id="room" aria-labelledby="title">
     <div id="stage"></div>
-    <header><h1 id="title">我们的小屋</h1></header>
+    <header><h1 id="title">我们的小屋</h1><p id="room-name"></p></header>
+    <div id="hover-label" aria-hidden="true" hidden></div>
     <div id="controls" role="group" hidden>
+      <div class="control-group">
+        <button type="button" id="rooms" aria-expanded="false" aria-controls="room-menu"></button>
+        <button type="button" id="left"></button>
+        <button type="button" id="reset"></button>
+        <button type="button" id="right"></button>
+      </div>
       <div class="control-group">
         <button type="button" id="lamp" aria-pressed="false"></button>
         <button type="button" id="curtains" aria-pressed="true"></button>
+        <button type="button" id="mood" aria-expanded="false" aria-controls="mood-menu"></button>
       </div>
-      <div class="control-group" id="keepsakes" hidden>
+      <div class="control-group">
+        <button type="button" id="seat"></button>
+        <button type="button" id="items" aria-expanded="false" aria-controls="item-menu"></button>
+      </div>
+    </div>
+    <div id="room-menu" class="cottage-menu" role="group" hidden></div>
+    <div id="mood-menu" class="cottage-menu" role="group" hidden>
+      <p class="menu-title" id="mood-period-title"></p>
+      <div class="menu-row" id="mood-periods" role="group"></div>
+      <p class="menu-title" id="mood-quality-title"></p>
+      <div class="menu-row" id="mood-qualities" role="group"></div>
+    </div>
+    <div id="item-menu" class="cottage-menu" role="group" hidden>
+      <div class="menu-list" id="keepsakes">
         <button type="button" id="record"></button>
         <button type="button" id="picture"></button>
         <button type="button" id="notebook"></button>
         <button type="button" id="shelf"></button>
         <button type="button" id="calendar"></button>
         <button type="button" id="projector"></button>
-      </div>
-      <div class="control-group">
-        <button type="button" id="left"></button>
-        <button type="button" id="reset"></button>
-        <button type="button" id="right"></button>
-        <button type="button" id="seat"></button>
       </div>
     </div>
     <button type="button" id="cottage-back" hidden></button>
@@ -141,7 +156,7 @@
     <p id="fallback" role="status" hidden></p>
   </main>
   <script type="module">
-    import("./cottage.mjs?v=0.9.25").then(module => module.startCottage()).catch(() => {
+    import("./cottage.mjs?v=0.9.26").then(module => module.startCottage()).catch(() => {
       const fallback = document.getElementById("fallback")
       fallback.textContent = /^(en|pt|es|ru|ko|ja)/i.test(new URLSearchParams(location.search).get("locale") || "")
         ? "The 3D room could not load." : "暂时无法加载 3D 小屋。"

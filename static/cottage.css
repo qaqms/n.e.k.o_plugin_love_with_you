@@ -19,6 +19,59 @@ canvas[data-dragging] { cursor: grabbing; }
 
 header { position: absolute; inset: 0 0 auto; padding: 24px 28px; pointer-events: none; }
 h1 { margin: 0; font-size: 23px; font-weight: 650; line-height: 1.25; overflow-wrap: anywhere; }
+#room-name { margin: 3px 0 0; color: #5b6d65; font-size: 14px; }
+#room[data-period="night"] #room-name { color: #b9c7c2; }
+#hover-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 3px 9px;
+  border: 1px solid #cdbfa6;
+  border-radius: 999px;
+  background: #fbf6ec;
+  color: #4b3a2c;
+  font-size: 13px;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px #3b2a1a1f;
+  pointer-events: none;
+}
+/* Menus share the paper-card look the closeups will adopt in the next step. */
+.cottage-menu {
+  position: absolute;
+  left: 50%;
+  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 56px);
+  width: min(360px, calc(100% - 24px));
+  max-height: calc(100% - 140px);
+  overflow: auto;
+  transform: translateX(-50%);
+  padding: 10px 12px 12px;
+  border: 1px solid #cdbfa6;
+  border-radius: 12px;
+  background: #fbf6ec;
+  box-shadow: 0 10px 28px #3b2a1a26;
+  animation: menu-arrive .18s ease-out;
+}
+@keyframes menu-arrive { from { opacity: 0; transform: translate(-50%, 6px); } }
+@media (prefers-reduced-motion: reduce) { .cottage-menu { animation: none; } }
+.menu-title { margin: 6px 2px 6px; color: #7a6650; font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.menu-title:first-child { margin-top: 0; }
+.cottage-menu button {
+  width: auto;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid #e2d6c1;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #3f4f48;
+  font: inherit;
+  font-size: 14px;
+}
+.cottage-menu button:hover { background: #f3ead9; }
+.cottage-menu button[aria-pressed="true"] { border-color: #b79970; background: #f1e1c6; color: #4b3a2c; }
+#room-menu, .menu-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.menu-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.menu-list button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; text-align: left; }
+.menu-list .game-icon { flex: none; width: 17px; height: 17px; }
 #controls {
   position: absolute;
   inset: auto 0 max(18px, env(safe-area-inset-bottom)) 0;

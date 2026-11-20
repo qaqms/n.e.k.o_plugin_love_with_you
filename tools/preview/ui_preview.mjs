@@ -168,9 +168,24 @@ const previewApi = {
       const experience = state.experiences;
       const values = args.values;
       let result = {operation:args.operation,id:values.id || args.request_id};
-      if (args.operation === "configure") {
+      if (["configure", "configure_watch_tracking", "configure_activity_sensing"].includes(args.operation)) {
         if (args.revision !== experience.revision) throw new Error("experience_stale");
-        experience.enabled = values.enabled;
+        if (args.operation === "configure") {
+          experience.enabled = values.enabled;
+          if (!values.enabled) {
+            experience.watch_tracking = false;
+            experience.activity_sensing = false;
+            delete experience.sensed_activities;
+          }
+        } else if (args.operation === "configure_activity_sensing") {
+          if (values.enabled && !experience.enabled) throw new Error("experience_disabled");
+          experience.activity_sensing = values.enabled;
+          if (!values.enabled) delete experience.sensed_activities;
+        } else {
+          if (values.enabled && !experience.enabled) throw new Error("experience_disabled");
+          experience.watch_tracking = values.enabled;
+          experience.watches = values.enabled ? {} : undefined;
+        }
         experience.revision += 1;
         result.revision = experience.revision;
       } else {
@@ -200,6 +215,12 @@ const previewApi = {
           record.activity = null;
         }
         if (args.operation === "cancel_activity") record.activity = null;
+        if (args.operation === "save_tracked_watch") {
+          if (!experience.watch_tracking || values.tracking_revision !== experience.revision) throw new Error("experience_stale");
+          if (record.memories.some(item => item.watch_id === values.watch_id)) throw new Error("experience_duplicate");
+          record.memories.unshift({id:result.id,kind:"screen",watch_id:values.watch_id,title:values.title,
+            progress:values.progress,text:values.text,status:"saved",recall:true,created_at:Date.now()/1000});
+        }
         if (args.operation === "edit_memory") {
           Object.assign(memory,{title:values.title,text:values.text});
           if (memory.kind) memory.progress = values.progress;

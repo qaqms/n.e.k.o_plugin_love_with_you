@@ -1,7 +1,9 @@
 import { Button } from "@neko/plugin-ui"
 import type { PluginSurfaceProps } from "@neko/plugin-ui"
 import { Icon } from "./icons"
+import { WatchLink, trackedWatch, watchProgress } from "./watch-tracking"
 import type { ExperienceDestination, ExperienceState } from "./experiences"
+import { sensedActivity } from "./experiences"
 
 export type AdventureResume = {
   character: string; area?: "edge" | "ruin" | "deep"; segment?: number; total?: number
@@ -21,7 +23,7 @@ export const TOGETHER_STYLE = `
 .lwy-together .lwy-btns { margin-top:12px; }
 @media(max-width:700px) {
   .lwy-together-row { grid-template-columns:20px minmax(0,1fr);gap:8px; }
-  .lwy-together-row > button { grid-column:2;justify-self:start; }
+  .lwy-together-row > :is(button, a) { grid-column:2;justify-self:start; }
 }
 `
 
@@ -36,6 +38,10 @@ export function Together(props: {
   const journey = character && props.adventureResume?.character === character ? props.adventureResume : null
   const activity = record?.activity
   const lastActivity = record?.memories.find(item => item.kind)
+  const watch = trackedWatch(data, character)
+  const sensed = sensedActivity(data, character)
+  const latestWatch = watch && (!lastActivity || lastActivity.watch_id === watch.id || watch.watched_at > lastActivity.created_at)
+    ? watch : undefined
   const followup = record?.followups.filter(item => item.status === "pending" || item.status === "active")
     .sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending") ||
       Number(Boolean(b.pending_outcome)) - Number(Boolean(a.pending_outcome)) || a.due.localeCompare(b.due))[0]
@@ -56,7 +62,8 @@ export function Together(props: {
     </div>
     {data && character ? <div className="lwy-card-head">
       {data.enabled ? <p className="lwy-together-person">{t("overview.participant", { name: character })}</p> : null}
-      <Button disabled={props.busy} onClick={() => openActivity(data.enabled && !activity && (record?.memories.length || 0) < 30 ? "activity" : undefined)}>
+      <Button disabled={props.busy} onClick={() => openActivity(data.enabled && !data.activity_sensing && !watch && !activity &&
+        (record?.memories.length || 0) < 30 ? "activity" : undefined)}>
         <Icon name="Heart" />{t("xp.activities")}
       </Button>
     </div> : null}
@@ -75,7 +82,23 @@ export function Together(props: {
     {!data ? <p className="lwy-note">{t("xp.notReady")}</p>
       : !data.enabled ? <p className="lwy-note">{t("xp.off")}</p>
       : !character ? <p className="lwy-note">{t("xp.noCharacter")}</p> : <>
-        {activity || lastActivity ? <div className="lwy-together-row">
+        {sensed ? <div className="lwy-together-row" role="status">
+          <Icon name={sensed.kind === "game" ? "Gamepad2" : "History"} />
+          <div className="lwy-together-copy">
+            <p>{t(`xp.sensedSource.${sensed.source}`)}</p>
+            <strong>{t(`xp.sensed.${sensed.kind}`)}</strong>
+          </div>
+        </div> : null}
+        {latestWatch ? <div className="lwy-together-row">
+          <Icon name="History" />
+          <div className="lwy-together-copy">
+            <p>{t("xp.lastActivity")}</p>
+            <strong>{latestWatch.title || t("xp.watchUntitled")}</strong>
+            <p className="lwy-together-preview">{watchProgress(latestWatch, t)}</p>
+          </div>
+          <WatchLink watch={latestWatch} t={t} />
+        </div> : null}
+        {activity || (lastActivity && !latestWatch) ? <div className="lwy-together-row">
           <Icon name="History" />
           <div className="lwy-together-copy">
             <p>{t(activity ? "xp.activeActivity" : "xp.lastActivity")}</p>
@@ -121,7 +144,7 @@ export function Together(props: {
             <Icon name="BookOpen" />{t("overview.viewMemory")}
           </Button>
         </div> : null}
-        {!note && !followup && !memory && !activity && !lastActivity ? <div className="lwy-btns">
+        {!note && !followup && !memory && !activity && !lastActivity && !latestWatch ? <div className="lwy-btns">
           <Button tone="primary" disabled={props.busy} onClick={() => open("draft")}><Icon name="Plus" />{t("xp.start")}</Button>
           <Button tone="default" disabled={props.busy} onClick={() => open("followup")}><Icon name="CalendarDays" />{t("xp.add")}</Button>
         </div> : null}

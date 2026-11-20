@@ -19,14 +19,19 @@ TEXT_LIMIT = 600
 SUMMARY_LIMIT = 160
 TITLE_LIMIT = 40
 ACTIVITY_KINDS = ("music", "screen")
+SENSED_KINDS = ("music", "video", "game", "screen", "none")
+SENSING_SOURCES = ("screen", "playback")
+SENSING_TTL = 120
+CONFIG_OPERATIONS = {"configure", "configure_watch_tracking", "configure_activity_sensing"}
 RECEIPT_LIMIT = 64
 MAX_BYTES = 768 * 1024
 _IDENTIFIER = re.compile(r"^[a-zA-Z0-9_-]{8,80}$")
+_WATCH_ID = re.compile(r"[a-f0-9]{32}")
 _OPERATIONS = {
     "start_note", "draft_note", "save_note", "cancel_note", "edit_memory",
     "delete_memory", "toggle_memory", "propose_followup", "confirm_followup",
     "edit_followup", "propose_outcome", "save_outcome", "close_followup",
-    "delete_followup", "invite", "start_activity", "save_activity", "cancel_activity",
+    "delete_followup", "invite", "start_activity", "save_activity", "cancel_activity", "save_tracked_watch",
 }
 MODEL_OPERATIONS = {"draft_note", "propose_followup", "propose_outcome"}
 
@@ -43,6 +48,10 @@ def new_record() -> dict[str, Any]:
     return {"revision": 0, "epoch": 0, "note": None, "activity": None, "memories": [], "followups": []}
 
 
+def _valid_cutoff(value: Any) -> bool:
+    return type(value) in (int, float) and 0 <= value <= 253402300799
+
+
 def normalize(raw: Any) -> dict[str, Any]:
     if raw is None or raw == {}:
         return new_state()
@@ -51,6 +60,8 @@ def normalize(raw: Any) -> dict[str, Any]:
         or type(raw.get("enabled")) is not bool or type(raw.get("revision")) is not int
         or raw["revision"] < 0 or not isinstance(raw.get("characters"), dict)
         or len(raw["characters"]) > 64 or not isinstance(raw.get("receipts"), list)
+        or not _valid_cutoff(raw.get("watch_since", 0))
+        or type(raw.get("activity_sensing", False)) is not bool
     ):
         raise ExperienceError("experience_recovery_required")
     state = copy.deepcopy(raw)
@@ -59,6 +70,7 @@ def normalize(raw: Any) -> dict[str, Any]:
             raise ExperienceError("experience_recovery_required")
         if (
             any(type(record.get(key)) is not int or record[key] < 0 for key in ("revision", "epoch"))
+            or not _valid_cutoff(record.get("watch_after", 0))
             or not isinstance(record.get("memories"), list) or len(record["memories"]) > NOTE_LIMIT
             or not isinstance(record.get("followups"), list) or len(record["followups"]) > FOLLOWUP_LIMIT
             or (record.get("note") is not None and not isinstance(record["note"], dict))
@@ -103,6 +115,11 @@ def normalize(raw: Any) -> dict[str, Any]:
                 item["kind"] not in ACTIVITY_KINDS
                 or not isinstance(item.get("progress"), str) or len(item["progress"]) > SUMMARY_LIMIT
                 or not item["title"].strip()
+            ):
+                raise ExperienceError("experience_recovery_required")
+            if "watch_id" in item and (
+                item.get("kind") != "screen" or not isinstance(item["watch_id"], str)
+                or not _WATCH_ID.fullmatch(item["watch_id"])
             ):
                 raise ExperienceError("experience_recovery_required")
         activity = record.setdefault("activity", None)
@@ -174,7 +191,7 @@ def apply(
 ) -> dict[str, Any]:
     """Caller provides a transaction: no external side effects occur here."""
     if (
-        not isinstance(operation, str) or operation not in _OPERATIONS | {"configure"}
+        not isinstance(operation, str) or operation not in _OPERATIONS | CONFIG_OPERATIONS
         or not isinstance(request_id, str) or not _IDENTIFIER.fullmatch(request_id)
         or not isinstance(values, dict) or type(revision) is not int or revision < 0
     ):
@@ -194,12 +211,30 @@ def apply(
             if receipt.get("epoch") != (record["epoch"] if character else 0):
                 raise ExperienceError("experience_stale")
             return dict(receipt["result"], replay=True)
-    if operation == "configure":
+    now = time.time() if now is None else now
+    if operation in CONFIG_OPERATIONS:
         if character or type(values.get("enabled")) is not bool:
             raise ExperienceError("experience_invalid")
         if revision != state["revision"]:
             raise ExperienceError("experience_stale")
-        state["enabled"] = values["enabled"]
+        if operation == "configure":
+            state["enabled"] = values["enabled"]
+            if not state["enabled"]:
+                state.pop("watch_since", None)
+                state.pop("activity_sensing", None)
+        elif operation == "configure_activity_sensing":
+            if values["enabled"] and not state["enabled"]:
+                raise ExperienceError("experience_disabled")
+            if values["enabled"]:
+                state["activity_sensing"] = True
+            else:
+                state.pop("activity_sensing", None)
+        elif values["enabled"]:
+            if not state["enabled"]:
+                raise ExperienceError("experience_disabled")
+            state.setdefault("watch_since", now)
+        else:
+            state.pop("watch_since", None)
         state["revision"] += 1
         result = {"operation": operation, "revision": state["revision"]}
     else:
@@ -209,8 +244,13 @@ def apply(
             raise ExperienceError("experience_invalid")
         if revision != record["revision"]:
             raise ExperienceError("experience_stale")
+        if operation == "save_tracked_watch" and (
+            not state.get("watch_since") or type(values.get("tracking_revision")) is not int
+            or values["tracking_revision"] != state["revision"]
+        ):
+            raise ExperienceError("experience_stale")
         record = record_for(state, character, create=True)
-        result = _change(record, operation, values, today, time.time() if now is None else now)
+        result = _change(record, operation, values, today, now)
         record["revision"] += 1
         result.update(operation=operation, revision=record["revision"])
     state["receipts"].append({
@@ -227,6 +267,23 @@ def _change(record: dict[str, Any], operation: str, values: dict[str, Any], toda
     note = record["note"]
     item_id = values.get("id")
     activity = record.get("activity")
+    if operation == "save_tracked_watch":
+        watch_id = values.get("watch_id")
+        if not isinstance(watch_id, str) or not _WATCH_ID.fullmatch(watch_id):
+            raise ExperienceError("experience_invalid")
+        if any(item.get("watch_id") == watch_id for item in record["memories"]):
+            raise ExperienceError("experience_duplicate")
+        if len(record["memories"]) >= NOTE_LIMIT:
+            raise ExperienceError("experience_limit")
+        memory = {
+            "id": uuid.uuid4().hex, "kind": "screen", "watch_id": watch_id,
+            "title": _text(values.get("title"), TITLE_LIMIT),
+            "progress": _text(values.get("progress", ""), SUMMARY_LIMIT, required=False),
+            "text": _text(values.get("text", ""), TEXT_LIMIT, required=False),
+            "status": "saved", "created_at": now, "recall": True,
+        }
+        record["memories"].insert(0, memory)
+        return {"id": memory["id"]}
     if operation == "start_activity":
         if activity:
             raise ExperienceError("experience_stale")
@@ -347,8 +404,17 @@ def _change(record: dict[str, Any], operation: str, values: dict[str, Any], toda
     return {"id": item_id}
 
 
-def restart(state: dict[str, Any], characters: list[str]) -> None:
+def restart(state: dict[str, Any], characters: list[str], *, all_characters: bool = False) -> None:
+    tracking = bool(state.get("watch_since"))
+    now = time.time()
+    if tracking and all_characters:
+        state["watch_since"] = now
+        state["revision"] += 1
+    elif sensing_enabled(state) and (all_characters or any(name not in state["characters"] for name in characters)):
+        state["revision"] += 1
     for name in characters:
+        if tracking and not all_characters and (name in state["characters"] or len(state["characters"]) < 64):
+            record_for(state, name, create=True)["watch_after"] = now
         if name not in state["characters"]:
             continue
         record = state["characters"][name]
@@ -409,7 +475,20 @@ def context(state: dict[str, Any], character: str, today: str, *, user_turn: boo
 def view(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "enabled": state["enabled"], "revision": state["revision"],
+        "watch_tracking": bool(state["enabled"] and state.get("watch_since")),
+        "activity_sensing": sensing_enabled(state),
         "characters": copy.deepcopy(state["characters"]),
         "limits": {"text": TEXT_LIMIT, "summary": SUMMARY_LIMIT, "title": TITLE_LIMIT,
                    "notes": NOTE_LIMIT, "followups": FOLLOWUP_LIMIT},
     }
+
+
+def watch_cutoffs(state: dict[str, Any], characters: list[str]) -> dict[str, float]:
+    since = state.get("watch_since")
+    if not state["enabled"] or not since:
+        return {}
+    return {name: max(since, state["characters"].get(name, {}).get("watch_after", 0)) for name in characters}
+
+
+def sensing_enabled(state: dict[str, Any]) -> bool:
+    return state["enabled"] and state.get("activity_sensing") is True

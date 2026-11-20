@@ -42,6 +42,72 @@ def test_default_is_opt_in_and_disabled_writes_do_not_create_records(experiences
     assert not state["characters"]
 
 
+def test_watch_tracking_requires_consent_and_uses_a_fresh_cutoff(experiences, state, monkeypatch):
+    def config(operation, enabled, now):
+        return apply(experiences, state, operation, {"enabled": enabled}, "",
+                     now=now, revision=state["revision"])
+
+    assert experiences.watch_cutoffs(state, ["YUI"]) == {}
+    config("configure_watch_tracking", True, 1000)
+    assert experiences.view(state)["watch_tracking"] is True
+    assert experiences.watch_cutoffs(state, ["YUI", "MIO"]) == {"YUI": 1000, "MIO": 1000}
+    monkeypatch.setattr(experiences.time, "time", lambda: 1100)
+    experiences.restart(state, ["YUI"])
+    assert experiences.watch_cutoffs(state, ["YUI", "MIO"]) == {"YUI": 1100, "MIO": 1000}
+    assert experiences.normalize(state) == state
+    config("configure", False, 1200)
+    assert experiences.watch_cutoffs(state, ["YUI"]) == {}
+    with pytest.raises(experiences.ExperienceError, match="experience_disabled"):
+        config("configure_watch_tracking", True, 1300)
+    config("configure", True, 1400)
+    assert experiences.view(state)["watch_tracking"] is False
+    config("configure_watch_tracking", True, 1500)
+    assert experiences.watch_cutoffs(state, ["YUI"]) == {"YUI": 1500}
+    monkeypatch.setattr(experiences.time, "time", lambda: 1600)
+    experiences.restart(state, list(state["characters"]), all_characters=True)
+    assert experiences.watch_cutoffs(state, ["YUI", "MIO"]) == {"YUI": 1600, "MIO": 1600}
+
+
+def test_activity_sensing_is_opt_in_and_global_disable_revokes_it(experiences):
+    state = experiences.normalize(experiences.new_state())
+    assert experiences.view(state)["activity_sensing"] is False
+
+    def configure(operation, enabled):
+        return apply(experiences, state, operation, {"enabled": enabled}, "", revision=state["revision"])
+
+    with pytest.raises(experiences.ExperienceError, match="experience_disabled"):
+        configure("configure_activity_sensing", True)
+    configure("configure", True)
+    configure("configure_activity_sensing", True)
+    assert experiences.view(experiences.normalize(state))["activity_sensing"] is True
+    assert experiences.view(state)["watch_tracking"] is False
+    configure("configure", False)
+    configure("configure", True)
+    assert experiences.view(state)["activity_sensing"] is False
+
+
+def test_only_confirmed_watches_enter_recall_and_retry_keeps_one_memory(experiences, state):
+    apply(experiences, state, "configure_watch_tracking", {"enabled": True}, "", revision=0)
+    apply(experiences, state, "start_activity", {"kind": "music", "title": "A different activity"})
+    values = {"watch_id": "a" * 32, "tracking_revision": 1, "title": "Our video", "progress": "12:32"}
+    assert "Our video" not in experiences.context(state, "YUI", DAY)[0]
+    with pytest.raises(experiences.ExperienceError, match="experience_invalid"):
+        apply(experiences, state, "save_tracked_watch", {**values, "watch_id": "invalid"})
+    with pytest.raises(experiences.ExperienceError, match="experience_stale"):
+        apply(experiences, state, "save_tracked_watch", {**values, "tracking_revision": 0})
+    result = apply(experiences, state, "save_tracked_watch", values, request_id="keep_watch", revision=1)
+    replay = apply(experiences, state, "save_tracked_watch", values, request_id="keep_watch", revision=1)
+    assert replay["replay"] and replay["id"] == result["id"]
+    record = state["characters"]["YUI"]
+    assert len(record["memories"]) == 1 and record["memories"][0]["watch_id"] == values["watch_id"]
+    assert record["activity"]["title"] == "A different activity"
+    assert "Our video" in experiences.context(state, "YUI", DAY)[0]
+    assert "Our video" not in experiences.context(state, "MIO", DAY)[0]
+    with pytest.raises(experiences.ExperienceError, match="experience_duplicate"):
+        apply(experiences, state, "save_tracked_watch", values)
+    assert experiences.normalize(state) == state
+
+
 @pytest.mark.parametrize("kind", ["music", "screen"])
 def test_activities_share_one_review_flow_and_keep_notes_and_roles_separate(experiences, state, kind):
     apply(experiences, state, "start_note", {"title": "Existing draft"})

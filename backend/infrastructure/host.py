@@ -4,6 +4,7 @@ Endpoints are GET and loopback-only:
 
 * ``/api/characters``  -> character names + the current character
 * ``/api/tools``       -> which LLM tools main_server currently holds per role
+* ``/api/watch-together/watches`` -> opt-in viewing progress
 * ``/api/memory/recent_files`` and ``recent_file`` -> explicitly requested date preview
 
 Blocking stdlib HTTP is used on purpose (no extra dependency); callers run it
@@ -13,6 +14,7 @@ intercept loopback traffic.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import time
@@ -101,6 +103,48 @@ def fetch_tools_by_role() -> dict[str, set[str]] | None:
         if isinstance(tools, list):
             out[str(role)] = {str(t.get("name")) for t in tools if isinstance(t, dict) and t.get("name")}
     return out
+
+
+def fetch_recent_watches(cutoffs: dict[str, float]) -> dict[str, dict[str, Any]] | None:
+    """Return the latest played session per opted-in role, or None if unavailable."""
+    if not cutoffs:
+        return {}
+    payload = _get_json("/api/watch-together/watches?limit=100", timeout=1.5, max_bytes=512 * 1024)
+    if not isinstance(payload, dict) or not isinstance(payload.get("watches"), list):
+        return None
+    result: dict[str, dict[str, Any]] = {}
+    for row in payload["watches"][:100]:
+        if not isinstance(row, dict):
+            continue
+        character, watched_at, position = row.get("character"), row.get("last_watched"), row.get("progress")
+        if (
+            not isinstance(character, str) or character not in cutoffs
+            or not isinstance(watched_at, str) or len(watched_at) > 40
+            or type(position) not in (int, float) or not 0 <= position <= 86400
+        ):
+            continue
+        try:
+            watched = datetime.fromisoformat(watched_at.replace("Z", "+00:00"))
+            if watched.tzinfo is None:
+                continue
+            seconds = watched.timestamp()
+        except (ValueError, OverflowError, OSError):
+            continue
+        if seconds <= cutoffs[character] or seconds <= result.get(character, {}).get("watched_at", 0):
+            continue
+        identifier, job, version = row.get("id"), row.get("job"), row.get("version")
+        if not all(isinstance(value, str) and re.fullmatch(rf"[a-f0-9]{{{size}}}", value)
+                   for value, size in ((identifier, 32), (job, 32), (version, 64))):
+            continue
+        title = row.get("title")
+        title = " ".join(re.sub(r"[\x00-\x1f\x7f\ud800-\udfff]", " ", title).split())[:500] if isinstance(title, str) else ""
+        query = urllib.parse.urlencode({"job": job, "version": version, "lanlan_name": character})
+        result[character] = {
+            "id": identifier, "title": title, "watched_at": seconds,
+            "position": math.floor(position), "completed": row.get("completed") == 1,
+            "url": f"http://127.0.0.1:{main_server_port()}/watch_together?{query}",
+        }
+    return result
 
 
 def fetch_recent_chat(character: str) -> list[Any]:

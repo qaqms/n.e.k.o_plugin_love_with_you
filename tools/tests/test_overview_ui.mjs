@@ -48,6 +48,97 @@ async function populate(page) {
 const home = page => page.locator(".lwy-nav").getByRole("button", { name: "关系概览", exact: true }).click()
 const writes = page => page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "experience_action"))
 
+test("activity sensing needs consent and displays only the selected companion's report", async () => {
+  const page = await pageFor({ viewport: { width: 420, height: 800 } })
+  await populate(page)
+  const summary = page.locator(".lwy-together")
+  await summary.getByRole("button", { name: "一起相处", exact: true }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click()
+  const toggle = page.getByRole("checkbox", { name: "桌宠自动感知", exact: true })
+  assert.equal(await toggle.isChecked(), false)
+  await toggle.click()
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click()
+  assert.deepEqual(await writes(page), [])
+  await toggle.click()
+  await page.getByRole("dialog").getByRole("button", { name: "同意并开启" }).click()
+  await page.getByText("暂无新的活动回传。", { exact: true }).waitFor()
+  await home(page)
+  await page.evaluate(() => {
+    const state = window.__uiTest.snapshot().experiences
+    state.sensed_activities = {
+      YUI: { kind: "video", source: "screen" },
+      "茉子": { kind: "music", source: "playback" },
+    }
+    window.__uiTest.update({ experiences: state })
+  })
+  await summary.getByText("看视频", { exact: true }).waitFor()
+  assert.equal(await summary.getByText("听歌", { exact: true }).count(), 0)
+  await noOverflow(page)
+  await page.getByLabel("选择角色", { exact: true }).selectOption("茉子")
+  await summary.getByText("听歌", { exact: true }).waitFor()
+  await summary.getByRole("button", { name: "一起相处", exact: true }).click()
+  await page.getByText("桌宠转述播放器状态 · 听歌", { exact: true }).waitFor()
+  await toggle.uncheck()
+  await home(page)
+  assert.equal(await summary.getByText("听歌", { exact: true }).count(), 0)
+  assert.deepEqual((await writes(page)).map(call => call.args.operation), [
+    "configure_activity_sensing", "configure_activity_sensing",
+  ])
+  assert.deepEqual(page.errors, [])
+  await page.close()
+})
+
+test("opt-in watch tracking shows the right role and keeps only reviewed video records", async () => {
+  const page = await pageFor({ viewport: { width: 420, height: 800 } })
+  await page.evaluate(() => window.__uiTest.update({ experiences: { enabled: true, revision: 1, characters: {} } }))
+  const summary = page.locator(".lwy-together")
+  await summary.getByRole("button", { name: "一起相处", exact: true }).click()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByRole("button", { name: "取消", exact: true }).click()
+  const tracking = page.getByRole("checkbox", { name: "自动追踪宿主「一起看」" })
+  assert.equal(await tracking.isChecked(), false)
+  await tracking.check()
+  await dialog.getByRole("button", { name: "同意并开启" }).click()
+  await page.getByText("还没有新的观看记录。", { exact: true }).waitFor()
+  await page.evaluate(() => {
+    const state = window.__uiTest.snapshot().experiences
+    const watch = {
+      id: "a".repeat(32), title: "深夜纪录片", watched_at: Date.now() / 1000, position: 756,
+      completed: false, url: "http://127.0.0.1:48911/watch_together?job=preview&lanlan_name=YUI",
+    }
+    state.watches = { YUI: watch, "茉子": { ...watch, title: "茉子的旅途", completed: true } }
+    window.__uiTest.update({ experiences: state })
+  })
+  await home(page)
+  await summary.getByText("看到 12:36", { exact: true }).waitFor()
+  assert.equal(await summary.getByText("茉子的旅途").count(), 0)
+  const resume = summary.getByRole("link", { name: "继续看" })
+  assert.match(await resume.getAttribute("href"), /\/watch_together\?job=preview&lanlan_name=YUI$/)
+  const previewUrl = await resume.getAttribute("href")
+  await page.context().route(previewUrl, route => route.fulfill({ body: "Isolated N.E.K.O. watch page" }))
+  const [video] = await Promise.all([page.waitForEvent("popup"), resume.click()])
+  await video.getByText("Isolated N.E.K.O. watch page").waitFor()
+  await video.close()
+  await noOverflow(page)
+  await summary.screenshot({ path: `${artifacts}/watch-tracking-mobile.png` })
+  await summary.getByRole("button", { name: "一起相处", exact: true }).click()
+  await page.getByRole("button", { name: "留存", exact: true }).click()
+  assert.equal(await dialog.getByLabel("歌名或内容标题", { exact: true }).inputValue(), "深夜纪录片")
+  assert.equal(await dialog.getByLabel("进度（可选）").inputValue(), "看到 12:36")
+  assert.deepEqual((await writes(page)).map(call => call.args.operation), ["configure_watch_tracking"])
+  await dialog.getByRole("button", { name: "确认留存" }).click()
+  await dialog.waitFor({ state: "hidden" })
+  await page.getByText("已留存", { exact: true }).waitFor()
+  assert.equal(await page.getByRole("button", { name: "留存", exact: true }).count(), 0)
+  await tracking.uncheck()
+  await page.getByRole("link", { name: "继续看" }).waitFor({ state: "hidden" })
+  const state = await page.evaluate(() => window.__uiTest.snapshot().experiences)
+  assert.equal(state.characters.YUI.memories.length, 1)
+  assert.equal(state.watch_tracking, false)
+  assert.deepEqual(page.errors, [])
+  await page.close()
+})
+
 test("together activity starts from the overview and returns as a resumable last activity", async () => {
   const page = await pageFor({ viewport: { width: 420, height: 800 } })
   await populate(page)

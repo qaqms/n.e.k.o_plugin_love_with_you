@@ -172,6 +172,7 @@ class LoveWithYouPlugin(NekoPluginBase):
         self._state: dict[str, Any] = engine.new_state()
         self._state["shop"] = shop.new_state()
         self._state["experiences"] = experiences.new_state()
+        self._sensed_activities: dict[str, tuple[str, str, float]] = {}
         self._state_file: StateFile | None = None
         self._ready = False
         self._starting = False
@@ -264,6 +265,7 @@ class LoveWithYouPlugin(NekoPluginBase):
                 for name in tuple(self._registered):
                     self._unregister_tool(name)
                 self._tool_session = secrets.token_hex(16)
+                self._sensed_activities.clear()
                 self._live_roles = None
                 self._host_online = False
                 self._last_character_sync = self._last_tool_verify = _NEVER
@@ -723,10 +725,36 @@ class LoveWithYouPlugin(NekoPluginBase):
                         name, record["revision"], self._experience_token_locked(name),
                     ),
                 )
+                if experiences.sensing_enabled(state["experiences"]):
+                    token = self._activity_token_locked(name)
+                    desired[f"love_activity_{_role_suffix(name)}"] = (
+                        name, scope, "activity_sensing",
+                        "玩家已开启一起相处的自动感知。若你在本轮收到宿主提供的新画面或播放器状态，"
+                        "能明确判断当前活动时，静默回传一次，然后继续正常回应。"
+                        "source=screen 表示本轮画面的观察：video 是在看视频（包括游戏实况），"
+                        "game 是玩家正在操作游戏，music 是画面明确显示音乐在播放，"
+                        "screen 是其余可判断的共享画面。source=playback 仅用于宿主音乐播放器确认状态，"
+                        "正在播填 music，已暂停、结束或失败填 none。画面明确显示活动结束也可填 none。"
+                        "只有旧画面、聊天文字、猜测、静态播放器或来源不明时不要调用。"
+                        f"不要主动获取新画面，不回传标题、屏幕文字或时间。token 原样填写 {token}。",
+                    )
         return desired
 
     def _tool_spec(self, kind: str, scope: str) -> tuple[dict[str, Any], Callable[..., Any]]:
         with self._lock:
+            if kind == "activity_sensing":
+                character = scope[len(engine.CHAR_SCOPE_PREFIX):]
+                token = self._activity_token_locked(character)
+                return {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": list(experiences.SENSED_KINDS)},
+                        "source": {"type": "string", "enum": list(experiences.SENSING_SOURCES)},
+                        "token": {"type": "string", "enum": [token]},
+                    },
+                    "required": ["kind", "source", "token"],
+                    "additionalProperties": False,
+                }, self._make_activity_handler(character, token)
             if kind == "experience":
                 character = scope[len(engine.CHAR_SCOPE_PREFIX):]
                 parameters = copy.deepcopy(prompts.EXPERIENCE_PARAMETERS)
@@ -1993,6 +2021,40 @@ class LoveWithYouPlugin(NekoPluginBase):
 
     # ------------------------------------------------------------ shared experiences
 
+    def _activity_token_locked(self, character: str) -> str:
+        state = self._state["experiences"]
+        epoch = experiences.record_for(state, character)["epoch"]
+        binding = f"{self._tool_session}:activity:{character}:{state['revision']}:{epoch}"
+        return hashlib.sha256(binding.encode("utf-8")).hexdigest()[:24]
+
+    def _make_activity_handler(self, character: str, registered_token: str) -> Callable[..., Any]:
+        async def handler(kind: Any = None, source: Any = None, token: Any = None, **extra: Any) -> dict[str, Any]:
+            with self._lock:
+                if not self._ready or self._stopping.is_set():
+                    return {"is_error": True, "error": "not_ready"}
+                if not experiences.sensing_enabled(self._state["experiences"]):
+                    return {"is_error": True, "error": "experience_disabled"}
+                if (
+                    token != registered_token or token != self._activity_token_locked(character)
+                    or character not in self._state["known_characters"]
+                    or (self._live_roles is not None and character not in self._live_roles)
+                ):
+                    return {"is_error": True, "error": "experience_stale"}
+                if (
+                    extra or kind not in experiences.SENSED_KINDS or source not in experiences.SENSING_SOURCES
+                    or (source == "playback" and kind not in ("music", "none"))
+                ):
+                    return {"is_error": True, "error": "experience_invalid"}
+                if kind == "none":
+                    current = self._sensed_activities.get(character)
+                    if current and current[1] == source:
+                        self._sensed_activities.pop(character)
+                else:
+                    self._sensed_activities[character] = (kind, source, time.monotonic() + experiences.SENSING_TTL)
+            return {"accepted": True}
+
+        return handler
+
     def _experience_token_locked(self, character: str) -> str:
         state = self._state["experiences"]
         scope = engine.scope_key_for(self._state, character)
@@ -2065,13 +2127,19 @@ class LoveWithYouPlugin(NekoPluginBase):
                 allowed = set(self._state["known_characters"]) | set(state["characters"])
                 if self._state["current_character"]:
                     allowed.add(self._state["current_character"])
-                if not isinstance(character, str) or (character not in allowed and operation != "configure"):
+                if not isinstance(character, str) or (
+                    character not in allowed and (
+                        not isinstance(operation, str) or operation not in experiences.CONFIG_OPERATIONS
+                    )
+                ):
                     raise experiences.ExperienceError("experience_invalid")
                 result = experiences.apply(
                     state, character, operation, revision, request_id, values,
                     today=engine.today_str(),
                 )
                 self._save_locked()
+                if not result.get("replay") and not experiences.sensing_enabled(state):
+                    self._sensed_activities.clear()
                 generation = self._lifecycle_generation
                 note = experiences.record_for(state, character)["note"]
                 invite_at = note["invite_at"] if operation == "invite" and note else None
@@ -2144,12 +2212,28 @@ class LoveWithYouPlugin(NekoPluginBase):
         today = date.today()
         with self._lock:
             state = dashboard_view.snapshot(self._state, today, time.time(), history_limit=_UI_HISTORY_LIMIT)
+            now = time.monotonic()
+            for name, (_, _, expires) in tuple(self._sensed_activities.items()):
+                if expires <= now or name not in self._state["known_characters"]:
+                    self._sensed_activities.pop(name)
+            if state["experiences"]["activity_sensing"]:
+                state["experiences"]["sensed_activities"] = {
+                    name: {"kind": kind, "source": source}
+                    for name, (kind, source, _) in self._sensed_activities.items()
+                    if self._live_roles is None or name in self._live_roles
+                }
+            watch_cutoffs = experiences.watch_cutoffs(
+                self._state["experiences"],
+                [*self._state["known_characters"], *([self._state["current_character"]] if self._state["current_character"] else [])],
+            )
             auto_status = copy.deepcopy(self._auto)
             host_online = self._host_online
             income_error = self._income_error
             portrait_library, appearance_prefs = self._portraits, self._appearance
             adventure_store = self._adventure
         data = dashboard_view.project(state, today)
+        if data["experiences"]["watch_tracking"]:
+            data["experiences"]["watches"] = await asyncio.to_thread(host.fetch_recent_watches, watch_cutoffs)
         return {
             **data,
             "host_online": host_online,
@@ -2547,11 +2631,18 @@ class LoveWithYouPlugin(NekoPluginBase):
                         if str(scope).startswith(engine.CHAR_SCOPE_PREFIX)
                         else list(self._state["experiences"]["characters"])
                     )
-                    experiences.restart(self._state["experiences"], targets)
+                    experiences.restart(
+                        self._state["experiences"], targets, all_characters=str(scope) == engine.SHARED_SCOPE,
+                    )
                 else:
                     result = engine.set_affection(record, value, source=source, gate=self._gate())
                 self._cancel_proactive_locked(str(scope))
                 self._save_locked()
+                if source == "restart":
+                    if str(scope) == engine.SHARED_SCOPE:
+                        self._sensed_activities.clear()
+                    else:
+                        self._sensed_activities.pop(targets[0], None)
                 self._invalidate_scoring_locked(str(scope))
         except engine.EngineError as exc:
             return Err(SdkError(exc.code))

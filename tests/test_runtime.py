@@ -170,9 +170,57 @@ def experience_args(plugin, operation, values, character="YUI", request_id=None)
     record = state["characters"].get(character, {"revision": 0})
     return {
         "operation": operation, "values": values, "character": character,
-        "revision": state["revision"] if operation == "configure" else record["revision"],
+        "revision": state["revision"] if not character else record["revision"],
         "request_id": request_id or f"xp_request_{len(state['receipts']):08}",
     }
+
+
+def test_activity_sensing_is_role_bound_ephemeral_and_revocable(plugin, runtime, module_clock):
+    def configure(operation, enabled):
+        return asyncio.run(plugin.experience_action(**experience_args(plugin, operation, {"enabled": enabled}, "")))
+
+    def activity_tool(role):
+        scope = runtime.engine.CHAR_SCOPE_PREFIX + role
+        schema, handler = plugin._tool_spec("activity_sensing", scope)
+        return schema["properties"]["token"]["enum"][0], handler
+
+    def projected():
+        return asyncio.run(plugin.dashboard())["experiences"]
+
+    configure("configure", True)
+    assert not any(tool[2] == "activity_sensing" for tool in plugin._desired_tools().values())
+    token, handler = activity_tool("YUI")
+    assert asyncio.run(handler(kind="video", source="screen", token=token))["error"] == "experience_disabled"
+
+    configure("configure_activity_sensing", True)
+    assert {tool[0] for tool in plugin._desired_tools().values() if tool[2] == "activity_sensing"} == {"YUI", "MIO"}
+    token, handler = activity_tool("YUI")
+    other_token, other_handler = activity_tool("MIO")
+    before = copy.deepcopy(plugin._state)
+    module_clock.monotonic = lambda: 100.0
+    assert asyncio.run(handler(kind="game", source="playback", token=token))["error"] == "experience_invalid"
+    assert asyncio.run(handler(kind="video", source="screen", token=token, character="MIO"))["error"] == "experience_invalid"
+    assert asyncio.run(other_handler(kind="music", source="playback", token=token))["error"] == "experience_stale"
+    assert asyncio.run(handler(kind="video", source="screen", token=token)) == {"accepted": True}
+    assert asyncio.run(handler(kind="none", source="playback", token=token)) == {"accepted": True}
+    assert projected()["sensed_activities"] == {"YUI": {"kind": "video", "source": "screen"}}
+    assert plugin._state == before
+    module_clock.monotonic = lambda: 220.0
+    assert projected()["sensed_activities"] == {}
+    assert asyncio.run(other_handler(kind="music", source="playback", token=other_token)) == {"accepted": True}
+    assert asyncio.run(other_handler(kind="none", source="playback", token=other_token)) == {"accepted": True}
+    assert projected()["sensed_activities"] == {}
+    assert asyncio.run(handler(kind="game", source="screen", token=token)) == {"accepted": True}
+
+    configure("configure_activity_sensing", False)
+    assert not plugin._sensed_activities and "sensed_activities" not in projected()
+    configure("configure_activity_sensing", True)
+    assert asyncio.run(handler(kind="game", source="screen", token=token))["error"] == "experience_stale"
+    new_token, new_handler = activity_tool("YUI")
+    assert asyncio.run(new_handler(kind="game", source="screen", token=new_token)) == {"accepted": True}
+    asyncio.run(plugin.restart_relationship(**restart_args(plugin)))
+    assert not plugin._sensed_activities
+    assert asyncio.run(new_handler(kind="game", source="screen", token=new_token))["error"] == "experience_stale"
 
 
 def confession_reply(plugin, runtime, ts, content, character="YUI", **kwargs):

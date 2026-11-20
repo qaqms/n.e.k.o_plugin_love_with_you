@@ -4,14 +4,30 @@ import { Icon } from "./icons"
 import { unwrap } from "./requests"
 import type { RunAction } from "./requests"
 import { useBackgroundRefresh } from "./refresh"
+import { WatchLink, trackedWatch, watchProgress } from "./watch-tracking"
+import type { TrackedWatch } from "./watch-tracking"
+
+export type SensedActivity = {
+  kind: "music" | "screen" | "video" | "game"; source: "screen" | "playback"
+}
 
 const ACTIVITY_KINDS = ["music", "screen"] as const
 type ActivityKind = typeof ACTIVITY_KINDS[number]
 type Activity = { id: string; title: string; kind: ActivityKind; progress: string }
-type Note = { id: string; title: string; text: string; created_at: number; recall?: boolean; invitation?: string; kind?: ActivityKind; progress?: string }
+type Note = { id: string; title: string; text: string; created_at: number; recall?: boolean; invitation?: string; kind?: ActivityKind; progress?: string; watch_id?: string }
 type Followup = { id: string; summary: string; due: string; status: string; outcome: string; pending_outcome: string; prompt_submitted: boolean }
 type RecordState = { revision: number; note: Note | null; activity?: Activity | null; memories: Note[]; followups: Followup[] }
-export type ExperienceState = { enabled: boolean; revision: number; characters: Record<string, RecordState> }
+export type ExperienceState = {
+  enabled: boolean; revision: number; characters: Record<string, RecordState>
+  watch_tracking?: boolean; watches?: Record<string, TrackedWatch> | null
+  activity_sensing?: boolean; sensed_activities?: Record<string, SensedActivity>
+}
+export function sensedActivity(data: ExperienceState | undefined, character: string) {
+  if (data?.enabled && data.activity_sensing && data.sensed_activities &&
+      Object.prototype.hasOwnProperty.call(data.sensed_activities, character)) {
+    return data.sensed_activities[character]
+  }
+}
 export type ExperienceDestination = {
   character: string; tab: "activities" | "notes" | "followups"; kind?: "draft" | "memory" | "followup" | "activity"; id?: string
 }
@@ -19,7 +35,9 @@ type Request = { character: string; operation: string; revision: number; request
 type Form = {
   character: string; revision: number; operation: string; id?: string
   title: string; text: string; due: string; kind?: ActivityKind; progress?: string
+  watch?: { id: string; trackingRevision: number }
 }
+
 export const EXPERIENCE_STYLE = `
 .lwy-xp { min-width:0; }
 .lwy-xp-toolbar,.lwy-xp-head { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap; }
@@ -43,6 +61,8 @@ export const EXPERIENCE_STYLE = `
 .lwy-xp-form pre { white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:160px;overflow:auto;margin:8px 0; }
 .lwy-xp-counter { color:var(--muted);font-size:12px;text-align:right; }
 .lwy-xp-retry { display:flex;flex-wrap:wrap;gap:8px;margin:12px 0; }
+.lwy-watch-open { text-decoration:none; }
+.lwy-xp-tracking { margin-top:18px; }
 @media(max-width:479px) { .lwy-xp-toolbar label { width:100%; } .lwy-xp-head { align-items:flex-start; } }
 `
 
@@ -115,6 +135,8 @@ export function Experiences(props: {
   const record = data.characters[character] || { revision: 0, note: null, activity: null, memories: [], followups: [] }
   const activity = record.activity
   const activities = record.memories.filter(item => item.kind)
+  const watch = trackedWatch(data, character)
+  const sensed = sensedActivity(data, character)
   const blocked = props.busy || props.stale || Boolean(pending)
   const clearRequest = () => { requestRef.current = null; setPending(null) }
   const titleFor = (form: Form) => t(form.kind ? "xp.activities"
@@ -133,8 +155,9 @@ export function Experiences(props: {
     const submitted = request
     return run("experience_action", { ...submitted }, value => {
       const result = unwrap(value, "operation")
+      const configuration = ["configure", "configure_watch_tracking", "configure_activity_sensing"].includes(submitted.operation)
       if (result.operation !== submitted.operation || result.revision !== submitted.revision + 1 ||
-        (submitted.operation !== "configure" && (typeof result.id !== "string" || !result.id)) ||
+        (!configuration && (typeof result.id !== "string" || !result.id)) ||
         (submitted.values.id !== undefined && result.id !== submitted.values.id)) {
         throw new Error("invalid_response")
       }
@@ -156,6 +179,21 @@ export function Experiences(props: {
     if (!ok && source instanceof HTMLInputElement) source.checked = data!.enabled
   }
 
+  async function toggleTracking(enabled: boolean, sensing = false) {
+    const source = document.activeElement
+    const checked = Boolean(sensing ? data!.activity_sensing : data!.watch_tracking)
+    if (enabled && !await confirm({
+      title: t(sensing ? "xp.sensing" : "xp.watchTracking"),
+      message: t(sensing ? "xp.sensingPrivacy" : "xp.watchPrivacy"), confirmLabel: t("xp.enable"),
+      cancelLabel: t("common.cancel"),
+    })) {
+      if (source instanceof HTMLInputElement) source.checked = checked
+      return
+    }
+    const ok = await perform(sensing ? "configure_activity_sensing" : "configure_watch_tracking", { enabled }, "", data!.revision)
+    if (!ok && source instanceof HTMLInputElement) source.checked = checked
+  }
+
   function open(operation: string, item?: Note | Followup) {
     setForm({
       character, revision: record.revision, operation, id: item?.id,
@@ -175,10 +213,22 @@ export function Experiences(props: {
     })
   }
 
+  function keepWatch() {
+    if (!watch) return
+    setForm({
+      character, revision: record.revision, operation: "save_tracked_watch", kind: "screen",
+      title: Array.from(watch.title || t("xp.watchUntitled")).slice(0, 40).join(""), text: "",
+      progress: watchProgress(watch, t), due: props.today,
+      watch: { id: watch.id, trackingRevision: data!.revision },
+    })
+  }
+
   async function saveForm(draft = false) {
     if (!form) return
     const operation = draft && form.operation === "save_note" ? "draft_note" : form.operation
-    const values = { id: form.id, ...(form.kind
+    const values = { id: form.id, ...(form.watch ? {
+      watch_id: form.watch.id, tracking_revision: form.watch.trackingRevision,
+    } : {}), ...(form.kind
       ? { kind: form.kind, title: form.title, progress: form.progress, text: form.text }
       : ["propose_followup", "confirm_followup", "edit_followup"].includes(operation)
       ? { summary: form.text, due: form.due }
@@ -230,7 +280,9 @@ export function Experiences(props: {
       : formFollowup ? [formFollowup.due, formFollowup.summary, formFollowup.pending_outcome || formFollowup.outcome]
         .filter(Boolean).join("\n") : "" : ""
   const activityLocked = form && ((starting && Boolean(formRecord?.activity)) ||
-    (form.operation === "save_activity" && formRecord?.activity?.id !== form.id))
+    (form.operation === "save_activity" && formRecord?.activity?.id !== form.id) ||
+    (form.watch && (!data.watch_tracking || form.watch.trackingRevision !== data.revision ||
+      formRecord?.memories.some(item => item.watch_id === form.watch!.id))))
 
   function memoryArticle(item: Note) {
     return <article className="lwy-xp-item" key={item.id} data-experience-id={item.id} tabIndex={-1}>
@@ -281,6 +333,31 @@ export function Experiences(props: {
                 onClick={() => openActivity()}><Icon name="Plus" />{t("xp.startActivity")}</Button> : null}
             </div>
           </div>
+          {data.enabled ? <div className="lwy-xp-tracking">
+            <Switch checked={data.activity_sensing === true} label={t("xp.sensing")}
+              disabled={blocked || Boolean(form)} onChange={enabled => toggleTracking(enabled, true)} />
+            {data.activity_sensing ? <p className="lwy-xp-meta" role="status">
+              {sensed ? `${t(`xp.sensedSource.${sensed.source}`)} · ${t(`xp.sensed.${sensed.kind}`)}` : t("xp.sensingWaiting")}
+            </p> : null}
+          </div> : null}
+          {data.enabled ? <div className="lwy-xp-tracking">
+            <Switch checked={data.watch_tracking === true} label={t("xp.watchTracking")}
+              disabled={blocked || Boolean(form)} onChange={enabled => toggleTracking(enabled)} />
+            {data.watch_tracking && !watch ? <p className="lwy-xp-meta">
+              {t(data.watches === null ? "xp.watchUnavailable" : "xp.watchWaiting")}
+            </p> : null}
+          </div> : null}
+          {watch ? <article className="lwy-xp-item">
+            <div className="lwy-xp-head"><h3>{watch.title || t("xp.watchUntitled")}</h3></div>
+            <p className="lwy-xp-meta">{watchProgress(watch, t)}</p>
+            <div className="lwy-btns">
+              <WatchLink watch={watch} t={t} />
+              {activities.some(item => item.watch_id === watch.id) ? <span className="lwy-xp-meta">{t("xp.watchKept")}</span>
+                : <Button disabled={blocked || record.memories.length >= 30} onClick={keepWatch}>
+                  <Icon name="Save" />{t("xp.watchKeep")}
+                </Button>}
+            </div>
+          </article> : null}
           {activity ? <article className="lwy-xp-item">
             <h3>{activity.title || t(`xp.activity.${activity.kind}`)}</h3>
             <p className="lwy-xp-meta">{t("xp.activeActivity")}</p>

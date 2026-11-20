@@ -33,6 +33,7 @@ import { errorCode, submitAction, unwrap } from "./requests"
 import { CompanionGame, GAME_STYLE } from "./companion-game"
 import { PortraitLightbox, PORTRAIT_LIGHTBOX_STYLE } from "./portrait-lightbox"
 import { portraitTouchPresets } from "./portrait-touch-presets"
+import { useBackgroundRefresh } from "./refresh"
 
 type HistoryItem = { ts: number; delta: number; value: number; reason: string; source: string }
 
@@ -762,6 +763,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const fallback = scopes.find((s) => s.is_current) || scopes[0]
   const scope = scopes.find((s) => s.key === selectedKey) || fallback
   const activeSection: Section = SECTIONS.includes(section) ? section : "heart"
+  useBackgroundRefresh(() => api.refresh(), busy || Boolean(lightbox),
+    activeSection === "heart" && Boolean(state.experiences?.activity_sensing))
   useEffect(() => {
     if (scope && selectedKey !== scope.key) setSelectedKey(scope.key)
   }, [scope?.key, selectedKey])

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小屋灰盒</title>
+  <style>
+    :root { --ink: #2f3a36; --muted: #6c7772; --paper: #fbf8f1; --line: #d9d3c6; --teal: #1f8f86; --amber: #d08a1e; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #e6e9e4; color: var(--ink); font: 14px/1.5 system-ui, "Microsoft YaHei", sans-serif; }
+    #stage { position: fixed; inset: 0; }
+    #stage canvas { display: block; }
+    #labels { position: fixed; inset: 0; pointer-events: none; }
+    .tag { position: absolute; transform: translate(-50%, -100%); padding: 1px 7px; border-radius: 9px; font-size: 12px; white-space: nowrap;
+      background: rgba(251, 248, 241, .92); border: 1px solid var(--line); transition: opacity .25s; }
+    .tag.live { border-color: var(--teal); color: #12645d; }
+    .tag.idea { border-color: var(--amber); border-style: dashed; color: #8a5a0f; }
+    .tag.room { font-size: 13px; font-weight: 600; background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .tag.picked { box-shadow: 0 0 0 2px var(--ink); }
+    nav { position: fixed; top: 12px; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    nav h1 { font-size: 15px; margin: 0 8px 0 2px; }
+    nav button { font: inherit; padding: 5px 12px; border-radius: 16px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; }
+    nav button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    aside { position: fixed; right: 12px; bottom: 12px; width: min(330px, calc(100vw - 24px)); max-height: 55vh; overflow: auto;
+      background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; box-shadow: 0 6px 24px rgba(40, 50, 45, .12); }
+    aside h2 { font-size: 15px; margin: 0 0 4px; }
+    aside p { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+    aside ul { list-style: none; margin: 0; padding: 0; }
+    aside li { padding: 6px 0; border-top: 1px solid var(--line); cursor: pointer; }
+    aside li b { font-weight: 600; }
+    aside li small { display: block; color: var(--muted); }
+    aside li.live b::before, aside li.idea b::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 2px; }
+    aside li.live b::before { background: var(--teal); }
+    aside li.idea b::before { border: 1.5px dashed var(--amber); }
+    aside li.picked { background: #f1ece0; }
+    #legend { position: fixed; left: 12px; bottom: 12px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 12px; color: var(--muted); }
+    #legend span { display: inline-flex; align-items: center; gap: 5px; margin-right: 10px; }
+    #legend i { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+    @media (max-width: 640px) { #legend { display: none; } aside { max-height: 40vh; } }
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="labels"></div>
+  <nav aria-label="视角"><h1>小屋灰盒 · 开发预览</h1></nav>
+  <aside id="info" aria-live="polite"></aside>
+  <div id="legend">
+    <span><i style="background:#1f8f86"></i>已有功能</span>
+    <span><i style="border:1.5px dashed #d08a1e"></i>预留位置</span>
+    <span><i style="background:#9a9a94"></i>家具占位</span>
+  </div>
+  <script type="module" src="./cottage-blockout.mjs"></script>
+</body>
+</html>

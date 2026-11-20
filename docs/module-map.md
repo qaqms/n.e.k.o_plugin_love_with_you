@@ -8,6 +8,8 @@
 
 `static/cottage-company.mjs` 管理双人杯、日历和投影幕的场景界面。面板读取现有纪念日与观看追踪，并将 `invite_cottage_chat` 交给宿主消息通道。宿主当前角色在提交时重新校验。
 
+小屋改版的双层布局以数据形式放在 `static/cottage-layout.mjs`（房间、墙体开口、楼梯、家具占位和功能槽位），运行时暂未引用；`tools/tests/test_cottage_layout.mjs` 校验槽位不穿墙、不挡门和楼梯、现有功能各占一个槽位。开发用灰盒查看器 `tools/preview/cottage-blockout.*` 由预览服务的 `/blockout` 提供，不进入发布包。
+
 发布工具 `tools/build/audit_release.py` 扫描源码、历史与导入包并隐去疑似凭据值；`verify_adventure_package.py` 验证运行资源、文件范围、哈希及合成旧存档迁移；`precheck_release.py` 在临时源码副本调用官方 SDK 预检。对应路径与凭据泄漏回归见 `tests/test_release_hygiene.py`，检查结果及素材许可待办见[发布审计](audits/release-readiness-2026-11-16.md)。浏览器测试拥有自己的临时存档目录，并在正常结束及启动失败时清理。
 
 README 面向插件用户；安装、功能和隐私集中在首页，开发入口见 `docs/development.md`，旧内容保存在 `docs/readme-history-2026-11-16.md`。发布头像为 `assets/icon.png`，市场投稿路径见[发布资料说明](market-release-2026-11-16.md)；它不参与游戏或关系状态。

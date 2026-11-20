@@ -482,7 +482,10 @@ const cottageAssets = new Set([
   "cottage.html", "cottage.css", "cottage.mjs", "cottage-scene.mjs", "cottage-icons.mjs", "cottage-record.mjs", "cottage-picture.mjs",
   "cottage-living.mjs", "cottage-company.mjs",
   "engine/three.module.min.js", "engine/three.core.min.js", "engine/three-rounded-box.mjs", "engine/three-post.mjs",
+  "cottage-layout.mjs",
 ])
+// Dev-only pages that live beside this server instead of in the shipped static folder.
+const devAssets = new Set(["cottage-blockout.html", "cottage-blockout.mjs"])
 const assetPrefix = "/plugin/love_with_you/ui/"
 
 export async function startPreview(port = 0, sourcePath = join(pluginRoot, "ui/panel.tsx")) {
@@ -491,7 +494,12 @@ export async function startPreview(port = 0, sourcePath = join(pluginRoot, "ui/p
       const requestUrl = new URL(req.url, "http://localhost")
       const path = requestUrl.pathname
       const asset = path.startsWith(assetPrefix) ? path.slice(assetPrefix.length) : ""
-      if (path.startsWith("/image/")) {
+      if (path === "/blockout") {
+        res.writeHead(302, { Location: `${assetPrefix}cottage-blockout.html${requestUrl.search}` }).end()
+      } else if (devAssets.has(asset)) {
+        const type = asset.endsWith(".html") ? "text/html" : "text/javascript"
+        res.writeHead(200, { "Content-Type": `${type}; charset=utf-8` }).end(readFileSync(join(pluginRoot, "tools/preview", asset)))
+      } else if (path.startsWith("/image/")) {
         const [, , id, variant] = path.split("/")
         const item = fixture().items.find(entry => entry.id === id)
         if (!item || !["thumb", "display"].includes(variant)) { res.writeHead(404).end(); return }

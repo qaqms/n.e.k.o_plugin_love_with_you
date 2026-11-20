@@ -42,7 +42,7 @@ def test_default_is_opt_in_and_disabled_writes_do_not_create_records(experiences
     assert not state["characters"]
 
 
-def test_watch_tracking_requires_consent_and_uses_a_fresh_cutoff(experiences, state, monkeypatch):
+def test_watch_tracking_requires_consent_and_uses_a_fresh_cutoff(experiences, state, monkeypatch, module_clock):
     def config(operation, enabled, now):
         return apply(experiences, state, operation, {"enabled": enabled}, "",
                      now=now, revision=state["revision"])
@@ -51,7 +51,8 @@ def test_watch_tracking_requires_consent_and_uses_a_fresh_cutoff(experiences, st
     config("configure_watch_tracking", True, 1000)
     assert experiences.view(state)["watch_tracking"] is True
     assert experiences.watch_cutoffs(state, ["YUI", "MIO"]) == {"YUI": 1000, "MIO": 1000}
-    monkeypatch.setattr(experiences.time, "time", lambda: 1100)
+    monkeypatch.setattr(experiences, "time", module_clock)
+    module_clock.time = lambda: 1100
     experiences.restart(state, ["YUI"])
     assert experiences.watch_cutoffs(state, ["YUI", "MIO"]) == {"YUI": 1100, "MIO": 1000}
     assert experiences.normalize(state) == state
@@ -63,7 +64,7 @@ def test_watch_tracking_requires_consent_and_uses_a_fresh_cutoff(experiences, st
     assert experiences.view(state)["watch_tracking"] is False
     config("configure_watch_tracking", True, 1500)
     assert experiences.watch_cutoffs(state, ["YUI"]) == {"YUI": 1500}
-    monkeypatch.setattr(experiences.time, "time", lambda: 1600)
+    module_clock.time = lambda: 1600
     experiences.restart(state, list(state["characters"]), all_characters=True)
     assert experiences.watch_cutoffs(state, ["YUI", "MIO"]) == {"YUI": 1600, "MIO": 1600}
 

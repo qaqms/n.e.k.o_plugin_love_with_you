@@ -129,7 +129,7 @@ def main() -> None:
         "static/engine/NEKO-LICENSE.txt", "static/engine/NEKO-NOTICE.txt",
         "static/cottage.html", "static/cottage.css", "static/cottage.mjs", "static/cottage-scene.mjs", "static/cottage-icons.mjs",
         "static/cottage-record.mjs", "static/cottage-picture.mjs", "static/cottage-living.mjs", "static/cottage-company.mjs",
-        "static/cottage-house.mjs", "static/cottage-layout.mjs",
+        "static/cottage-house.mjs", "static/cottage-layout.mjs", "static/cottage-card.mjs",
         "static/engine/three.module.min.js", "static/engine/three.core.min.js",
         "static/engine/three-rounded-box.mjs", "static/engine/three-post.mjs", "static/engine/THREE-LICENSE.txt",
         "static/skills-expanded.json", "static/routes.json", "static/expanded-combat.mjs",

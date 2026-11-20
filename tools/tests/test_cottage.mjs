@@ -455,8 +455,10 @@ test("the record player approaches first, reveals sleeves, and returns to the sa
     assert.equal(await station.getByText("听到第三首").count(), 0)
     assert.deepEqual(await station.locator(".sleeve-title").allTextContents(), ["雨后爵士", "窗边的钢琴", "深夜电台"])
     const thread = await frame.locator("#record-thread").boundingBox()
+    // The thread runs from the vinyl to the edge of the paper card.
+    const card = await station.boundingBox()
     const heading = await station.getByRole("heading", { level: 2 }).boundingBox()
-    assert.ok(Math.abs(thread.x + thread.width - heading.x) <= 2)
+    assert.ok(Math.abs(thread.x + thread.width - card.x) <= 2)
     assert.ok(Math.abs(thread.y - (heading.y + heading.height / 2)) <= 2)
     await station.getByRole("button", { name: "雨后爵士" }).click()
     await station.getByText("听到第三首").waitFor()
@@ -597,7 +599,7 @@ test("the same picture continues moving as the caption appears and reverses from
         view: node.dataset.view,
         hidden: pages.hidden,
         inert: pages.inert,
-        text: opacity("#picture-caption"),
+        text: opacity("#picture-pages"),
         controls: opacity("#picture-pager"),
       }
     })
@@ -619,7 +621,8 @@ test("the same picture continues moving as the caption appears and reverses from
     assert.equal(emerging.view, "approaching")
     assert.ok(!emerging.hidden && emerging.inert && emerging.text > 0 && emerging.text < 1)
     assert.equal(emerging.controls, 0)
-    assert.ok(changedPixels(beforeCaption, duringCaption) > 30, "the print should still move with the camera in place")
+    // The camera has arrived beside the frame; the paper card unfolds over a still scene.
+    assert.ok(changedPixels(beforeCaption, duringCaption) < 30, "the frame should hold still while the card unfolds")
     const intermediate = await canvas.evaluate(node => node.toDataURL("image/png").split(",")[1])
     writeFileSync(resolve(artifacts, "cottage-picture-transition.png"), Buffer.from(intermediate, "base64"))
     await page.clock.runFor(210)

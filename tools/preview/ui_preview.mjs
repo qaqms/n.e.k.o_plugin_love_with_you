@@ -482,7 +482,7 @@ const cottageAssets = new Set([
   "cottage.html", "cottage.css", "cottage.mjs", "cottage-scene.mjs", "cottage-icons.mjs", "cottage-record.mjs", "cottage-picture.mjs",
   "cottage-living.mjs", "cottage-company.mjs",
   "engine/three.module.min.js", "engine/three.core.min.js", "engine/three-rounded-box.mjs", "engine/three-post.mjs",
-  "cottage-layout.mjs", "cottage-house.mjs",
+  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs",
 ])
 // Dev-only pages that live beside this server instead of in the shipped static folder.
 const devAssets = new Set(["cottage-blockout.html", "cottage-blockout.mjs"])

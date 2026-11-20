@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>我们的小屋</title>
-  <link rel="stylesheet" href="./cottage.css?v=0.9.26">
+  <link rel="stylesheet" href="./cottage.css?v=0.9.27">
 </head>
 <body>
   <main id="room" aria-labelledby="title">
@@ -47,9 +47,10 @@
     </div>
     <button type="button" id="cottage-back" hidden></button>
     <div id="record-thread" aria-hidden="true" hidden></div>
-    <section id="record-station" aria-labelledby="record-title" hidden>
+    <div id="card-thread" aria-hidden="true" hidden></div>
+    <section id="record-station" class="paper-card" aria-labelledby="record-title" hidden>
       <div class="record-heading">
-        <h2 id="record-title"></h2>
+        <h2 id="record-title" class="card-title"></h2>
         <select id="record-role" hidden></select>
         <span id="record-single-role" hidden></span>
       </div>
@@ -62,9 +63,11 @@
         <p id="record-note" hidden></p>
       </article>
     </section>
-    <section id="picture-pages" aria-labelledby="picture-title" hidden>
-      <h2 id="picture-title" class="visually-hidden"></h2>
-      <select id="picture-role" hidden></select>
+    <section id="picture-pages" class="paper-card placed-card" aria-labelledby="picture-title" hidden>
+      <div class="card-heading">
+        <h2 id="picture-title" class="card-title"></h2>
+        <select id="picture-role" hidden></select>
+      </div>
       <article id="picture-caption" aria-live="polite">
         <p id="picture-empty" role="status" hidden></p>
         <div id="picture-entry" hidden>
@@ -83,7 +86,7 @@
     </section>
     <section id="notebook-pages" aria-labelledby="notebook-title" hidden>
       <div class="cottage-strip">
-        <h2 id="notebook-title"></h2>
+        <h2 id="notebook-title" class="card-title"></h2>
         <select id="notebook-role"></select>
       </div>
       <form id="notebook-form">
@@ -103,8 +106,8 @@
     <section id="gift-display" aria-labelledby="shelf-title" hidden>
       <div id="gift-thread" aria-hidden="true"></div>
       <div id="gift-slots" role="group" aria-labelledby="shelf-title"></div>
-      <div id="gift-tag">
-        <h2 id="shelf-title"></h2>
+      <div id="gift-tag" class="paper-card">
+        <h2 id="shelf-title" class="card-title"></h2>
         <p id="gift-details"></p>
         <div class="cottage-strip">
           <select id="gift-picker"></select>
@@ -126,16 +129,16 @@
       </div>
     </div>
     <button type="button" id="seat-empty" hidden></button>
-    <section id="company-cups" aria-labelledby="company-title" hidden>
-      <h2 id="company-title"></h2>
+    <section id="company-cups" class="paper-card" aria-labelledby="company-title" hidden>
+      <h2 id="company-title" class="card-title"></h2>
       <div class="company-actions">
         <button type="button" id="company-quiet" aria-pressed="false"></button>
         <button type="button" id="company-chat"></button>
       </div>
       <p id="company-status" role="status" hidden></p>
     </section>
-    <section id="calendar-sheet" aria-labelledby="calendar-title" hidden>
-      <h2 id="calendar-title"></h2>
+    <section id="calendar-sheet" class="paper-card placed-card" aria-labelledby="calendar-title" hidden>
+      <h2 id="calendar-title" class="card-title"></h2>
       <time id="calendar-date"></time>
       <article id="calendar-event" aria-live="polite">
         <h3 id="calendar-name"></h3>
@@ -156,7 +159,7 @@
     <p id="fallback" role="status" hidden></p>
   </main>
   <script type="module">
-    import("./cottage.mjs?v=0.9.26").then(module => module.startCottage()).catch(() => {
+    import("./cottage.mjs?v=0.9.27").then(module => module.startCottage()).catch(() => {
       const fallback = document.getElementById("fallback")
       fallback.textContent = /^(en|pt|es|ru|ko|ja)/i.test(new URLSearchParams(location.search).get("locale") || "")
         ? "The 3D room could not load." : "暂时无法加载 3D 小屋。"

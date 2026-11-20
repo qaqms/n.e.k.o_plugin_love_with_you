@@ -117,7 +117,8 @@ export function createRecordStation({ locale, selectVinyl }) {
       const left = compact ? 12 : Math.max(sceneEdge + 26, width * .635)
       const top = compact ? sceneEdge + 12 : Math.max(58, Math.min(y - 74, height - 224))
       const endX = compact ? width / 2 : left
-      const endY = compact ? top : top + 17
+      // The thread meets the card's edge level with its title (14 px padding plus half the 34 px heading row).
+      const endY = compact ? top : top + 31
       const dx = endX - x
       const dy = endY - y
       station.style.setProperty("--station-left", `${left}px`)

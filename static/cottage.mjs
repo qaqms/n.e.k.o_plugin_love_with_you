@@ -2,10 +2,11 @@ import * as T from "./engine/three.module.min.js"
 import { EffectComposer, GTAOPass, OutputPass, RenderPass, RoomEnvironment, ShaderPass, UnrealBloomPass }
   from "./engine/three-post.mjs?v=0.9.25"
 import { icon } from "./cottage-icons.mjs?v=0.9.26"
+import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
 import { buildRoom } from "./cottage-scene.mjs?v=0.9.26"
 import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.26"
 import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
-import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.18"
+import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.27"
 import { createPicturePages } from "./cottage-picture.mjs?v=0.9.21"
 import { createGiftShelf, createNotebook, createSeat, livingLabels, localPeriod } from "./cottage-living.mjs?v=0.9.22"
 import { companyLabels, createCalendar, createCompany, createProjector } from "./cottage-company.mjs?v=0.9.22"
@@ -329,6 +330,10 @@ export function startCottage() {
   const { width: pictureWidth, height: pictureHeight } = room.picture.print.geometry.parameters
   const target = new T.Vector3()
   const projected = new T.Vector3()
+  const pictureEdge = new T.Vector3()
+  const picturePages = document.querySelector("#picture-pages")
+  const calendarSheet = document.querySelector("#calendar-sheet")
+  const cardThread = document.querySelector("#card-thread")
   const station = createRecordStation({
     locale,
     selectVinyl(color) {
@@ -479,15 +484,18 @@ export function startCottage() {
       midY = mix(midY, closeSpan * (compact ? -.23 : 0))
       aimCloseup(recordCenter, .44, .82, 3.6, focus)
     }
-    const pictureScale = Math.min((viewportWidth - 36) / 1.13, (viewportHeight - 124) / 1.35, 380)
+    // The frame and the calendar stand to one side so their paper card can open beside them.
+    const pictureScale = cardScale(1.13, 1.35, viewportWidth, viewportHeight, 380)
     const projectorScale = Math.min((viewportWidth - 34) / 2.73, (viewportHeight - 108) / 1.53, 330)
     if (focus > 0 && closeup === "picture") {
       const cameraFocus = T.MathUtils.smoothstep(focus, 0, .73)
       const mix = (from, to) => T.MathUtils.lerp(from, to, cameraFocus)
-      span = zoom(span, viewportHeight / Math.max(1, pictureScale), cameraFocus)
+      const closeSpan = viewportHeight / Math.max(1, pictureScale)
+      const aside = cardFraming(closeSpan, aspect, compact)
+      span = zoom(span, closeSpan, cameraFocus)
       amount = cameraFocus
-      midX = mix(midX, 0)
-      midY = mix(midY, 0)
+      midX = mix(midX, aside.midX)
+      midY = mix(midY, aside.midY)
       aimCloseup(pictureCenter, 0, 0, 3.2, cameraFocus)
     }
     if (focus > 0 && ["notebook", "shelf", "seat"].includes(closeup)) {
@@ -518,12 +526,14 @@ export function startCottage() {
       const motion = returnToSeat ? focus : T.MathUtils.smoothstep(focus, 0, .76)
       const mix = (from, to) => T.MathUtils.lerp(from, to, motion)
       const scale = closeup === "calendar"
-        ? Math.min((viewportWidth - 26) / .59, (viewportHeight - 100) / .74, 520)
+        ? cardScale(.59, .74, viewportWidth, viewportHeight, 430)
         : closeup === "projector" ? projectorScale : Math.min(viewportWidth * .75, viewportHeight * .68, 445)
-      span = zoom(span, viewportHeight / scale, motion)
+      const closeSpan = viewportHeight / scale
+      const aside = closeup === "calendar" ? cardFraming(closeSpan, aspect, compact) : { midX: 0, midY: closeup === "company" ? -.20 : 0 }
+      span = zoom(span, closeSpan, motion)
       amount = motion
-      midX = mix(midX, 0)
-      midY = mix(midY, closeup === "company" ? -.20 : 0)
+      midX = mix(midX, aside.midX)
+      midY = mix(midY, aside.midY)
       const point = closeup === "calendar" ? calendarCenter : closeup === "projector" ? projectorCenter : companyCenter
       const angle = closeup === "company" ? .34 : 0
       const pitch = closeup === "company" ? .65 : 0
@@ -550,7 +560,9 @@ export function startCottage() {
       }
     }
     if (closeup === "picture" && focus > .73) {
-      pages.position(pictureWidth * Math.max(1, pictureScale), pictureHeight * Math.max(1, pictureScale))
+      placeCard(picturePages, cardThread, { compact, width: viewportWidth, height: viewportHeight,
+        side: toScreen(projected.copy(pictureCenter).add(pictureEdge.set(pictureWidth / 2 + .1, 0, 0)).clone()),
+        bottom: toScreen(projected.copy(pictureCenter).add(pictureEdge.set(0, -pictureHeight / 2 - .1, 0)).clone()) })
     }
     if (focus > .63 && closeup === "notebook") {
       const point = toScreen(bookCenter)
@@ -569,14 +581,18 @@ export function startCottage() {
       section.style.setProperty("--cup-y", `${point.y}px`)
     }
     if (closeup === "calendar" && focus > .76) {
-      const scale = viewportHeight / span
-      const section = document.querySelector("#calendar-sheet")
-      section.style.width = `${.502 * scale}px`
-      section.style.height = `${.638 * scale}px`
+      placeCard(calendarSheet, cardThread, { compact, width: viewportWidth, height: viewportHeight,
+        side: toScreen(projected.copy(calendarCenter).add(pictureEdge.set(.32, 0, 0)).clone()),
+        bottom: toScreen(projected.copy(calendarCenter).add(pictureEdge.set(0, -.4, 0)).clone()) })
     }
     if (closeup === "projector" && focus > .76) {
       projector.position(room.projector.width * projectorScale, room.projector.height * projectorScale)
     }
+  }
+
+  function showThread(amount) {
+    cardThread.hidden = amount === 0
+    cardThread.style.setProperty("--arrival", amount)
   }
 
   function toScreen(point) {
@@ -638,8 +654,8 @@ export function startCottage() {
     if (closeup === "picture") {
       // Read the same timeline backward so a mid-flight exit does not jump.
       const phase = (start, end) => T.MathUtils.smoothstep(focus, start, end)
-      room.picture.reveal(phase(.32, .86))
       pages.reveal(phase(.75, .96), phase(.84, 1), opening && focus === 1)
+      showThread(phase(.75, .96))
     }
     if (closeup === "notebook") {
       room.notebook.spine.rotation.z = Math.PI * T.MathUtils.smoothstep(focus, .21, .90)
@@ -654,10 +670,9 @@ export function startCottage() {
       company.show(T.MathUtils.smoothstep(focus, .80, 1), opening && focus === 1)
     }
     if (closeup === "calendar") {
-      const flip = T.MathUtils.smoothstep(focus, .56, .86)
-      room.calendar.front.rotation.x = -Math.PI / 2 * flip
-      room.calendar.front.visible = flip < 1
-      calendar.show(T.MathUtils.smoothstep(focus, .83, 1), opening && focus === 1)
+      const arrival = T.MathUtils.smoothstep(focus, .83, 1)
+      calendar.show(arrival, opening && focus === 1)
+      showThread(arrival)
     }
     if (closeup === "projector") {
       room.projector.reveal(T.MathUtils.smoothstep(focus, .36, .92))
@@ -1096,8 +1111,8 @@ export function startCottage() {
   canvas.addEventListener("webglcontextlost", event => {
     event.preventDefault()
     closeKeepsake()
-    room.picture.reveal(0)
     pages.reveal(0, 0, false)
+    showThread(0)
     room.notebook.spine.rotation.z = 0
     notebook.reveal(0, false)
     shelf.reveal(0, false)

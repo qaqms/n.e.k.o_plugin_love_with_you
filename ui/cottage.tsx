@@ -167,6 +167,6 @@ export function Cottage(props: {
 
   return <div className="lwy-game">
     <iframe ref={frame} title={t("nav.cottage")}
-      src={`/plugin/love_with_you/ui/cottage.html?version=0.9.26&linked=1&locale=${encodeURIComponent(props.locale)}`} />
+      src={`/plugin/love_with_you/ui/cottage.html?version=0.9.27&linked=1&locale=${encodeURIComponent(props.locale)}`} />
   </div>
 }

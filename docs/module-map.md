@@ -1,8 +1,8 @@
 # 模块职责与玩法扩展入口
 
-结构覆盖至版本 0.9.26（2026-11-21）。文中的源码路径均相对插件根目录。[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
+结构覆盖至版本 0.9.27（2026-11-21）。文中的源码路径均相对插件根目录。[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
 
-「我们的小屋」通过 `ui/cottage.tsx` 按需加载 `static/cottage.html`。客厅几何、材质和灯光在 `static/cottage-scene.mjs`，客厅以外的整栋房子（厨房、门廊小院、二楼、楼梯、屋顶）由 `static/cottage-house.mjs` 按 `static/cottage-layout.mjs` 的布局数据生成；透视镜头、房间切换（总览与各房间视角，一楼视角时二楼整体抬走、挡在镜头前的侧墙淡出）、工具栏菜单（房间、光线与时段及画质、物品清单）、交互、本地偏好、分时段光照和画质档位在 `static/cottage.mjs`；物品清单按布局槽位标注所在房间，在其他房间选择客厅物品会先回到客厅再打开；后期处理与环境光照来自打包的 `static/engine/three-post.mjs`。`static/cottage-record.mjs` 布置唱机引线和封套，`static/cottage-picture.mjs` 将便签与一起看过的记录逐页放在木框内。面板接收相框选中的记录 ID，并通过 `ExperienceDestination` 打开原记录。
+「我们的小屋」通过 `ui/cottage.tsx` 按需加载 `static/cottage.html`。客厅几何、材质和灯光在 `static/cottage-scene.mjs`，客厅以外的整栋房子（厨房、门廊小院、二楼、楼梯、屋顶）由 `static/cottage-house.mjs` 按 `static/cottage-layout.mjs` 的布局数据生成；透视镜头、房间切换（总览与各房间视角，一楼视角时二楼整体抬走、挡在镜头前的侧墙淡出）、工具栏菜单（房间、光线与时段及画质、物品清单）、交互、本地偏好、分时段光照和画质档位在 `static/cottage.mjs`；物品清单按布局槽位标注所在房间，在其他房间选择客厅物品会先回到客厅再打开；物件推近后的界面统一为纸页卡片（`.paper-card`），相框和日历的卡片由 `static/cottage-card.mjs` 放在物件一侧（窄屏为物件下方），并用细线连到物件，便签本和投影幕的文字仍显示在物件上；后期处理与环境光照来自打包的 `static/engine/three-post.mjs`。`static/cottage-record.mjs` 布置唱机引线和封套，`static/cottage-picture.mjs` 将便签与一起看过的记录逐页放在木框内。面板接收相框选中的记录 ID，并通过 `ExperienceDestination` 打开原记录。
 
 `static/cottage-living.mjs` 管理便签编辑、礼物选位及沙发控制。便签通过面板的 `experience_action` 使用角色修订号及请求回执，陈列架按已送礼物的记录 ID 恢复浏览器本地摆放。
 

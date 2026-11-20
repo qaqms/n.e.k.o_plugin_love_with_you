@@ -17,15 +17,12 @@
 
 ## 2. 目录
 
-项目主人 2026-11-16 说明，最新代码在 `F:\ai\neko kaifa8\n.e.k.o_plugin_love_with_you-main\`，以下以工作区 `F:\ai\neko kaifa8\` 为准（此前也曾在 `D:\neko kaifa2\` 开发；同名插件目录 `n.e.k.o_plugin_love_with_you\` 在 F 盘是过时副本，不要动）：
+项目主人 2026-11-20 说明，最新代码在 `F:\ai\neko kaifa5\n.e.k.o_plugin_love_with_you\`（插件 0.9.24），以下以工作区 `F:\ai\neko kaifa5\` 为准。`F:\ai\neko kaifa8\` 等早先的工作区是旧版本，不要在那里开发。插件目录从 2026-11-20 起是 git 仓库（`main` 分支，首个提交为 0.9.24 基线），改动前后可用 git 对比和回退。
 
 | 路径 | 是什么 | 能否修改 |
 | --- | --- | --- |
 | `N.E.K.O\` | 宿主源码 | **不能** |
-| `n.e.k.o_plugin_love_with_you-main\` | **当前插件源码，所有开发都在这里** | 能 |
-| `n.e.k.o_plugin_love_with_you\archive\backups\` | 插件改动前的源码备份 | 只读 |
-| `foe-sprite-source\` | 美术源文件：AI 原图、提示词、分件图、绑定脚本；不随插件发布 | 能 |
-| `play-adventure.bat` | 双击启动游戏预览 | 能 |
+| `n.e.k.o_plugin_love_with_you\` | **当前插件源码，所有开发都在这里** | 能 |
 
 插件内与游戏有关的部分：
 

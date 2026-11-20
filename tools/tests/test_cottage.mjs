@@ -34,8 +34,9 @@ async function roomPage(viewport, isMobile = false, demo = false, reducedMotion 
   return { page, frame, nav, errors }
 }
 
-async function capture(page, frame, filename) {
-  const png = await frame.locator("#room").screenshot({
+async function capture(page, frame, filename, selector = "#room") {
+  // Every capture is reduced to 100x100; pass a smaller selector when only text inside it changes.
+  const png = await frame.locator(selector).screenshot({
     path: filename && resolve(artifacts, filename),
     animations: "disabled",
   })
@@ -495,14 +496,16 @@ test("the wall frame approaches, flips one memory at a time, and restores the ro
       [["approaching", true], ["picture", false]])
     const first = await capture(page, frame, "cottage-picture-desktop.png")
     assert.ok(changedPixels(initial, first) > 2300)
+    const firstCaption = await capture(page, frame, undefined, "#picture-caption")
     assert.ok(await pages.getByRole("button", { name: "上一段回忆" }).isDisabled())
     await pages.getByRole("button", { name: "下一段回忆" }).click()
     await pages.getByRole("heading", { name: "山间旅行纪录片" }).waitFor()
     assert.equal(await pages.locator("h3:visible").count(), 1)
     assert.equal(await pages.locator("#picture-count").innerText(), "2 / 2")
     await pages.getByText("12:42", { exact: true }).waitFor()
-    const second = await capture(page, frame, "cottage-picture-screen.png")
-    assert.ok(changedPixels(first, second) > 100)
+    await capture(page, frame, "cottage-picture-screen.png")
+    // Compare the caption alone: at full-room scale a text-only page turn falls below the noise floor on Windows fonts.
+    assert.ok(changedPixels(firstCaption, await capture(page, frame, undefined, "#picture-caption")) > 100)
     assert.ok(await pages.getByRole("button", { name: "下一段回忆" }).isDisabled())
     await page.keyboard.press("Escape")
     await frame.locator("#picture:focus").waitFor()

@@ -5,11 +5,11 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const require = createRequire(import.meta.url)
-const lucideRoot = process.argv[2] || dirname(require.resolve("lucide/package.json"))
+const lucideRoot = process.argv.slice(2).find(arg => !arg.startsWith("--")) || dirname(require.resolve("lucide/package.json"))
 const { icons } = require(lucideRoot)
 const names = ["Heart", "History", "CalendarDays", "MessageCircle", "Settings", "PanelLeftClose",
   "PanelLeftOpen", "RotateCw", "ChevronLeft", "ChevronRight", "Trash2", "Save", "Plus", "Pencil", "Check",
-  "ShoppingBag", "Gift", "Coins", "Package", "Coffee", "CakeSlice", "Candy", "Flower2", "BookOpen", "Gamepad2", "Hand", "X"]
+  "ShoppingBag", "Gift", "Coins", "Package", "Coffee", "CakeSlice", "Candy", "Flower2", "BookOpen", "Gamepad2", "Hand", "X", "House"]
 const svg = Object.fromEntries(names.map(name => [name, `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${(icons[name][0] === "svg" ? icons[name][2] : icons[name]).map(([tag, attrs]) =>
   `<${tag} ${Object.entries(attrs).map(([key, value]) => `${key}="${value}"`).join(" ")}/>`).join("")}</svg>`]))
 const license = readFileSync(join(lucideRoot, "LICENSE"), "utf8")
@@ -28,18 +28,22 @@ export function Icon(props: { name: keyof typeof icons }) {
   return <span className="lwy-icon" aria-hidden="true" style={{ maskImage: image, WebkitMaskImage: image }} />
 }
 `
-if (!process.argv.includes("--game-only")) {
+if (!process.argv.some(arg => ["--game-only", "--cottage-only"].includes(arg))) {
   writeFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../ui/icons.tsx"), output)
 }
 
 const gameNames = ["Coins", "ShoppingBag", "Undo2", "ArrowLeft", "Plus", "Check",
   "Heart", "Footprints", "Swords", "Magnet", "Flame", "Wind", "Shield", "RotateCw", "Save", "BookOpen", "Snowflake",
   "Pause", "Sparkles", "Zap", "Mountain", "Orbit", "Scan", "Lamp", "Ban"]
-const gameIcons = Object.fromEntries(gameNames.map(name => [name,
+const cottageNames = ["Scan", "Lamp", "Blinds", "ChevronLeft", "ChevronRight", "Disc3", "Image",
+  "BookOpen", "Gift", "Armchair", "Sun", "Sunset", "Moon", "Clock", "Plus", "X", "Pencil", "Save",
+  "CalendarDays", "Projector", "Coffee", "MessageCircle"]
+function writeStaticIcons(filename, names) {
+  const staticIcons = Object.fromEntries(names.map(name => [name,
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${(icons[name][0] === "svg" ? icons[name][2] : icons[name]).map(([tag, attrs]) =>
     `<${tag} ${Object.entries(attrs).map(([key, value]) => `${key}="${value}"`).join(" ")}/>`).join("")}</svg>`]))
-if (!process.argv.includes("--ui-only")) writeFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../static/icons.mjs"),
-  `/* Generated from Lucide by tools/assets/prepare_ui_icons.mjs.\n${license}\n*/\nconst icons = ${JSON.stringify(gameIcons, null, 2)}
+  writeFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../static", filename),
+    `/* Generated from Lucide by tools/assets/prepare_ui_icons.mjs.\n${license}\n*/\nconst icons = ${JSON.stringify(staticIcons, null, 2)}
 
 export function icon(name) {
   const node = document.createElement("span")
@@ -50,3 +54,6 @@ export function icon(name) {
   return node
 }
 `)
+}
+if (!process.argv.some(arg => ["--ui-only", "--cottage-only"].includes(arg))) writeStaticIcons("icons.mjs", gameNames)
+if (!process.argv.some(arg => ["--ui-only", "--game-only"].includes(arg))) writeStaticIcons("cottage-icons.mjs", cottageNames)

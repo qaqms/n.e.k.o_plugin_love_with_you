@@ -196,7 +196,7 @@ def earliest_chat_date(rows: Any, now: float | None = None) -> str | None:
             metadata.get("source") in ("theater_numeric_v2", "avatar-drop", "tool", "agent")
             or "avatar-drop" in sources
             or metadata.get("event_type") in (
-                "gift_received", "relationship_context", "proactive_confession", "experience_note",
+                "gift_received", "relationship_context", "proactive_confession", "experience_note", "cottage_chat",
             )
             or metadata.get("turn_type") in ("proactive_reply", "proactive_instruction")
         ):

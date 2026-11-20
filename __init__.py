@@ -2255,9 +2255,22 @@ class LoveWithYouPlugin(NekoPluginBase):
         }, "required": ["request_id", "character", "zone"],
     })
     async def touch_portrait(self, request_id: Any = None, character: Any = None, zone: Any = None, **_: Any):
+        if not isinstance(zone, str) or zone not in prompts.PORTRAIT_TOUCH_ACTIONS:
+            return Err(SdkError("touch_invalid"))
+        return await self._respond_to_panel_gesture(request_id, character, zone)
+
+    @ui.action(label="聊聊今天", refresh_context=False)
+    @plugin_entry(id="invite_cottage_chat", name="聊聊今天", input_schema={
+        "type": "object", "properties": {
+            "request_id": {"type": "string"}, "character": {"type": "string"},
+        }, "required": ["request_id", "character"],
+    })
+    async def invite_cottage_chat(self, request_id: Any = None, character: Any = None, **_: Any):
+        return await self._respond_to_panel_gesture(request_id, character, "cottage_chat")
+
+    async def _respond_to_panel_gesture(self, request_id: Any, character: Any, zone: str):
         if (not isinstance(request_id, str) or not _TOUCH_REQUEST_ID.fullmatch(request_id)
-                or not isinstance(character, str) or not 0 < len(character) <= 256
-                or not isinstance(zone, str) or zone not in prompts.PORTRAIT_TOUCH_ACTIONS):
+                or not isinstance(character, str) or not 0 < len(character) <= 256):
             return Err(SdkError("touch_invalid"))
 
         def check_request() -> Any:
@@ -2289,18 +2302,23 @@ class LoveWithYouPlugin(NekoPluginBase):
             scope = engine.scope_key_for(self._state, character)
             record = engine.get_record(self._state, scope, create=False) or engine.new_record()
             stage = record["stage"]
-            prompt = prompts.portrait_touch_prompt(
-                zone, stage, engine.effective_nickname(record, stage),
-                addressing=engine.resolve_addressing(record), confirmed=record.get("confessed") is True,
-            )
+            nickname = engine.effective_nickname(record, stage)
+            addressing = engine.resolve_addressing(record)
+            confirmed = record.get("confessed") is True
+            event_type = "portrait_touch"
+            if zone == "cottage_chat":
+                event_type = "cottage_chat"
+                prompt = prompts.cottage_chat_prompt(stage, nickname, addressing=addressing, confirmed=confirmed)
+            else:
+                prompt = prompts.portrait_touch_prompt(zone, stage, nickname, addressing=addressing, confirmed=confirmed)
             self._touch_ready_at = time.monotonic() + _TOUCH_COOLDOWN
             status = "unknown"
             try:
                 receipt = self.push_message(
                     source=self.plugin_id, target_lanlan=character, visibility=[], ai_behavior="respond",
                     parts=[{"type": "text", "text": prompt}],
-                    coalesce_key=f"{self.plugin_id}:portrait-touch:{character}",
-                    metadata={"event_type": "portrait_touch", "expires_in_s": 10},
+                    coalesce_key=f"{self.plugin_id}:{event_type.replace('_', '-')}:{character}",
+                    metadata={"event_type": event_type, "expires_in_s": 10},
                 )
                 if isinstance(receipt, dict):
                     if receipt.get("submitted") is True:
@@ -2308,7 +2326,7 @@ class LoveWithYouPlugin(NekoPluginBase):
                     elif receipt.get("submitted") is False:
                         status = "unavailable"
             except Exception as exc:
-                self.logger.warning("与你相恋: portrait touch submission unconfirmed: {}", type(exc).__name__)
+                self.logger.warning("与你相恋: panel gesture submission unconfirmed: {}", type(exc).__name__)
             self._touch_receipts[request_id] = (character, zone, status)
             if len(self._touch_receipts) > 64:
                 self._touch_receipts.pop(next(iter(self._touch_receipts)))

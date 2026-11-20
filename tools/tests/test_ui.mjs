@@ -496,7 +496,7 @@ test("overview artwork stays with its content and scales smoothly in compact hos
     await page.setViewportSize({ width, height: 510 })
     await settle(page)
     const current = await geometry()
-    if (width >= 740) assert.ok(current.height >= 296, `portrait remains prominent at ${width}px`)
+    if (width >= 740) assert.equal(current.height, 216, `portrait keeps a compact slot at ${width}px`)
     if (previous) {
       const allowance = (previous.viewport - width) * 0.5 + 1
       assert.ok(Math.abs(current.width - previous.width) <= allowance, `smooth width at ${width}px`)
@@ -774,10 +774,10 @@ test("desktop navigation groups daily activities, keeps settings last and preser
   const page = await pageFor()
   assert.equal(await page.locator(".sidebar-collapsed").count(), 0)
   assert.deepEqual(await page.locator(".lwy-nav button").evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))),
-    ["关系概览", "共同经历", "礼物商店", "心动记录", "纪念日", "专属称呼", "同行游戏", "设置"])
-  assert.equal(await page.getByRole("group", { name: "日常相处", exact: true }).getByRole("button").count(), 3)
+    ["关系概览", "我们的小屋", "共同经历", "礼物商店", "心动记录", "纪念日", "专属称呼", "同行游戏", "设置"])
+  assert.equal(await page.getByRole("group", { name: "日常相处", exact: true }).getByRole("button").count(), 4)
   assert.equal(await page.getByRole("group", { name: "关系记录", exact: true }).getByRole("button").count(), 4)
-  assert.equal(await page.locator(".lwy-nav button:visible").count(), 8)
+  assert.equal(await page.locator(".lwy-nav button:visible").count(), 9)
   await page.getByRole("button", { name: "收起侧栏", exact: true }).click()
   await navigate(page, "纪念日")
   await page.evaluate(() => window.__uiTest.update({ host_online: false }))
@@ -1945,7 +1945,7 @@ test("empty and artwork-off states recover without blank navigation", async () =
   await page.close()
 })
 
-test("translated labels and long character names fit all six mobile pages", async () => {
+test("translated labels and long character names fit the relationship pages on mobile", async () => {
   for (const locale of ["en", "ja", "ko", "zh-TW", "ru", "es", "pt"]) {
     const page = await pageFor({ viewport: { width: 390, height: 844 } }, `?locale=${locale}`)
     await page.evaluate(() => {
@@ -1953,8 +1953,8 @@ test("translated labels and long character names fit all six mobile pages", asyn
       state.scopes[0].label = "这是一个很长的角色名称ABCDEFGHIJKLMNOPQRSTUVWXYZ"
       window.__uiTest.update({ scopes: state.scopes })
     })
-    for (let index = 0; index < sections.length; index++) {
-      await page.locator(".lwy-nav button").nth(index).click()
+    for (const item of await page.locator(".lwy-nav button:not([data-section='game'], [data-section='cottage'])").all()) {
+      await item.click()
       await settle(page)
       await noHorizontalOverflow(page)
     }
@@ -2065,7 +2065,7 @@ test("overview keeps the relationship first and links the latest change to full 
   const meter = page.getByRole("meter", { name: "好感度" })
   assert.equal(await meter.getAttribute("aria-valuenow"), "67")
   assert.equal(await page.locator(".lwy-today").isVisible(), false)
-  await page.locator(".lwy-overview-footer summary").press("Enter")
+  await page.locator(".lwy-overview-footer summary").filter({ hasText: "今日变化" }).press("Enter")
   await page.locator(".lwy-today").getByText(/今日心动/).waitFor()
   assert.match(await page.locator(".lwy-recent").textContent(), /你记得她说过的小事/)
   await page.getByRole("button", { name: "查看全部", exact: true }).click()

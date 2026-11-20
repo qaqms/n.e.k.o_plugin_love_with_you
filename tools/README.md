@@ -14,9 +14,11 @@
 
 ```powershell
 npm --prefix tools run build:panel
+npm --prefix tools run build:cottage
 npm --prefix tools run check
 npm --prefix tools run test:rules
 npm --prefix tools run test:navigation
+npm --prefix tools run test:cottage
 npm --prefix tools test
 npm --prefix tools run preview
 python -B tools/preview/adventure_preview.py --port 4321

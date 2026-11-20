@@ -127,6 +127,34 @@ if (query.get("moments") === "1") state.experiences = {
       outcome:"",pending_outcome:"",prompt_submitted:false}],
   }},
 };
+if (query.get("cottageDemo") === "1") {
+  const now = Math.floor(Date.now() / 1000);
+  state.scopes[0].today_events = [
+    { kind: "custom", type: "date", count: 0, title: "我们的小屋纪念日", date: state.today, days_until: 0 },
+  ];
+  state.scopes[0].upcoming.unshift(...state.scopes[0].today_events);
+  state.shop.history = [
+    { id: "demo-plush", item_id: "plush", character: "YUI", ts: now - 3200, reaction: "received" },
+    { id: "demo-flowers", item_id: "flowers", character: "茉子", ts: now - 85000, reaction: "received" },
+  ];
+  state.experiences = {
+    enabled: true, revision: 1, watch_tracking: true, watches: {
+      YUI: { id: "demo-watch", title: "山间旅行纪录片", watched_at: now - 300, position: 762, completed: false,
+        url: "http://127.0.0.1:48911/watch_together?job=demo&version=demo&lanlan_name=YUI" },
+    }, characters: {
+      YUI: { revision: 1, note: null, followups: [], memories: [
+        { id: "demo-rain", title: "下雨的傍晚", text: "我们在窗边坐了一会儿，听雨落在屋檐上。", created_at: now - 1200 },
+        { id: "demo-jazz", kind: "music", title: "雨后爵士", progress: "听到第三首", text: "最后那段钢琴独奏，我们又听了一遍。", created_at: now - 600 },
+        { id: "demo-piano", kind: "music", title: "窗边的钢琴", progress: "听完了整张唱片", text: "窗帘拉开时，刚好听到最后一个音。", created_at: now - 3100 },
+        { id: "demo-night", kind: "music", title: "深夜电台", text: "最喜欢开头那段人声。", created_at: now - 6400 },
+        { id: "demo-film", kind: "screen", title: "山间旅行纪录片", progress: "12:42", text: "看到旅行者走出山谷。", created_at: now - 3000 },
+      ] },
+      "茉子": { revision: 1, note: null, followups: [], memories: [
+        { id: "demo-moko", kind: "music", title: "晚风里的吉他", text: "一起听完了整张唱片。", created_at: now - 420 },
+      ] },
+    },
+  };
+}
 const uiTest = window.__uiTest = {
   calls: [], failAction: "", failMessage: "Preview save failed", failRefresh: false, delay: 0, refreshDelay: 0,
   failAfterAction: "", reaction: "submitted", failCode: "",
@@ -205,6 +233,12 @@ const previewApi = {
           record.memories.unshift({...record.note,title:values.title,text:values.text,status:"saved",recall:true});
           record.note = null;
         }
+        if (args.operation === "save_new_note") {
+          if (!experience.enabled) throw new Error("experience_disabled");
+          if (record.note) throw new Error("experience_note_active");
+          if (record.memories.length >= 30) throw new Error("experience_limit");
+          record.memories.unshift({id:result.id,title:values.title,text:values.text,status:"saved",recall:true,created_at:Date.now()/1000});
+        }
         if (args.operation === "cancel_note") record.note = null;
         if (args.operation === "start_activity") record.activity = {
           id:result.id,kind:values.kind,title:values.title,progress:values.progress,
@@ -249,7 +283,7 @@ const previewApi = {
       character:current.label || state.current_character, source:"host_recent_history", scanned_roles:state.per_character ? 1 : 2,
     };
     if (action === "choose_portrait") return fixture.items.find(item => item.id === state.portraits.settings.selected_id) || {available:false};
-    if (action === "touch_portrait") return {status:"submitted",request_id:args.request_id};
+    if (action === "touch_portrait" || action === "invite_cottage_chat") return {status:"submitted",request_id:args.request_id};
     if (action === "get_portrait") {
       const item = fixture.items.find(item => item.id === args.item_id);
       if (!item) return {available:false};
@@ -436,7 +470,7 @@ function repaint() {
   window.NekoUiKit.render(window.NekoUiKit.h(__Panel, {
     ...window.__NEKO_PAYLOAD, state:structuredClone(state), api:previewApi,
     t:window.NekoUiKit.t, useLocalState:(key, initial) => window.NekoUiKit.useLocalState(key,
-      key === "lwy:section" && ["settings", "shop", "nicknames", "experiences"].includes(query.get("page")) ? query.get("page") : initial),
+      key === "lwy:section" && ["settings", "shop", "nicknames", "experiences", "cottage"].includes(query.get("page")) ? query.get("page") : initial),
   }), document.getElementById("root"));
 }
 repaint();
@@ -444,17 +478,28 @@ repaint();
 </script></body></html>`
 }
 
+const cottageAssets = new Set([
+  "cottage.html", "cottage.css", "cottage.mjs", "cottage-scene.mjs", "cottage-icons.mjs", "cottage-record.mjs", "cottage-picture.mjs",
+  "cottage-living.mjs", "cottage-company.mjs",
+  "engine/three.module.min.js", "engine/three.core.min.js", "engine/three-rounded-box.mjs",
+])
+const assetPrefix = "/plugin/love_with_you/ui/"
+
 export async function startPreview(port = 0, sourcePath = join(pluginRoot, "ui/panel.tsx")) {
   const server = createServer((req, res) => {
     try {
       const requestUrl = new URL(req.url, "http://localhost")
       const path = requestUrl.pathname
+      const asset = path.startsWith(assetPrefix) ? path.slice(assetPrefix.length) : ""
       if (path.startsWith("/image/")) {
         const [, , id, variant] = path.split("/")
         const item = fixture().items.find(entry => entry.id === id)
         if (!item || !["thumb", "display"].includes(variant)) { res.writeHead(404).end(); return }
         const image = readFileSync(join(pluginRoot, "assets/portraits", variant === "thumb" ? item.thumbnail : item.file))
         res.writeHead(200, { "Content-Type": "text/plain" }).end(`data:image/webp;base64,${image.toString("base64")}`)
+      } else if (cottageAssets.has(asset)) {
+        const type = asset.endsWith(".html") ? "text/html" : asset.endsWith(".css") ? "text/css" : "text/javascript"
+        res.writeHead(200, { "Content-Type": `${type}; charset=utf-8` }).end(readFileSync(join(pluginRoot, "static", asset)))
       } else {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(document(sourcePath, requestUrl.search))
       }

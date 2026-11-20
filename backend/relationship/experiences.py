@@ -28,7 +28,7 @@ MAX_BYTES = 768 * 1024
 _IDENTIFIER = re.compile(r"^[a-zA-Z0-9_-]{8,80}$")
 _WATCH_ID = re.compile(r"[a-f0-9]{32}")
 _OPERATIONS = {
-    "start_note", "draft_note", "save_note", "cancel_note", "edit_memory",
+    "start_note", "draft_note", "save_note", "save_new_note", "cancel_note", "edit_memory",
     "delete_memory", "toggle_memory", "propose_followup", "confirm_followup",
     "edit_followup", "propose_outcome", "save_outcome", "close_followup",
     "delete_followup", "invite", "start_activity", "save_activity", "cancel_activity", "save_tracked_watch",
@@ -310,9 +310,19 @@ def _change(record: dict[str, Any], operation: str, values: dict[str, Any], toda
             })
         record["activity"] = None
         return {"id": item_id}
-    if operation == "start_note":
+    if operation in {"start_note", "save_new_note"}:
         if note:
             raise ExperienceError("experience_note_active")
+        if operation == "save_new_note":
+            if len(record["memories"]) >= NOTE_LIMIT:
+                raise ExperienceError("experience_limit")
+            memory = {
+                "id": uuid.uuid4().hex, "title": _text(values.get("title"), TITLE_LIMIT),
+                "text": _text(values.get("text"), TEXT_LIMIT),
+                "status": "saved", "created_at": now, "recall": True,
+            }
+            record["memories"].insert(0, memory)
+            return {"id": memory["id"]}
         note = {
             "id": uuid.uuid4().hex, "title": _text(values.get("title"), TITLE_LIMIT),
             "text": _text(values.get("text", ""), TEXT_LIMIT, required=False),

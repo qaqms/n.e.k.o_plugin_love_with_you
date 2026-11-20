@@ -84,6 +84,16 @@ def portrait_touch_prompt(
     )
 
 
+def cottage_chat_prompt(stage: str, nickname: str, *, addressing: dict[str, Any], confirmed: bool) -> str:
+    return (
+        "【小屋邀请】用户在小屋的沙发旁为你留了一只杯子，主动邀请你聊聊今天。"
+        f"当前关系：{relationship_name(stage, confirmed)}。{stage_tone(stage, confirmed=confirmed)}\n"
+        + nickname_line(nickname, addressing)
+        + "按人设和对话的语言自然接话，可以问一个轻松的问题。"
+        "不要编造用户今天的经历，不要声称自己出现在3D小屋里，不调用工具或保存回忆。一到两句话即可。"
+    )
+
+
 STAGE_NAMES: dict[str, str] = {
     "stranger": "陌生",
     "familiar": "熟悉",

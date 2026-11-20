@@ -159,6 +159,31 @@ def test_portrait_touch_uses_live_character_and_stage_without_changing_state(
     assert plugin._state == before
 
 
+def test_cottage_chat_only_invites_the_active_role_and_replays_without_sending_twice(
+    plugin, runtime, monkeypatch, module_clock,
+):
+    monkeypatch.setattr(runtime.host, "fetch_characters", lambda: (["YUI", "MIO"], "YUI"))
+    module_clock.monotonic = lambda: 123.0
+    plugin.push_message = Mock(return_value={"submitted": True})
+    before = copy.deepcopy(plugin._state)
+
+    def invite(request, character="YUI"):
+        return asyncio.run(plugin.invite_cottage_chat(request, character))
+
+    assert str(invite("cottage_wrong_role", "MIO").error) == "touch_character_changed"
+    first = invite("cottage_invite_001")
+    assert first.value["status"] == "submitted"
+    assert invite("cottage_invite_001").value == first.value
+    assert str(invite("cottage_invite_002").error) == "touch_cooldown"
+    plugin.push_message.assert_called_once()
+    args = plugin.push_message.call_args.kwargs
+    assert args["target_lanlan"] == "YUI"
+    assert args["metadata"]["event_type"] == "cottage_chat"
+    assert "聊聊今天" in args["parts"][0]["text"]
+    assert runtime.conv._special_message(args["metadata"])
+    assert plugin._state == before
+
+
 def restart_args(plugin, scope="shared"):
     module = sys.modules[plugin.__class__.__module__]
     record = module.engine.get_record(plugin._state, scope)
@@ -257,6 +282,30 @@ def test_experience_actions_are_opt_in_atomic_and_do_not_change_affection_or_coi
     assert (plugin._state["shared"], plugin._state["shop"]) == before
     saved, _ = plugin._state_file.load()
     assert saved["experiences"] == plugin._state["experiences"]
+
+
+def test_cottage_note_saves_once_and_preserves_existing_drafts(plugin, runtime):
+    def perform(operation, values, character="YUI"):
+        args = experience_args(plugin, operation, values, character)
+        return asyncio.run(plugin.experience_action(**args))
+
+    values = {"title": "Outside the window", "text": "The sky turned orange."}
+    assert isinstance(perform("save_new_note", values), runtime.Err)
+    assert isinstance(perform("configure", {"enabled": True}, ""), runtime.Ok)
+    draft = perform("start_note", values)
+    assert isinstance(draft, runtime.Ok)
+    assert isinstance(perform("save_new_note", values), runtime.Err)
+    assert plugin._state["experiences"]["characters"]["YUI"]["note"]["id"] == draft.value["id"]
+    assert isinstance(perform("cancel_note", {"id": draft.value["id"]}), runtime.Ok)
+    assert isinstance(perform("save_new_note", {**values, "text": ""}), runtime.Err)
+    args = experience_args(plugin, "save_new_note", values)
+    result = asyncio.run(plugin.experience_action(**args))
+    assert isinstance(result, runtime.Ok)
+    assert asyncio.run(plugin.experience_action(**args)).value["replay"]
+    saved, _ = plugin._state_file.load()
+    record = saved["experiences"]["characters"]["YUI"]
+    assert record["note"] is None
+    assert [(item["id"], item["text"]) for item in record["memories"]] == [(result.value["id"], values["text"])]
 
 
 def test_experience_failed_save_rolls_back_content_and_receipt(plugin, runtime, monkeypatch):

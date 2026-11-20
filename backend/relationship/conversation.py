@@ -91,7 +91,7 @@ def _special_message(metadata: dict[str, Any]) -> bool:
         metadata.get("source") in ("theater_numeric_v2", "avatar-drop", "tool", "agent", "proactive")
         or "avatar-drop" in sources or proof.get("origin") in ("tool", "agent")
         or metadata.get("event_type") in (
-            "gift_received", "relationship_context", "proactive_confession", "experience_note", "portrait_touch",
+            "gift_received", "relationship_context", "proactive_confession", "experience_note", "portrait_touch", "cottage_chat",
         )
         or metadata.get("turn_type") in ("proactive_reply", "proactive_instruction")
     )

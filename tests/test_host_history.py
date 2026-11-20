@@ -66,6 +66,7 @@ def test_legacy_host_reply_stamps_require_a_real_preceding_user_message(host, se
     ("[20260101 Thu 12:00] tool", {"chat_original_source": {"origin": "tool"}}),
     ("[20260101 Thu 12:00] proactive", {"turn_type": "proactive_reply"}),
     ("[20260101 Thu 12:00] invitation", {"event_type": "experience_note"}),
+    ("[20260101 Thu 12:00] cottage invitation", {"event_type": "cottage_chat"}),
 ])
 def test_legacy_reply_stamp_rejects_invalid_or_generated_replies(host, prefix, metadata):
     rows = [

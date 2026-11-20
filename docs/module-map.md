@@ -1,6 +1,12 @@
 # 模块职责与玩法扩展入口
 
-结构覆盖至版本 0.9.12（2026-11-20）。文中的源码路径均相对插件根目录。[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
+结构覆盖至版本 0.9.24（2026-11-20）。文中的源码路径均相对插件根目录。[架构沿革](architecture.md)保留各版本设计。完整目录见[文档索引](README.md)。
+
+「我们的小屋」通过 `ui/cottage.tsx` 按需加载 `static/cottage.html`。房间几何与材质在 `static/cottage-scene.mjs`，镜头、交互、本地偏好和投影在 `static/cottage.mjs`。`static/cottage-record.mjs` 布置唱机引线和封套，`static/cottage-picture.mjs` 将便签与一起看过的记录逐页放在木框内。面板接收相框选中的记录 ID，并通过 `ExperienceDestination` 打开原记录。
+
+`static/cottage-living.mjs` 管理便签编辑、礼物选位及沙发控制。便签通过面板的 `experience_action` 使用角色修订号及请求回执，陈列架按已送礼物的记录 ID 恢复浏览器本地摆放。
+
+`static/cottage-company.mjs` 管理双人杯、日历和投影幕的场景界面。面板读取现有纪念日与观看追踪，并将 `invite_cottage_chat` 交给宿主消息通道。宿主当前角色在提交时重新校验。
 
 发布工具 `tools/build/audit_release.py` 扫描源码、历史与导入包并隐去疑似凭据值；`verify_adventure_package.py` 验证运行资源、文件范围、哈希及合成旧存档迁移；`precheck_release.py` 在临时源码副本调用官方 SDK 预检。对应路径与凭据泄漏回归见 `tests/test_release_hygiene.py`，检查结果及素材许可待办见[发布审计](audits/release-readiness-2026-11-16.md)。浏览器测试拥有自己的临时存档目录，并在正常结束及启动失败时清理。
 
@@ -40,7 +46,7 @@ README 面向插件用户；安装、功能和隐私集中在首页，开发入�
 | `static/index.html`、`static/adventure.css` | 游戏文档和布局；顶部常驻测试版提示，桌面与窄屏均完整显示 | `tools/tests/test_companion_navigation.mjs`；截图检查 |
 | `ui/shop.tsx` | 商店页签、送礼参与者、送礼确认、原请求、商店回执字段核对 | `tools/tests/test_ui.mjs` 中商店用例 |
 | `ui/experiences.tsx` | 经历参与者、页签、绑定角色与修订的表单、原请求、经历回执核对 | `tools/tests/test_experiences_ui.mjs` |
-| `ui/together.tsx` | 首页只读摘要与跳转目标 | `tools/tests/test_overview_ui.mjs` |
+| `ui/together.tsx` | 概览折叠区内按角色显示的只读摘要与跳转目标 | `tools/tests/test_overview_ui.mjs` |
 | `ui/requests.ts` | 共用返回值解包、完整错误码识别、提交/确认/刷新结果；`RunAction` 合同 | `tools/tests/test_requests.mjs` |
 | `ui/refresh.ts` | 单次读取完成后安排下一次后台刷新；操作、编辑或隐藏时暂停，卸载后不继续排队 | 浏览器整页回归 |
 | `ui/portrait-import.tsx` | 文件预览、裁边编码、批次状态及内容去重导入 | `tools/tests/test_ui.mjs` 中导入用例 |

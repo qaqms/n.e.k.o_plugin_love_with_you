@@ -31,6 +31,7 @@ import { Together, TOGETHER_STYLE } from "./together"
 import type { AdventureResume } from "./together"
 import { errorCode, submitAction, unwrap } from "./requests"
 import { CompanionGame, GAME_STYLE } from "./companion-game"
+import { Cottage } from "./cottage"
 import { PortraitLightbox, PORTRAIT_LIGHTBOX_STYLE } from "./portrait-lightbox"
 import { portraitTouchPresets } from "./portrait-touch-presets"
 import { useBackgroundRefresh } from "./refresh"
@@ -140,15 +141,15 @@ type Dashboard = {
   portraits?: PortraitLibrary | null
 }
 
-type Section = "heart" | "history" | "dates" | "nicknames" | "shop" | "settings" | "experiences" | "game"
+type Section = "heart" | "history" | "dates" | "nicknames" | "shop" | "settings" | "experiences" | "game" | "cottage"
 type Feedback = { tone: "pending" | "success" | "warning" | "danger"; message: string; action: string }
 
 const SECTION_GROUPS: Array<{ label: string; sections: Section[] }> = [
-  { label: "nav.daily", sections: ["heart", "experiences", "shop"] },
+  { label: "nav.daily", sections: ["heart", "cottage", "experiences", "shop"] },
   { label: "nav.records", sections: ["history", "dates", "nicknames", "game"] },
 ]
 const SECTIONS: Section[] = [...SECTION_GROUPS.flatMap(group => group.sections), "settings"]
-const SECTION_ICONS = { heart: "Heart", history: "History", dates: "CalendarDays", nicknames: "MessageCircle", shop: "ShoppingBag", settings: "Settings", experiences: "BookOpen", game: "Gamepad2" } as const
+const SECTION_ICONS = { heart: "Heart", history: "History", dates: "CalendarDays", nicknames: "MessageCircle", shop: "ShoppingBag", settings: "Settings", experiences: "BookOpen", game: "Gamepad2", cottage: "House" } as const
 const TREND_RANGES = [30, 90, 365]
 
 // Theme + host-control overrides are document-wide on purpose: useConfirm()
@@ -231,19 +232,22 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .lwy-scope select { max-width: 100%; width: 180px; min-height: 38px; padding: 6px 10px; border: 1px solid var(--line);
   border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; font-size: 13px; }
 .lwy-notices { display: grid; gap: 12px; margin-bottom: 20px; }
-.lwy-page-layout { --art-width: clamp(72px, calc(26vw - 28px), 220px); --art-height: clamp(124px, 40vw, 300px);
+.lwy-page-layout { --art-width: clamp(72px, calc(26vw - 28px), 192px); --art-height: clamp(136px, 33vw, 216px);
   display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 28px; align-items: start;
   max-width: 960px; margin: 0 auto; }
 .lwy-page-layout.has-art { grid-template-columns: minmax(0, 1fr) var(--art-width); }
-.lwy-page-layout.is-overview { align-content: start; }
-.is-overview .lwy-head { border-bottom: 0; padding-bottom: 0; margin-bottom: 14px; }
+.is-overview .lwy-page-content { display: contents; }
+.is-overview .lwy-head { grid-area: 1 / 1 / auto / -1; border-bottom: 0; padding-bottom: 0; margin-bottom: 10px; }
+.is-overview .lwy-notices { grid-area: 2 / 1 / auto / -1; }
+.is-overview .lwy-page { grid-row: 3; grid-column: 1; align-self: center; }
 .lwy-page-content { min-width: 0; }
 .lwy-page { min-width: 0; }
 .lwy-art { display: flex; justify-content: flex-end; align-items: flex-start;
   min-width: 0; width: var(--art-width); height: var(--art-height); pointer-events: none; }
-.is-overview .lwy-art { align-self: center; }
+.is-overview .lwy-art { grid-row: 3; grid-column: 2; align-self: center; }
 .lwy-art img { display: block; width: 100%; height: 100%; object-fit: contain; object-position: right top;
   filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.06)); animation: lwy-fade 300ms ease-out; }
+.is-overview .lwy-art img { object-position: center; }
 .lwy-sections { display: grid; min-width: 0; gap: 24px; }
 .lwy-card { min-width: 0; padding: 0 0 24px; border-bottom: 1px solid var(--line); }
 .lwy-card:last-child { border-bottom: 0; }
@@ -366,7 +370,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .lwy-details summary { cursor: pointer; width: fit-content; padding: 4px 0; color: var(--accent-strong); }
 .lwy-details summary:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 .lwy-details .lwy-note { margin-top: 6px; }
-.lwy-recent { grid-column: 1 / -1; padding-top: 10px; min-width: 0; }
+.lwy-recent { grid-area: 5 / 1 / auto / -1; padding-top: 10px; min-width: 0; }
 .lwy-recent .lwy-card-head { margin-bottom: 6px; }
 .lwy-text-button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent;
   color: var(--accent-strong); padding: 6px 0; min-height: 36px; font: inherit; font-size: 13px; cursor: pointer; }
@@ -404,11 +408,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 .lwy-rule .lwy-status { color: var(--accent-strong); }
 .lwy-rule .lwy-status.warning { color: var(--text); border-left: 2px solid var(--warning); }
 .is-overview .lwy-card { padding-bottom: 0; }
-.lwy-overview-footer { grid-column: 1 / -1; display: grid; min-width: 0; margin-top: 10px; border-top: 1px solid var(--line); }
+.lwy-overview-footer { grid-area: 4 / 1 / auto / -1; display: grid; min-width: 0; margin-top: 10px; border-top: 1px solid var(--line); }
 .lwy-overview-footer > * { border-bottom: 1px solid var(--line); }
 .lwy-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 20px;
-  min-width: 0; align-items: start; padding: 12px 0; }
+  min-width: 0; align-items: start; padding: 12px 0; margin: 0; }
 .lwy-summary-item { display: grid; gap: 2px; min-width: 0; }
+.lwy-summary-item dd { margin: 0; }
 .lwy-summary-value { color: var(--ink); font-size: 15px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
 .lwy-portrait-settings { display: grid; gap: 14px; }
 .lwy-segmented { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -515,11 +520,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
   .lwy-nick-controls > label > span { grid-column: 1 / -1; }
   .lwy-scope { width: 100%; }
   .lwy-scope select { width: 100%; }
+  .is-overview .lwy-scope { width: min(124px, 100%); }
   .lwy-page-layout.has-art { column-gap: 10px; }
-}
-@media (min-width: 600px) {
-  .is-overview.has-art .lwy-page-content { display: flex; flex-direction: column; min-height: var(--art-height); }
-  .is-overview.has-art .lwy-page { display: flex; flex: 1; flex-direction: column; justify-content: center; }
 }
 @media (max-width: 380px) {
   .lwy-settings-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -540,12 +542,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
   .lwy .lwy-nav-settings { padding-top:4px; }
   .lwy .lwy-nav-group-label { display:none; }
   .lwy-nav { gap: 4px; }
-  .lwy-nav button { min-height: 34px; padding-top: 5px; padding-bottom: 5px; }
+  .lwy-nav button { min-height: 30px; padding-top: 4px; padding-bottom: 4px; }
 }
 @media (max-height: 360px) {
   .lwy .lwy-sidebar { gap: 8px; padding-top: 8px; padding-bottom: 8px; }
   .lwy-nav { gap: 2px; }
-  .lwy-nav button { min-height: 30px; padding-top: 4px; padding-bottom: 4px; }
+  .lwy-nav button { min-height: 28px; padding-top: 3px; padding-bottom: 3px; }
 }
 @media (max-height: 360px) and (max-width: 700px) {
   .lwy-sidebar-head { display: none; }
@@ -692,6 +694,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
     }
   }, [feedback])
   const [refreshError, setRefreshError] = useState(false)
+  const [togetherExpanded, setTogetherExpanded] = useState(false)
   const [themeEdit, setThemeEdit] = useState<{ values: Appearance; base: Appearance } | null>(null)
   const liveAppearance = themeEdit?.values || storedAppearance
   const themeDirty = JSON.stringify(liveAppearance) !== JSON.stringify(themeEdit?.base || storedAppearance)
@@ -764,7 +767,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const scope = scopes.find((s) => s.key === selectedKey) || fallback
   const activeSection: Section = SECTIONS.includes(section) ? section : "heart"
   useBackgroundRefresh(() => api.refresh(), busy || Boolean(lightbox),
-    activeSection === "heart" && Boolean(state.experiences?.activity_sensing))
+    (activeSection === "heart" && Boolean(state.experiences?.activity_sensing)) ||
+    (activeSection === "cottage" && Boolean(state.experiences?.watch_tracking)))
   useEffect(() => {
     if (scope && selectedKey !== scope.key) setSelectedKey(scope.key)
   }, [scope?.key, selectedKey])
@@ -1330,7 +1334,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   const loverSince = milestones.lover || ""
   const tooLarge = Array.isArray(decoration.too_large) ? decoration.too_large : []
   const sectionLabel = (key: Section) =>
-    key === "game" ? t("nav.game", { defaultValue: "同行游戏" }) : key === "experiences" ? t("xp.title") : key === "shop" ? t("nav.shop", { defaultValue: "礼物商店" }) : key === "heart"
+    key === "cottage" ? t("nav.cottage", { defaultValue: "我们的小屋" }) : key === "game" ? t("nav.game", { defaultValue: "同行游戏" }) : key === "experiences" ? t("xp.title") : key === "shop" ? t("nav.shop", { defaultValue: "礼物商店" }) : key === "heart"
       ? t("nav.heart", { defaultValue: "关系概览" })
       : key === "history"
         ? t("nav.history", { defaultValue: "心动记录" })
@@ -1359,7 +1363,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   }
 
   function renderNavigation(key: Section) {
-    return <button key={key} type="button"
+    return <button key={key} type="button" data-section={key}
       aria-current={key === activeSection ? "page" : undefined}
       aria-controls="lwy-page" aria-label={sectionLabel(key)} title={sectionLabel(key)}
       className={key === activeSection ? "on" : ""} onClick={() => changeSection(key)}>
@@ -1496,7 +1500,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
   function renderOverviewDates(current: Scope) {
     return (
       <>
-      <section className="lwy-overview-footer">
+      <div className="lwy-overview-footer">
         <details className="lwy-disclosure">
           <summary>{t("overview.todayChanges")}<Icon name="ChevronRight" /></summary>
           <div className="lwy-today">
@@ -1505,22 +1509,29 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             <span>{t("today.metDay", { n: current.met_day || 1, defaultValue: "相识第 {n} 天" })}</span>
           </div>
         </details>
-        <Together data={state.experiences}
-          character={state.per_character ? current.label || "" : state.current_character || ""}
-          adventureResume={state.adventure_resume} busy={busy} t={t} open={openExperiences}
-          onGame={() => openGame("heart")} />
-        <div className="lwy-summary">
+        <details className="lwy-disclosure lwy-together-disclosure" open={togetherExpanded}
+          onToggle={(event: Event) => setTogetherExpanded((event.currentTarget as HTMLDetailsElement).open)}>
+          <summary>{sectionLabel("experiences")}<Icon name="ChevronRight" /></summary>
+          <Together data={state.experiences}
+            character={state.per_character ? current.label || "" : state.current_character || ""}
+            adventureResume={state.adventure_resume} busy={busy} t={t} open={openExperiences}
+            onGame={() => openGame("heart")} />
+        </details>
+        <dl className="lwy-summary">
           <div className="lwy-summary-item">
-            <span className="lwy-sub">{t("overview.firstMet", { defaultValue: "相识的日子" })}</span>
-            <span className="lwy-summary-value">{current.first_met ? isoLabel(current.first_met) : "-"}</span>
+            <dt className="lwy-sub">{t("overview.firstMet", { defaultValue: "相识的日子" })}</dt>
+            <dd className="lwy-summary-value">{current.first_met
+              ? <time dateTime={current.first_met}>{isoLabel(current.first_met)}</time> : "-"}</dd>
           </div>
           <div className="lwy-summary-item">
-            <span className="lwy-sub">{t("overview.nextDate", { defaultValue: "下一次纪念" })}</span>
-            <span className="lwy-summary-value">{upcoming.length ? eventLabel(upcoming[0]) : "-"}</span>
-            {upcoming.length ? <span className="lwy-sub">{countdown(upcoming[0].days_until)}</span> : null}
+            <dt className="lwy-sub">{t("overview.nextDate", { defaultValue: "下一次纪念" })}</dt>
+            <dd>
+              <div className="lwy-summary-value">{upcoming.length ? eventLabel(upcoming[0]) : "-"}</div>
+              {upcoming.length ? <span className="lwy-sub">{countdown(upcoming[0].days_until)}</span> : null}
+            </dd>
           </div>
-        </div>
-      </section>
+        </dl>
+      </div>
       <section className="lwy-recent">
         <div className="lwy-card-head">
           <h2 className="lwy-h">{t("overview.recent", { defaultValue: "最近的心动" })}</h2>
@@ -2081,8 +2092,8 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         </div>
       </aside>
 
-      <main className={activeSection === "game" ? "lwy-workspace is-game" : "lwy-workspace"} tabIndex={0} aria-label={sectionLabel(activeSection)} ref={workspaceRef}>
-        <div hidden={activeSection === "game"} className={["lwy-page-layout", hasArt ? "has-art" : "", activeSection === "heart" && scope ? "is-overview" : ""].join(" ")}>
+      <main className={activeSection === "game" || activeSection === "cottage" ? "lwy-workspace is-game" : "lwy-workspace"} tabIndex={0} aria-label={sectionLabel(activeSection)} ref={workspaceRef}>
+        <div hidden={activeSection === "game" || activeSection === "cottage"} className={["lwy-page-layout", hasArt ? "has-art" : "", activeSection === "heart" && scope ? "is-overview" : ""].join(" ")}>
           <div className="lwy-page-content">
             <header key="page-heading" className="lwy-head">
               <div className="lwy-head-text">
@@ -2181,6 +2192,15 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
         <CompanionGame active={activeSection === "game"} api={api} title={sectionLabel("game")} locale={props.locale}
           backLabel={gameReturn ? sectionLabel(gameReturn) : undefined}
           onBack={gameReturn ? () => changeSection(gameReturn) : undefined} />
+        {activeSection === "cottage" ? <Cottage locale={props.locale} t={t} data={state.experiences}
+          current={(state.per_character ? scope?.label : state.current_character) || ""}
+          characters={state.known_characters || []} open={openExperiences} shop={state.shop}
+          today={state.today || ""}
+          calendar={[...todayEvents, ...upcoming.filter(event => event.days_until > 0)].map(event => ({
+            title: eventLabel(event), date: event.date, countdown: countdown(event.days_until), today: event.days_until === 0,
+          }))}
+          activeCharacter={state.current_character || ""} online={Boolean(state.host_online)} api={api}
+          busy={busy} stale={refreshError} run={run} refresh={refreshPanel} /> : null}
       </main>
       {/* Keep this slot mounted so the host preserves page nodes and focus. */}
       <div className="lwy-feedback-slot">{!dialogOpen && !portraitOpen ? renderFeedback() : null}</div>

@@ -5,7 +5,7 @@ import { resolve } from "node:path"
 import { dependency, pluginRoot, startPreview } from "../preview/ui_preview.mjs"
 
 const { chromium } = dependency("playwright")
-const artifacts = resolve(pluginRoot, "archive/reviews/browser/overview-071")
+const artifacts = resolve(process.env.NEKO_UI_ARTIFACTS || resolve(pluginRoot, "archive/reviews/browser/overview-0920"))
 let browser, server, url
 before(async () => {
   ;({ server, url } = await startPreview())
@@ -16,12 +16,14 @@ before(async () => {
 })
 after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve)) })
 
-async function pageFor(options = {}, locale = "zh-CN") {
+async function pageFor(options = {}, locale = "zh-CN", expandTogether = true) {
   const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, reducedMotion: "reduce", ...options })
   page.errors = []
   page.on("pageerror", error => page.errors.push(error.message))
   await page.goto(`${url}/?locale=${locale}`)
-  await page.locator(".lwy-together").waitFor()
+  const summary = page.locator(".lwy-together-disclosure > summary")
+  await summary.waitFor()
+  if (expandTogether) await summary.click()
   return page
 }
 
@@ -47,6 +49,40 @@ async function populate(page) {
 }
 const home = page => page.locator(".lwy-nav").getByRole("button", { name: "关系概览", exact: true }).click()
 const writes = page => page.evaluate(() => window.__uiTest.calls.filter(call => call.action === "experience_action"))
+
+test("information-first overview keeps both summaries closed and preserves the opened panel on return", async () => {
+  for (const [width, height] of [[1100, 820], [390, 760]]) {
+    const page = await pageFor({ viewport: { width, height } }, "zh-CN", false)
+    try {
+      const today = page.locator(".lwy-today")
+      const together = page.locator(".lwy-together")
+      const summary = page.locator(".lwy-together-disclosure > summary")
+      await page.locator(".lwy-art img").evaluate(image => image.decode())
+      assert.equal(await today.isVisible(), false)
+      assert.equal(await together.isVisible(), false)
+      assert.ok(await page.locator(".lwy-summary").isVisible())
+      const heading = await page.locator(".lwy-head").boundingBox()
+      const hero = await page.locator(".lwy-hero").boundingBox()
+      const art = await page.locator(".lwy-art").boundingBox()
+      const footer = await page.locator(".lwy-overview-footer").boundingBox()
+      assert.ok(heading.y + heading.height <= Math.min(hero.y, art.y))
+      assert.ok(hero.x + hero.width <= art.x)
+      assert.ok(Math.max(hero.y + hero.height, art.y + art.height) <= footer.y)
+      await noOverflow(page)
+      await page.screenshot({ path: `${artifacts}/information-first-${width}.png` })
+      await summary.press("Enter")
+      await together.getByRole("button", { name: "查看共同经历", exact: true }).click()
+      await home(page)
+      await together.waitFor()
+      await summary.press("Space")
+      await together.waitFor({ state: "hidden" })
+      assert.deepEqual(await writes(page), [])
+      assert.deepEqual(page.errors, [])
+    } finally {
+      await page.close()
+    }
+  }
+})
 
 test("activity sensing needs consent and displays only the selected companion's report", async () => {
   const page = await pageFor({ viewport: { width: 420, height: 800 } })
@@ -173,7 +209,7 @@ test("together activity starts from the overview and returns as a resumable last
 
 async function noOverflow(page) {
   assert.deepEqual(await page.evaluate(() =>
-    [...document.querySelectorAll(".lwy-together,.lwy-together-row,.lwy-together-copy,.lwy-sidebar,.lwy-workspace,.neko-modal,.neko-button")]
+    [...document.querySelectorAll(".lwy-hero,.lwy-head,.lwy-summary-item,.lwy-together,.lwy-together-row,.lwy-together-copy,.lwy-sidebar,.lwy-workspace,.neko-modal,.neko-button")]
       .filter(node => node.getClientRects().length && node.scrollWidth > node.clientWidth + 2)
       .map(node => node.className)), [])
 }

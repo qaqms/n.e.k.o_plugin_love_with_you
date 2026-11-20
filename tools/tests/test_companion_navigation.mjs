@@ -122,7 +122,7 @@ window.addEventListener("message",async event=>{
     await affinity.waitFor()
     assert.equal(await affinity.getAttribute("aria-valuenow"), "67")
     assert.deepEqual(await panel.locator(".lwy-nav button").evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-label"))),
-      ["关系概览", "共同经历", "礼物商店", "心动记录", "纪念日", "专属称呼", "同行游戏", "设置"])
+      ["关系概览", "我们的小屋", "共同经历", "礼物商店", "心动记录", "纪念日", "专属称呼", "同行游戏", "设置"])
     assert.equal(await panel.locator(".lwy-game iframe").count(), 0)
     await page.screenshot({ path: join(artifacts, `navigation-${width}.png`) })
     await panel.getByRole("button", { name: "同行游戏", exact: true }).click()
@@ -204,6 +204,7 @@ window.addEventListener("message",async event=>{
       // Reload creates a new client while the real isolated backend retains the old owner.
       await page.reload()
       const together = panel.locator(".lwy-together")
+      await panel.locator(".lwy-together-disclosure > summary").click()
       await together.getByText("林缘 · 第 1 / 9 段", { exact: true }).waitFor()
       const role = panel.getByLabel("选择角色", { exact: true })
       await role.selectOption("茉子")

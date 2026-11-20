@@ -11,8 +11,8 @@ export type AdventureResume = {
 
 export const TOGETHER_STYLE = `
 .lwy-together { min-width:0;padding:4px 0 10px; }
-.lwy-together .lwy-card-head { margin-bottom:2px;gap:2px 12px; }
-.lwy-together-person { margin:0 0 8px;color:var(--muted);font-size:12px;overflow-wrap:anywhere; }
+.lwy-together .lwy-card-head { margin-bottom:8px;gap:4px 12px; }
+.lwy-together-person { margin:0 0 4px;color:var(--muted);font-size:12px;overflow-wrap:anywhere; }
 .lwy-together-row { display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:12px;align-items:center;padding:14px 0; }
 .lwy-together-row + .lwy-together-row { border-top:1px solid var(--border); }
 .lwy-together-row > .lwy-icon { color:var(--accent-strong);align-self:start;margin-top:3px; }
@@ -53,20 +53,18 @@ export function Together(props: {
     props.open({ character, tab: "activities", kind, id })
 
   return <section className="lwy-together" aria-label={t("overview.together")}>
+    {data?.enabled && character ? <p className="lwy-together-person">{t("overview.participant", { name: character })}</p> : null}
     <div className="lwy-card-head">
-      <h2 className="lwy-h">{t("overview.together")}</h2>
+      {data && character ? <Button disabled={props.busy}
+        onClick={() => openActivity(data.enabled && !data.activity_sensing && !watch && !activity &&
+          (record?.memories.length || 0) < 30 ? "activity" : undefined)}>
+        <Icon name="Heart" />{t("xp.activities")}
+      </Button> : null}
       <button type="button" className="lwy-text-button" disabled={props.busy}
         onClick={() => props.open(character ? { character, tab: "notes" } : undefined)}>
         {t("overview.allExperiences")}<Icon name="ChevronRight" />
       </button>
     </div>
-    {data && character ? <div className="lwy-card-head">
-      {data.enabled ? <p className="lwy-together-person">{t("overview.participant", { name: character })}</p> : null}
-      <Button disabled={props.busy} onClick={() => openActivity(data.enabled && !data.activity_sensing && !watch && !activity &&
-        (record?.memories.length || 0) < 30 ? "activity" : undefined)}>
-        <Icon name="Heart" />{t("xp.activities")}
-      </Button>
-    </div> : null}
     {journey ? <div className="lwy-together-row">
       <Icon name="Gamepad2" />
       <div className="lwy-together-copy">

@@ -3,6 +3,9 @@
 - `phaser-3.90.0.min.js`: Phaser; see `PHASER-LICENSE.md`.
 - `astar-0.4.1.js`: javascript-astar; see `ASTAR-LICENSE.txt`.
 - Phaser dependency eventemitter3: see `EVENTEMITTER3-LICENSE.txt`.
+- `three.module.min.js`, `three.core.min.js`, `three-rounded-box.mjs` and
+  `three-post.mjs` (examples bundled by `tools/build/vendor_three.mjs`):
+  three.js; see `THREE-LICENSE.txt`.
 - `../panel.html` embeds the N.E.K.O hosted renderer, display client and UI kit.
   Its upstream Apache 2.0 license and notice are reproduced in
   `NEKO-LICENSE.txt` and `NEKO-NOTICE.txt`. The build tool copies these notices

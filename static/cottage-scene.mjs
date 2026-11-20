@@ -4,6 +4,14 @@ import { RoundedBoxGeometry } from "./engine/three-rounded-box.mjs"
 const PI = Math.PI
 const standard = (color, options = {}) => new T.MeshStandardMaterial({ color, roughness: .85, ...options })
 const unlit = (options) => new T.MeshBasicMaterial(options)
+// Cloth catches a soft rim of light at grazing angles; glazed ceramics keep a thin clear highlight.
+const fabric = (color, options = {}) => new T.MeshPhysicalMaterial({
+  color, roughness: .9, sheen: .85, sheenRoughness: .55,
+  sheenColor: new T.Color(color).lerp(new T.Color(0xfff4e6), .45), ...options,
+})
+const glaze = (color, options = {}) => new T.MeshPhysicalMaterial({
+  color, roughness: .34, clearcoat: .7, clearcoatRoughness: .22, ...options,
+})
 
 function texture(width, height, draw) {
   const canvas = document.createElement("canvas")
@@ -286,12 +294,12 @@ function shelves(parent, wood, trim) {
 }
 
 function structure(scene, wood, darkWood, trim) {
-  const plaster = standard(0xc8d5be)
-  const sidePlaster = standard(0xe3ccbb)
+  const plaster = standard(0xc8d5be, { roughness: .95 })
+  const sidePlaster = standard(0xe3ccbb, { roughness: .95 })
   box(scene, standard(0x60796e), 0, -.25, 0, 6.64, .44, 5.44, .12, false)
   box(scene, darkWood, 0, -.07, 0, 6.51, .12, 5.31, .04, false)
   const plankColors = [0xd5a775, 0xdcb285, 0xcfa070, 0xe0b78a, 0xc79466, 0xd7a878]
-    .map(color => standard(color, { map: wood.map }))
+    .map(color => standard(color, { map: wood.map, roughness: .66 }))
   const rand = sampler(85)
   for (let row = 0; row < 14; row++) {
     let start = -3.23
@@ -305,12 +313,13 @@ function structure(scene, wood, darkWood, trim) {
   const back = -2.62
   const left = -3.23
   const windowX = -1.04
-  box(scene, sidePlaster, left, 1.74, -.35, .18, 3.43, 4.54, .035, false)
+  // The walls cast shadows so daylight only enters through the window opening.
+  box(scene, sidePlaster, left, 1.74, -.35, .18, 3.43, 4.54, .035)
   box(scene, trim, left, 3.47, -.35, .21, .09, 4.58, .025)
-  box(scene, plaster, -2.93, 1.74, back, .60, 3.43, .18, .02, false)
-  box(scene, plaster, 1.92, 1.74, back, 2.64, 3.43, .18, .02, false)
-  box(scene, plaster, windowX, .59, back, 3.20, 1.14, .18, 0, false)
-  box(scene, plaster, windowX, 3.25, back, 3.20, .41, .18, 0, false)
+  box(scene, plaster, -2.93, 1.74, back, .60, 3.43, .18, .02)
+  box(scene, plaster, 1.92, 1.74, back, 2.64, 3.43, .18, .02)
+  box(scene, plaster, windowX, .59, back, 3.20, 1.14, .18, 0)
+  box(scene, plaster, windowX, 3.25, back, 3.20, .41, .18, 0)
   box(scene, trim, .01, 3.47, back, 6.53, .09, .22, .025)
   box(scene, trim, -3.109, .13, -.32, .075, .18, 4.44, .014)
   box(scene, trim, .03, .13, -2.49, 6.38, .18, .074, .014)
@@ -330,7 +339,7 @@ function structure(scene, wood, darkWood, trim) {
   const rod = cylinder(scene, darkWood, windowX, 3.20, -2.29, .022, .022, 3.65)
   rod.rotation.z = PI / 2
 
-  const fabric = standard(0xe3c5a2, { side: T.DoubleSide })
+  const drapery = fabric(0xe3c5a2, { side: T.DoubleSide })
   const curtains = [-1, 1].map(side => {
     const curtain = group(scene, windowX + side * 1.62, 0, -2.28)
     const geometry = new T.PlaneGeometry(1, 1, 32, 18)
@@ -342,7 +351,7 @@ function structure(scene, wood, darkWood, trim) {
         Math.sin(u * PI * 12) * (.026 + .036 * (1 - v)))
     }
     geometry.computeVertexNormals()
-    mesh(curtain, geometry, fabric, 0, 0, 0)
+    mesh(curtain, geometry, drapery, 0, 0, 0)
     return curtain
   })
   return { views, curtains }
@@ -390,7 +399,7 @@ function sofaThrow(parent, armX) {
     positions.setXYZ(i, ...drape(uv.getX(i) - .5, uv.getY(i)))
   }
   textile.computeVertexNormals()
-  mesh(parent, textile, standard(0xffffff, { map: weave, roughness: 1, side: T.DoubleSide }), 0, 0, 0)
+  mesh(parent, textile, fabric(0xffffff, { map: weave, roughness: 1, sheenColor: 0xf3d6c4, side: T.DoubleSide }), 0, 0, 0)
 
   const fringeCount = 17
   const fringe = new T.InstancedMesh(new T.CylinderGeometry(.0034, .0023, 1, 5), standard(0xe8c5ab), fringeCount)
@@ -412,9 +421,9 @@ function sofaThrow(parent, armX) {
 
 function sofa(scene, darkWood) {
   const body = group(scene, -1.135, 0, -1.43)
-  const upholstery = standard(0x4a8278)
-  const cushion = standard(0x64978b)
-  const piping = standard(0x3f6e64)
+  const upholstery = fabric(0x4a8278)
+  const cushion = fabric(0x64978b)
+  const piping = fabric(0x3f6e64)
   for (const x of [-1.15, 1.15]) for (const z of [-.41, .41]) {
     cylinder(body, darkWood, x, .145, z, .067, .049, .22, 14)
   }
@@ -429,7 +438,7 @@ function sofa(scene, darkWood) {
   }
   for (const x of [-1.255, 1.255]) box(body, upholstery, x, .73, .017, .305, .45, 1.07, .135)
   for (const [x, color, angle] of [[-.88, 0xd7906c, .23], [.84, 0xe1c585, -.28]]) {
-    const pillow = box(body, standard(color), x, .904, -.13, .45, .416, .17, .082)
+    const pillow = box(body, fabric(color), x, .904, -.13, .45, .416, .17, .082)
     pillow.rotation.set(-.31, -angle * .5, angle)
   }
   sofaThrow(body, 1.255)
@@ -437,7 +446,7 @@ function sofa(scene, darkWood) {
 }
 
 function mug(parent, x, y, z, color) {
-  const ceramic = standard(color, { roughness: .37 })
+  const ceramic = glaze(color)
   cylinder(parent, ceramic, x, y + .083, z, .097, .078, .166)
   cylinder(parent, standard(0x51362b), x, y + .168, z, .083, .083, .008)
   const lip = mesh(parent, new T.TorusGeometry(.089, .009, 8, 24), ceramic, x, y + .173, z)
@@ -597,21 +606,41 @@ function connectLamp(scene, wood, darkWood) {
   }
   const bulb = unlit({ color: 0xbb9572 })
   mesh(stand, new T.SphereGeometry(.075, 18, 12), bulb, 0, 1.28, 0, false)
-  const lampLight = new T.PointLight(0xffae62, 0, 4.4, 1.75)
+  const lampLight = new T.PointLight(0xffae62, 0, 5.6, 1.6)
   lampLight.position.set(.63, 1.20, -1.435)
   scene.add(lampLight)
-  return { shade, bulb, lampLight }
+  // A soft downward pool under the shade, so the lamp reads as a light source at night.
+  const pool = new T.SpotLight(0xffb06b, 0, 4.2, .95, .85, 1.4)
+  pool.position.set(.63, 1.42, -1.435)
+  pool.target.position.set(.55, 0, -1.2)
+  scene.add(pool, pool.target)
+  return { shade, bulb, lampLight, lampPool: pool }
+}
+
+// Daylight enters through the window. The walls and window bars cast its shadows into the room.
+function windowSun(scene) {
+  const sun = new T.SpotLight(0xfff1d6, 0, 0, .34, .55, 0)
+  sun.position.set(-.6, 5.6, -7.2)
+  sun.target.position.set(-.8, 0, .4)
+  sun.castShadow = true
+  sun.shadow.mapSize.set(1024, 1024)
+  sun.shadow.bias = -.0004
+  sun.shadow.normalBias = .03
+  Object.assign(sun.shadow.camera, { near: 3, far: 16 })
+  scene.add(sun, sun.target)
+  return sun
 }
 
 export function buildRoom(scene) {
   const map = woodTexture()
-  const wood = standard(0xad7953, { map })
-  const darkWood = standard(0x835943, { map })
+  const wood = standard(0xad7953, { map, roughness: .62 })
+  const darkWood = standard(0x835943, { map, roughness: .6 })
   const trim = standard(0xf1e1c9)
   const { curtains, views } = structure(scene, wood, darkWood, trim)
   const rugMap = rugTexture()
   const rugGeometry = new T.CircleGeometry(1, 72)
-  const rug = mesh(scene, rugGeometry, standard(0xffffff, { map: rugMap }), -.18, .045, .43, false)
+  const rug = mesh(scene, rugGeometry, fabric(0xffffff, { map: rugMap, roughness: 1, sheenColor: 0xf0c4ae }),
+    -.18, .045, .43, false)
   rug.rotation.x = -PI / 2
   rug.scale.set(2, 1.44, 1)
   const rugEdge = cylinder(scene, standard(0xa25c51), -.18, .04, .43, 2.003, 2.003, .018, 72)
@@ -643,6 +672,7 @@ export function buildRoom(scene) {
   const badge = mesh(scene, new T.CircleGeometry(.123, 28), unlit({ color: 0xb57462 }), 2.88, 2.04, -2.439, false)
   badge.scale.x = .87
   const lamp = connectLamp(scene, wood, darkWood)
+  const sun = windowSun(scene)
   const shadowMap = texture(192, 192, (ctx, w, h) => {
     const gradient = ctx.createRadialGradient(w / 2, h / 2, 28, w / 2, h / 2, w / 2)
     gradient.addColorStop(0, "#24494078")
@@ -673,5 +703,5 @@ export function buildRoom(scene) {
     object.updateMatrixWorld()
     return { id, object }
   })
-  return { ...lamp, curtains, views, hits, record, picture, notebook, seat, shelf, calendar, projector }
+  return { ...lamp, sun, curtains, views, hits, record, picture, notebook, seat, shelf, calendar, projector }
 }

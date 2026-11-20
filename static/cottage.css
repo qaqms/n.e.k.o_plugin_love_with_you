@@ -8,7 +8,10 @@
 * { box-sizing: border-box; }
 html, body, #room { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 [hidden] { display: none !important; }
-#room { position: relative; isolation: isolate; }
+#room { position: relative; isolation: isolate; background: #e1ebe3; transition: background-color .6s; }
+#room[data-period="dusk"] { background: #ecd6c6; }
+#room[data-period="night"] { background: #1d2833; }
+#room[data-period="night"] h1 { color: #e3ebe8; }
 #stage { position: absolute; inset: 0; }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 canvas[data-target] { cursor: pointer; }

@@ -130,7 +130,7 @@ def main() -> None:
         "static/cottage.html", "static/cottage.css", "static/cottage.mjs", "static/cottage-scene.mjs", "static/cottage-icons.mjs",
         "static/cottage-record.mjs", "static/cottage-picture.mjs", "static/cottage-living.mjs", "static/cottage-company.mjs",
         "static/engine/three.module.min.js", "static/engine/three.core.min.js",
-        "static/engine/three-rounded-box.mjs", "static/engine/THREE-LICENSE.txt",
+        "static/engine/three-rounded-box.mjs", "static/engine/three-post.mjs", "static/engine/THREE-LICENSE.txt",
         "static/skills-expanded.json", "static/routes.json", "static/expanded-combat.mjs",
         "static/build-mods.json", "static/buildcraft.mjs",
         "static/fx-art.mjs", "static/zone-art.mjs", "static/foe-art.mjs",

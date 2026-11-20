@@ -75,6 +75,27 @@ function changedPixels(a, b) {
   return count
 }
 
+test("software rendering picks the plain pipeline and every quality tier renders the night room", async () => {
+  const shots = {}
+  for (const [query, expected] of [["", "low"], ["&quality=medium", "medium"], ["&quality=high", "high"]]) {
+    const page = await browser.newPage({ viewport: { width: 900, height: 700 }, reducedMotion: "reduce" })
+    const errors = []
+    page.on("pageerror", error => errors.push(error.message))
+    try {
+      await page.addInitScript(() => localStorage.setItem("love_with_you:cottage:v1",
+        JSON.stringify({ period: "night", lamp: true, curtains: true })))
+      await page.goto(`${url}/plugin/love_with_you/ui/cottage.html?locale=zh-CN${query}`)
+      await page.locator(`#room[data-quality="${expected}"][data-period="night"]`).waitFor()
+      await page.getByRole("button", { name: "台灯" }).waitFor()
+      shots[expected] = await capture(page, page, `cottage-quality-${expected}.png`)
+      verifyPixels(shots[expected], 1800)
+      assert.deepEqual(errors, [])
+    } finally { await page.close() }
+  }
+  // Bloom, occlusion and grading must visibly change the frame, not silently fall back.
+  assert.ok(changedPixels(shots.low, shots.high) > 300)
+})
+
 test("the sofa empty seat places a second cup and only chat sends an invitation", async () => {
   const { page, frame, errors } = await roomPage({ width: 1100, height: 760 }, false, true)
   try {

@@ -1,6 +1,8 @@
 import * as T from "./engine/three.module.min.js"
+import { EffectComposer, GTAOPass, OutputPass, RenderPass, RoomEnvironment, ShaderPass, UnrealBloomPass }
+  from "./engine/three-post.mjs?v=0.9.25"
 import { icon } from "./cottage-icons.mjs?v=0.9.22"
-import { buildRoom } from "./cottage-scene.mjs?v=0.9.24"
+import { buildRoom } from "./cottage-scene.mjs?v=0.9.25"
 import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.18"
 import { createPicturePages } from "./cottage-picture.mjs?v=0.9.21"
 import { createGiftShelf, createNotebook, createSeat, livingLabels, localPeriod } from "./cottage-living.mjs?v=0.9.22"
@@ -31,20 +33,50 @@ const KEEPSAKE_LABELS = {
 const keepsakeButtons = [["record", "Disc3"], ["picture", "Image"], ["notebook", "BookOpen"], ["shelf", "Gift"],
   ["calendar", "CalendarDays"], ["projector", "Projector"]]
 const periods = ["day", "dusk", "night"]
+// Each period sets the room's mood: ambient levels, the sun through the window, the backdrop and a colour grade.
 const daylight = [
-  { sky: 1, key: 1, fill: 1, light: 0xffebc9, window: 1 },
-  { sky: .81, key: .71, fill: .89, light: 0xffc0a3, window: .91 },
-  { sky: .61, key: .36, fill: .95, light: 0xa3c2ff, window: .75 },
+  { sky: 1, key: 1, fill: 1, env: 1, sun: 1, glow: 0, light: 0xffebc9, window: 1,
+    backdrop: 0xe1ebe3, sunColor: 0xfff0d2, sunFrom: [-2.3, 5.6, -7.2], sunTo: [-.1, 0, .4], tint: [1, 1, 1] },
+  { sky: .68, key: .52, fill: .8, env: .6, sun: 1.2, glow: .4, light: 0xffc0a3, window: .91,
+    backdrop: 0xecd6c6, sunColor: 0xff9a58, sunFrom: [-3.6, 3.3, -7], sunTo: [.8, .2, .2], tint: [1.04, .98, .93] },
+  { sky: .24, key: .1, fill: .5, env: .17, sun: .42, glow: 1, light: 0xa3c2ff, window: .75,
+    backdrop: 0x1d2833, sunColor: 0x9fb9ff, sunFrom: [-1.8, 6, -7.4], sunTo: [.1, 0, .9], tint: [.93, .97, 1.05] },
 ]
+const qualities = ["auto", "low", "medium", "high"]
+const FOV = { room: 24, closeup: 38, seat: 32 }
+// Warm vignette and per-period tint, applied after tone mapping.
+const GradeShader = {
+  uniforms: { tDiffuse: { value: null }, vignette: { value: .2 }, tint: { value: new T.Color(1, 1, 1) } },
+  vertexShader: "varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }",
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float vignette; uniform vec3 tint; varying vec2 vUv;
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      vec2 offset = vUv - .5;
+      color.rgb *= tint * (1. - vignette * smoothstep(.2, .9, dot(offset, offset) * 2.));
+      gl_FragColor = color;
+    }`,
+}
 
 function loadPreferences() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY))
     return { lamp: saved?.lamp === true, curtains: saved?.curtains !== false,
-      period: periods.includes(saved?.period) ? saved.period : "auto" }
+      period: periods.includes(saved?.period) ? saved.period : "auto",
+      quality: qualities.includes(saved?.quality) ? saved.quality : "auto" }
   } catch {
-    return { lamp: false, curtains: true, period: "auto" }
+    return { lamp: false, curtains: true, period: "auto", quality: "auto" }
   }
+}
+
+// Software renderers get the plain pipeline; small or low-core devices skip ambient occlusion.
+function detectQuality(renderer) {
+  try {
+    const gl = renderer.getContext()
+    const info = gl.getExtension("WEBGL_debug_renderer_info")
+    const name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : ""
+    if (/swiftshader|llvmpipe|software|basic render/i.test(name)) return "low"
+  } catch { return "low" }
+  return (navigator.hardwareConcurrency || 4) <= 4 || matchMedia("(max-width: 575px)").matches ? "medium" : "high"
 }
 
 export function startCottage() {
@@ -90,15 +122,25 @@ export function startCottage() {
   const canvas = renderer.domElement
   canvas.setAttribute("aria-hidden", "true")
   stage.append(canvas)
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6))
   renderer.setClearColor(0x000000, 0)
-  renderer.toneMapping = T.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.04
+  // Neutral keeps the palette's hues and saturation; ACES greyed out the pastel walls and backdrop.
+  renderer.toneMapping = T.NeutralToneMapping
+  renderer.toneMappingExposure = .96
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = T.PCFSoftShadowMap
 
   const scene = new T.Scene()
-  const camera = new T.OrthographicCamera(-5, 5, 5, -5, .1, 40)
+  // A narrow perspective keeps the miniature look from afar and gains depth when the camera moves in.
+  const camera = new T.PerspectiveCamera(FOV.room, 1, .05, 120)
+  const backdrop = new T.Color()
+  scene.background = backdrop
+  const makeEnvironment = () => {
+    const generator = new T.PMREMGenerator(renderer)
+    const texture = generator.fromScene(new RoomEnvironment(), .04).texture
+    generator.dispose()
+    return texture
+  }
+  scene.environment = makeEnvironment()
   const sky = new T.HemisphereLight(0xfff6df, 0x92999d, 1.62)
   scene.add(sky)
   const key = new T.DirectionalLight(0xffebc9, 2.65)
@@ -133,6 +175,21 @@ export function startCottage() {
   const periodIndex = () => periods.indexOf(preferences.period === "auto" ? localPeriod() : preferences.period)
   let time = periodIndex()
   const lightColors = daylight.map(item => new T.Color(item.light))
+  const moods = daylight.map(item => ({
+    backdrop: new T.Color(item.backdrop), sun: new T.Color(item.sunColor), tint: new T.Color(...item.tint),
+    from: new T.Vector3(...item.sunFrom), to: new T.Vector3(...item.sunTo),
+  }))
+  const dimBulb = new T.Color(0xbb9572)
+  const litBulb = new T.Color(1.7, 1.25, .8)
+  const detectedQuality = detectQuality(renderer)
+  const requestedQuality = query.get("quality")
+  let quality = "low"
+  let composer = null
+  let bloom = null
+  let grade = null
+  let slowFrames = 0
+  // How far the camera itself has travelled toward the open closeup (0 in the room, 1 when arrived).
+  let cameraAmount = 0
   let viewportWidth = 0
   let viewportHeight = 0
   let frame = 0
@@ -212,7 +269,16 @@ export function startCottage() {
   backButton.setAttribute("aria-label", backButton.title)
   backButton.onclick = closeKeepsake
 
+  const aimTarget = new T.Vector3()
+  const viewRight = new T.Vector3()
+  const viewUp = new T.Vector3()
+  const viewBack = new T.Vector3()
+  const tanHalf = fov => Math.tan(T.MathUtils.degToRad(fov) / 2)
+  // Zoom geometrically so the approach feels evenly paced from far to near.
+  const zoom = (from, to, amount) => from * (to / from) ** amount
+
   function aimCamera(point, angle, pitch, distance) {
+    aimTarget.copy(point)
     const horizontal = distance * Math.cos(pitch)
     camera.position.set(
       point.x + horizontal * Math.sin(angle),
@@ -223,22 +289,47 @@ export function startCottage() {
     camera.updateMatrixWorld()
   }
 
+  // Backs the camera away from the last aimed point (keeping its direction) until `span` world units fill the
+  // height at that point, then slides it sideways by the view-space offset (midX, midY).
+  function placeCamera(span, midX, midY, fov, aspect) {
+    const distance = span / 2 / tanHalf(fov)
+    camera.matrixWorld.extractBasis(viewRight, viewUp, viewBack)
+    const shift = viewRight.multiplyScalar(midX).addScaledVector(viewUp, midY)
+    camera.position.copy(aimTarget).addScaledVector(viewBack, distance).add(shift)
+    camera.lookAt(shift.add(aimTarget))
+    camera.fov = fov
+    camera.aspect = aspect
+    camera.updateProjectionMatrix()
+    camera.updateMatrixWorld()
+  }
+
   function fitCamera() {
     aimCamera(center, azimuth, elevation, 11)
-    const xs = [], ys = []
-    for (const corner of corners) {
-      const point = corner.clone().applyMatrix4(camera.matrixWorldInverse)
-      xs.push(point.x)
-      ys.push(point.y)
-    }
+    const points = corners.map(corner => corner.clone().applyMatrix4(camera.matrixWorldInverse))
+    const xs = points.map(point => point.x)
+    const ys = points.map(point => point.y)
     const aspect = viewportWidth / viewportHeight
     const marginY = viewportHeight > 430 ? 144 : 110
     const usableY = Math.max(.40, 1 - marginY / viewportHeight)
     const usableX = viewportWidth > 650 ? .86 : .93
-    let span = Math.max((Math.max(...ys) - Math.min(...ys)) / usableY,
-      (Math.max(...xs) - Math.min(...xs)) / aspect / usableX)
     let midX = (Math.min(...xs) + Math.max(...xs)) / 2
     let midY = (Math.min(...ys) + Math.max(...ys)) / 2
+    // Nearer corners appear larger in perspective, so each corner sets its own minimum distance.
+    const roomTan = tanHalf(FOV.room)
+    const roomDistance = Math.max(...points.map(point => (point.z + 11) +
+      Math.max(Math.abs(point.y - midY) / usableY, Math.abs(point.x - midX) / aspect / usableX) / roomTan))
+    let span = 2 * roomDistance * roomTan
+    // Measure where the corners really land and re-centre: the far half of the room projects smaller.
+    placeCamera(span, midX, midY, FOV.room, aspect)
+    const ndc = corners.map(corner => projected.copy(corner).project(camera).clone())
+    const [left, right] = [Math.min(...ndc.map(p => p.x)), Math.max(...ndc.map(p => p.x))]
+    const [bottom, top] = [Math.min(...ndc.map(p => p.y)), Math.max(...ndc.map(p => p.y))]
+    midX += (left + right) / 2 * span * aspect / 2
+    midY += (bottom + top) / 2 * span / 2
+    span *= Math.max((top - bottom) / 2 / usableY, (right - left) / 2 / usableX)
+    aimCamera(center, azimuth, elevation, 11)
+    let fov = FOV.room
+    let amount = 0
     const compact = viewportWidth < 575
     const seatSpan = Math.max(2.65, 3.18 / aspect)
     const seatX = compact ? 0 : -.10
@@ -248,7 +339,9 @@ export function startCottage() {
       span = seatSpan
       midX = seatX
       midY = 0
+      fov = FOV.seat
     }
+    const baseFov = fov
     const aimCloseup = (point, angle, pitch, distance, amount) => {
       const mix = (from, to) => T.MathUtils.lerp(from, to, amount)
       aimCamera(target.lerpVectors(source.point, point, amount), mix(source.angle, angle),
@@ -260,7 +353,8 @@ export function startCottage() {
         : Math.min(viewportWidth * .42, viewportHeight * .68, 420)
       const closeSpan = viewportHeight / closeScale
       const mix = (from, to) => T.MathUtils.lerp(from, to, focus)
-      span = mix(span, closeSpan)
+      span = zoom(span, closeSpan, focus)
+      amount = focus
       midX = mix(midX, compact ? 0 : closeSpan * aspect * .15)
       midY = mix(midY, closeSpan * (compact ? -.23 : 0))
       aimCloseup(recordCenter, .44, .82, 3.6, focus)
@@ -270,29 +364,31 @@ export function startCottage() {
     if (focus > 0 && closeup === "picture") {
       const cameraFocus = T.MathUtils.smoothstep(focus, 0, .73)
       const mix = (from, to) => T.MathUtils.lerp(from, to, cameraFocus)
-      span = mix(span, viewportHeight / Math.max(1, pictureScale))
+      span = zoom(span, viewportHeight / Math.max(1, pictureScale), cameraFocus)
+      amount = cameraFocus
       midX = mix(midX, 0)
       midY = mix(midY, 0)
       aimCloseup(pictureCenter, 0, 0, 3.2, cameraFocus)
     }
     if (focus > 0 && ["notebook", "shelf", "seat"].includes(closeup)) {
       const mix = (from, to) => T.MathUtils.lerp(from, to, focus)
+      amount = focus
       if (closeup === "notebook") {
         const scale = Math.min(viewportWidth * 1.37, viewportHeight * .98, 750)
         const closeSpan = viewportHeight / scale
-        span = mix(span, closeSpan)
+        span = zoom(span, closeSpan, focus)
         midX = mix(midX, 0)
         midY = mix(midY, 0)
         aimCloseup(bookCenter, -.4, Math.PI / 2 - .001, 3, focus)
       } else if (closeup === "shelf") {
         const scale = Math.min(viewportWidth * .86, viewportHeight * .80, 480)
         const closeSpan = viewportHeight / scale
-        span = mix(span, closeSpan)
+        span = zoom(span, closeSpan, focus)
         midX = mix(midX, 0)
         midY = mix(midY, -closeSpan * .10)
         aimCloseup(shelfCenter, Math.PI / 2, .13, 3.1, focus)
       } else {
-        span = mix(span, seatSpan)
+        span = zoom(span, seatSpan, focus)
         midX = mix(midX, seatX)
         midY = mix(midY, 0)
         aimCloseup(seatPose.point, seatPose.angle, seatPose.pitch, seatPose.distance, focus)
@@ -304,7 +400,8 @@ export function startCottage() {
       const scale = closeup === "calendar"
         ? Math.min((viewportWidth - 26) / .59, (viewportHeight - 100) / .74, 520)
         : closeup === "projector" ? projectorScale : Math.min(viewportWidth * .75, viewportHeight * .68, 445)
-      span = mix(span, viewportHeight / scale)
+      span = zoom(span, viewportHeight / scale, motion)
+      amount = motion
       midX = mix(midX, 0)
       midY = mix(midY, closeup === "company" ? -.20 : 0)
       const point = closeup === "calendar" ? calendarCenter : closeup === "projector" ? projectorCenter : companyCenter
@@ -313,11 +410,11 @@ export function startCottage() {
       aimCloseup(point, angle, pitch, 3.2, motion)
     }
     if (returnToSeat && focus === 0) aimCamera(source.point, source.angle, source.pitch, source.distance)
-    camera.left = midX - span * aspect / 2
-    camera.right = midX + span * aspect / 2
-    camera.top = midY + span / 2
-    camera.bottom = midY - span / 2
-    camera.updateProjectionMatrix()
+    // The field of view widens as the camera nears an object, while `span` keeps the framing at the
+    // target plane, so DOM overlays sized from it still line up with the model.
+    if (closeup) fov = T.MathUtils.lerp(baseFov, closeup === "seat" ? FOV.seat : FOV.closeup, amount)
+    cameraAmount = closeup ? amount : 0
+    placeCamera(span, midX, midY, fov, aspect)
     const maskRecord = compact && closeup === "record" && focus > .65
     stage.toggleAttribute("data-record-mask", maskRecord)
     if (closeup === "record" && (opening || maskRecord)) {
@@ -430,22 +527,43 @@ export function startCottage() {
       room.projector.reveal(T.MathUtils.smoothstep(focus, .36, .92))
       projector.show(T.MathUtils.smoothstep(focus, .87, 1), opening && focus === 1)
     }
-    room.lampLight.intensity = lamp * 12
-    room.shade.emissiveIntensity = lamp * .77
-    room.bulb.color.setHex(preferences.lamp ? 0xffdbab : 0xbb9572)
     for (const curtain of room.curtains) curtain.scale.x = T.MathUtils.lerp(1.62, .37, curtains)
     const from = Math.min(Math.floor(time), 1)
     const blend = time - from
     const light = key => T.MathUtils.lerp(daylight[from][key], daylight[from + 1][key], blend)
+    const mood = (key, target) => target.copy(moods[from][key]).lerp(moods[from + 1][key], blend)
     for (const [index, view] of room.views.entries()) {
       view.material.color.setScalar((.64 + curtains * .36) * light("window"))
       if (index) view.material.opacity = clamp(time - index + 1, 0, 1)
     }
-    const projectionShade = closeup === "projector" ? 1 - focus * .25 : 1
-    sky.intensity = (1.11 + .51 * curtains) * light("sky") * projectionShade
-    key.intensity = (.61 + 1.59 * curtains) * light("key") * projectionShade
-    fill.intensity = (.55 + .41 * curtains) * light("fill")
+    const night = light("glow")
+    // Leaning in to read something at night lifts the ambient light; the sofa view keeps the evening mood.
+    const reading = closeup && closeup !== "seat" && closeup !== "projector" ? cameraAmount * night : 0
+    const projectionShade = (closeup === "projector" ? 1 - focus * .25 : 1) * (1 + 1.5 * reading)
+    sky.intensity = (.4 + .2 * curtains) * light("sky") * projectionShade
+    key.intensity = (.36 + .84 * curtains) * light("key") * projectionShade * (1 + 1.5 * reading)
+    fill.intensity = (.3 + .22 * curtains) * light("fill")
     key.color.copy(lightColors[from]).lerp(lightColors[from + 1], blend)
+    scene.environmentIntensity = (.3 + .16 * curtains) * light("env") * projectionShade
+    // Without its shadow map the sun cannot be blocked by the curtains, so dim it directly.
+    room.sun.intensity = 5.2 * light("sun") * projectionShade * (room.sun.castShadow ? 1 : .2 + .8 * curtains)
+    mood("sun", room.sun.color)
+    mood("from", room.sun.position)
+    mood("to", room.sun.target.position)
+    room.sun.target.updateMatrixWorld()
+    // The lamp matters most at night: a brighter pool and a glowing bulb.
+    room.lampLight.intensity = lamp * (4 + 3.5 * night)
+    room.lampPool.intensity = lamp * (2 + 2.5 * night)
+    room.shade.emissiveIntensity = lamp * (.42 + .3 * night)
+    room.bulb.color.copy(dimBulb).lerp(litBulb, lamp)
+    mood("backdrop", backdrop)
+    const shownPeriod = periods[Math.round(time)]
+    if (roomView.dataset.period !== shownPeriod) roomView.dataset.period = shownPeriod
+    if (grade) {
+      mood("tint", grade.uniforms.tint.value)
+      grade.uniforms.vignette.value = .16 + .14 * Math.max(night, focus)
+    }
+    if (bloom) bloom.strength = .2 + .2 * night
     const spinning = opening && (closeup === "record" || closeup === "seat") && selectedVinyl && !reduced.matches && !document.hidden
     if (spinning) room.record.vinyl.rotation.y += dt * 3.4
     if (motionFinished) {
@@ -477,13 +595,65 @@ export function startCottage() {
         }
       }
     }
-    renderer.render(scene, camera)
-    if (azimuth !== targetAzimuth || elevation !== targetElevation ||
-      lamp !== Number(preferences.lamp) || curtains !== Number(preferences.curtains) || time !== wantedTime || focusMotion || spinning) {
-      invalidate()
-    } else {
-      lastFrame = 0
+    if (composer) composer.render(dt)
+    else renderer.render(scene, camera)
+    const animating = azimuth !== targetAzimuth || elevation !== targetElevation || lamp !== Number(preferences.lamp) ||
+      curtains !== Number(preferences.curtains) || time !== wantedTime || focusMotion || spinning
+    // When "auto" quality cannot keep up during motion, step down one tier.
+    slowFrames = animating && dt > .045 ? slowFrames + 1 : 0
+    if (slowFrames > 24 && quality !== "low" && !qualities.includes(requestedQuality) && preferences.quality === "auto") {
+      slowFrames = 0
+      applyQuality(quality === "high" ? "medium" : "low")
     }
+    if (animating) invalidate()
+    else lastFrame = 0
+  }
+
+  function applyQuality(level = resolveQuality()) {
+    quality = level
+    roomView.dataset.quality = level
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, { low: 1.25, medium: 1.6, high: 2 }[level]))
+    key.shadow.mapSize.setScalar(level === "high" ? 2048 : 1536)
+    room.sun.castShadow = level !== "low"
+    room.sun.shadow.mapSize.setScalar(level === "high" ? 2048 : 1024)
+    for (const light of [key, room.sun]) {
+      light.shadow.map?.dispose()
+      light.shadow.map = null
+    }
+    composer?.dispose()
+    composer = bloom = grade = null
+    if (level !== "low") {
+      const target = new T.WebGLRenderTarget(1, 1, { type: T.HalfFloatType, samples: 4 })
+      composer = new EffectComposer(renderer, target)
+      composer.addPass(new RenderPass(scene, camera))
+      if (level === "high") {
+        const occlusion = new GTAOPass(scene, camera, 1, 1)
+        occlusion.output = GTAOPass.OUTPUT.Default
+        occlusion.blendIntensity = .85
+        occlusion.updateGtaoMaterial({ radius: .32, distanceExponent: 1.5, thickness: 1.4, scale: 1, samples: 12 })
+        occlusion.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 12 })
+        composer.addPass(occlusion)
+      }
+      bloom = new UnrealBloomPass(new T.Vector2(1, 1), .3, .5, .95)
+      composer.addPass(bloom)
+      composer.addPass(new OutputPass())
+      grade = new ShaderPass(GradeShader)
+      composer.addPass(grade)
+    }
+    resize()
+  }
+
+  function resolveQuality() {
+    const wanted = qualities.includes(requestedQuality) ? requestedQuality : preferences.quality
+    return wanted === "auto" ? detectedQuality : wanted
+  }
+
+  function resize() {
+    if (!viewportWidth || !viewportHeight) return
+    renderer.setSize(viewportWidth, viewportHeight, false)
+    composer?.setPixelRatio(renderer.getPixelRatio())
+    composer?.setSize(viewportWidth, viewportHeight)
+    invalidate()
   }
 
   function invalidate() {
@@ -654,9 +824,7 @@ export function startCottage() {
   const observer = new ResizeObserver(([entry]) => {
     viewportWidth = entry.contentRect.width
     viewportHeight = entry.contentRect.height
-    if (!viewportWidth || !viewportHeight) return
-    renderer.setSize(viewportWidth, viewportHeight, false)
-    invalidate()
+    resize()
   })
   observer.observe(stage)
   canvas.addEventListener("webglcontextlost", event => {
@@ -687,10 +855,13 @@ export function startCottage() {
   })
   canvas.addEventListener("webglcontextrestored", () => {
     lost = false
+    scene.environment = makeEnvironment()
+    applyQuality(quality)
     stage.hidden = controls.hidden = false
     fallback.hidden = true
     invalidate()
   })
+  applyQuality()
   syncControls()
   controls.hidden = false
 }

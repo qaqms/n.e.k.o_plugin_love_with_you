@@ -1,0 +1,12 @@
+{
+  "name": "love-with-you-adventure-build",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "javascript-astar": "0.4.1",
+    "phaser": "3.90.0"
+  }
+}

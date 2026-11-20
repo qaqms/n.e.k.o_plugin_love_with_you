@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>我们的小屋</title>
+  <link rel="stylesheet" href="./cottage.css?v=0.9.23">
+</head>
+<body>
+  <main id="room" aria-labelledby="title">
+    <div id="stage"></div>
+    <header><h1 id="title">我们的小屋</h1></header>
+    <div id="controls" role="group" hidden>
+      <div class="control-group">
+        <button type="button" id="lamp" aria-pressed="false"></button>
+        <button type="button" id="curtains" aria-pressed="true"></button>
+      </div>
+      <div class="control-group" id="keepsakes" hidden>
+        <button type="button" id="record"></button>
+        <button type="button" id="picture"></button>
+        <button type="button" id="notebook"></button>
+        <button type="button" id="shelf"></button>
+        <button type="button" id="calendar"></button>
+        <button type="button" id="projector"></button>
+      </div>
+      <div class="control-group">
+        <button type="button" id="left"></button>
+        <button type="button" id="reset"></button>
+        <button type="button" id="right"></button>
+        <button type="button" id="seat"></button>
+      </div>
+    </div>
+    <button type="button" id="cottage-back" hidden></button>
+    <div id="record-thread" aria-hidden="true" hidden></div>
+    <section id="record-station" aria-labelledby="record-title" hidden>
+      <div class="record-heading">
+        <h2 id="record-title"></h2>
+        <select id="record-role" hidden></select>
+        <span id="record-single-role" hidden></span>
+      </div>
+      <p id="record-empty" role="status" hidden></p>
+      <div id="record-sleeves" role="group" aria-labelledby="record-title" hidden></div>
+      <article id="record-detail" aria-labelledby="record-detail-title" aria-live="polite" hidden>
+        <h3 id="record-detail-title"></h3>
+        <time id="record-date" hidden></time>
+        <dl id="record-progress" hidden><dt></dt><dd></dd></dl>
+        <p id="record-note" hidden></p>
+      </article>
+    </section>
+    <section id="picture-pages" aria-labelledby="picture-title" hidden>
+      <h2 id="picture-title" class="visually-hidden"></h2>
+      <select id="picture-role" hidden></select>
+      <article id="picture-caption" aria-live="polite">
+        <p id="picture-empty" role="status" hidden></p>
+        <div id="picture-entry" hidden>
+          <div class="picture-meta"><span id="picture-kind"></span><time id="picture-date"></time></div>
+          <h3 id="picture-entry-title"></h3>
+          <p id="picture-note" hidden></p>
+          <dl id="picture-progress" hidden><dt></dt><dd></dd></dl>
+        </div>
+        <button type="button" id="picture-original" hidden></button>
+      </article>
+      <nav id="picture-pager" aria-labelledby="picture-title" hidden>
+        <button type="button" id="picture-previous"></button>
+        <span id="picture-count" aria-live="polite"></span>
+        <button type="button" id="picture-next"></button>
+      </nav>
+    </section>
+    <section id="notebook-pages" aria-labelledby="notebook-title" hidden>
+      <div class="cottage-strip">
+        <h2 id="notebook-title"></h2>
+        <select id="notebook-role"></select>
+      </div>
+      <form id="notebook-form">
+        <input id="notebook-subject" maxlength="80" required>
+        <textarea id="notebook-text" maxlength="1200" rows="3"></textarea>
+        <div class="cottage-strip">
+          <button type="button" id="notebook-draft"></button>
+          <button type="submit" id="notebook-save"></button>
+        </div>
+      </form>
+      <div class="cottage-strip">
+        <p id="notebook-status" role="status" hidden></p>
+        <button type="button" id="notebook-retry" hidden></button>
+        <button type="button" id="notebook-refresh" hidden></button>
+      </div>
+    </section>
+    <section id="gift-display" aria-labelledby="shelf-title" hidden>
+      <div id="gift-thread" aria-hidden="true"></div>
+      <div id="gift-slots" role="group" aria-labelledby="shelf-title"></div>
+      <div id="gift-tag">
+        <h2 id="shelf-title"></h2>
+        <p id="gift-details"></p>
+        <div class="cottage-strip">
+          <select id="gift-picker"></select>
+          <button type="button" id="gift-remove"></button>
+        </div>
+      </div>
+    </section>
+    <div id="seat-controls" role="group" hidden>
+      <div class="control-group">
+        <button type="button" id="seat-lamp"></button>
+        <button type="button" id="seat-curtains"></button>
+        <button type="button" id="seat-record" hidden></button>
+      </div>
+      <div class="control-group" id="period-controls" role="group">
+        <button type="button" id="period-auto"></button>
+        <button type="button" id="period-day"></button>
+        <button type="button" id="period-dusk"></button>
+        <button type="button" id="period-night"></button>
+      </div>
+    </div>
+    <button type="button" id="seat-empty" hidden></button>
+    <section id="company-cups" aria-labelledby="company-title" hidden>
+      <h2 id="company-title"></h2>
+      <div class="company-actions">
+        <button type="button" id="company-quiet" aria-pressed="false"></button>
+        <button type="button" id="company-chat"></button>
+      </div>
+      <p id="company-status" role="status" hidden></p>
+    </section>
+    <section id="calendar-sheet" aria-labelledby="calendar-title" hidden>
+      <h2 id="calendar-title"></h2>
+      <time id="calendar-date"></time>
+      <article id="calendar-event" aria-live="polite">
+        <h3 id="calendar-name"></h3>
+        <p id="calendar-countdown"></p>
+      </article>
+      <div id="calendar-controls">
+        <button type="button" id="calendar-prev"></button>
+        <button type="button" id="calendar-write"></button>
+        <button type="button" id="calendar-next"></button>
+      </div>
+    </section>
+    <section id="projector-screen" aria-labelledby="projector-title" hidden>
+      <h2 id="projector-title"></h2>
+      <strong id="projector-item"></strong>
+      <p id="projector-progress"></p>
+      <a id="projector-action" target="_blank" rel="noopener noreferrer" hidden></a>
+    </section>
+    <p id="fallback" role="status" hidden></p>
+  </main>
+  <script type="module">
+    import("./cottage.mjs?v=0.9.24").then(module => module.startCottage()).catch(() => {
+      const fallback = document.getElementById("fallback")
+      fallback.textContent = /^(en|pt|es|ru|ko|ja)/i.test(new URLSearchParams(location.search).get("locale") || "")
+        ? "The 3D room could not load." : "暂时无法加载 3D 小屋。"
+      fallback.hidden = false
+      document.getElementById("controls").hidden = true
+    })
+  </script>
+</body>
+</html>

@@ -1,0 +1,938 @@
+import { AdventureApi, adventureErrorCode, errorText } from "./bridge.mjs"
+import { TEXTURES } from "./textures.mjs"
+import { ACTOR_TEXTURES, COMPANION_SHEET, ENEMY_TEXTURES, PLAYER_SHEET, actorImage, fitCompanion, fitPlayer, installActorAtlas } from "./actor-art.mjs"
+import { paintProjectiles, MAP_SKINS, MAP_KINDS } from "./forest-art.mjs"
+import { ForestMap } from "./forest-map.mjs"
+import { fitFoe, loadFoes } from "./foe-art.mjs"
+import { DEPTH } from "./terrain-rules.mjs"
+import { BattleArt } from "./battle-art.mjs"
+import { icon } from "./icons.mjs"
+import { button, element, loadoutSummary, renderShop, settlementDetails, wallet } from "./camp.mjs"
+import { installLine, installCasts, installSwords, installStrikes, installMastery, installCatalog, installRoutes, installBuildMods, ROUTES, SKILLS } from "./skills.mjs"
+import { SkillCombat } from "./combat.mjs"
+import { Encounters } from "./encounters.mjs"
+import { installEncounters, FOES, AFFIXES } from "./encounter-rules.mjs"
+import { installJourney, nodeAt, skinAt } from "./journey-rules.mjs"
+import { installStops } from "./stop-rules.mjs"
+import { Journey } from "./journey.mjs"
+import { Ultimate, ULTIMATE_ART } from "./ultimate.mjs"
+import { FireArt } from "./fire-art.mjs"
+import { SwordArt, SWORD_ART, DASH_ART } from "./sword-art.mjs"
+import { Hazards } from "./hazards.mjs"
+import { renderStudy, renderStarter, renderRefit, renderCodex, mountSkillHud, updateSkillHud, buildDetails } from "./study.mjs"
+
+try {
+  const responses = await Promise.all(["skills.json", "skills-v2.json", "encounters.json", "skills-expanded.json", "routes.json", "build-mods.json", "journey.json", "mastery.json", "fire-line.json", "flame-line.json", "stops.json", "sword-line.json", "dash-line.json"].map(file => fetch(new URL(file, import.meta.url))))
+  if (responses.some(response => !response.ok)) throw new Error("技能资源读取失败")
+  const [current, legacy, encounters, expanded, routes, mods, journey, mastery, line, casts, stops, swords, strikes] = await Promise.all(responses.map(response => response.json()))
+  installCatalog(current, legacy, expanded); installRoutes(routes); installBuildMods(mods); installEncounters(encounters); installJourney(journey); installMastery(mastery); installLine(line); installCasts(casts); installStops(stops); installSwords(swords); installStrikes(strikes)
+} catch (error) {
+  document.getElementById("screen-body").textContent = "技能资源未能载入，请重新打开冒险面板。"
+  throw error
+}
+
+const $ = id => document.getElementById(id)
+const W = 1800, H = 1200, END = 1200000
+const CLASSES = { guardian: "剑卫", mage: "元素使" }
+const routeName = (run, owner) => run.rules >= 7 ? owner === "player" ? "旅行者" : "同行"
+  : run.rules === 6 ? ROUTES[run[`${owner}_route`]].name : CLASSES[run[`${owner}_class`]]
+const partyLabel = run => run.rules >= 7 ? "局内自由研习" : `${routeName(run, "player")} × ${routeName(run, "companion")}`
+const UPGRADES = {
+  power: ["磨砺", "玩家", "攻击强度提高 18%。"],
+  vitality: ["坚韧", "玩家", "生命上限提高 18，并恢复等量生命。"],
+  stride: ["轻步", "玩家", "移动速度提高 6%。"],
+  reach: ["共鸣拾取", "双方", "经验拾取范围扩大。"],
+  partner: ["并肩", "同行", "同行攻击与支援强度提高 20%。"],
+  haste: ["施法节律", "玩家", "自动攻击间隔缩短。"],
+  ward: ["守望", "同行", "获得周期性护盾；剑卫的护盾更强。"],
+  multishot: ["回响", "玩家", "自动攻击增加一枚散射弹体。"],
+}
+const timeText = ms => `${String(Math.floor(ms / 60000)).padStart(2, "0")}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`
+
+class Forest extends Phaser.Scene {
+  constructor() { super("forest"); this.activeRun = false; this.paused = true; this.touch = { x: 0, y: 0 } }
+  preload() {
+    for (const [key, svg] of Object.entries({ ...TEXTURES, ...ACTOR_TEXTURES, ...ENEMY_TEXTURES })) {
+      this.load.image(key, `data:image/svg+xml;base64,${btoa(svg)}`)
+    }
+    this.load.image(COMPANION_SHEET.key, COMPANION_SHEET.url)
+    this.load.image(PLAYER_SHEET.key, PLAYER_SHEET.url)
+    loadFoes(this)
+    for (const [key, url] of Object.entries(ULTIMATE_ART)) this.load.image(key, url)
+    this.load.image("fx-fire-bird", "art/fx-fire-bird.jpg")
+    this.load.image("fx-fire-slash", "art/fx-fire-slash.jpg"); this.load.image("fx-lava-pool", "art/fx-lava-pool.png")
+    this.load.image("fx-hellfire", "art/fx-hellfire.png")
+    for (const id of ["wall", "orb", "pillar"]) this.load.image(`fx-flame-${id}`, `art/fx-flame-${id}.jpg`)
+    this.load.image("fx-flame-domain", "art/fx-flame-domain.png")
+    for (const id of SWORD_ART) this.load.image(`fx-sword-${id}`, `art/fx-sword-${id}.jpg`)
+    for (const id of DASH_ART) this.load.image(`fx-dash-${id}`, `art/fx-dash-${id}.jpg`)
+    for (const skin of MAP_SKINS) {
+      this.load.image(`map-${skin}-ground`, `art/map-${skin}-ground.jpg`)
+      for (const kind of MAP_KINDS) this.load.image(`map-${skin}-${kind}`, `art/map-${skin}-${kind}.png`)
+    }
+  }
+  create() {
+    this.controller = controller
+    if (!this.textures.exists(COMPANION_SHEET.key)) controller.notice("同行外观未能载入，已改用简化形象。")
+    installActorAtlas(this)
+    this.terrain = new ForestMap(this)
+    this.enemies = this.physics.add.group()
+    this.bullets = this.physics.add.group()
+    this.drops = this.physics.add.group()
+    this.player = fitPlayer(this.physics.add.sprite(W / 2, H / 2, "actors-v2").setDepth(10).setCollideWorldBounds(true))
+    this.companion = fitCompanion(this.physics.add.sprite(W / 2 - 55, H / 2 + 20, "actors-v2").setDepth(9).setCollideWorldBounds(true))
+    this.ring = this.add.ellipse(this.player.x, this.player.y + 12, 42, 21).setStrokeStyle(2, 0xe8d296, .6).setDepth(8)
+    this.partnerRing = this.add.ellipse(this.companion.x, this.companion.y + 12, 37, 19).setStrokeStyle(2, 0x9dbbdb, .65).setDepth(8)
+    const projectile = this.make.graphics({ x: 0, y: 0, add: false })
+    projectile.fillStyle(0xfff4cb).fillCircle(10, 10, 6)
+    projectile.lineStyle(2, 0xe6cf91).strokeCircle(10, 10, 8)
+    projectile.generateTexture("bolt", 20, 20); projectile.destroy()
+    paintProjectiles(this)
+    this.art = new BattleArt(this)
+    this.fireArt = new FireArt(this)
+    this.swordArt = new SwordArt(this)
+    this.terrain.bind()
+    $("effects").setAttribute("aria-pressed", String(this.art.reduced))
+    const crystal = this.make.graphics({ x: 0, y: 0, add: false })
+    crystal.fillStyle(0xc2a9e0).fillPoints([{x:8,y:0},{x:15,y:9},{x:8,y:17},{x:1,y:9}], true)
+    crystal.lineStyle(1, 0xe3d5f0).strokePoints([{x:8,y:0},{x:15,y:9},{x:8,y:17},{x:1,y:9}], true)
+    crystal.generateTexture("xp", 16, 18); crystal.destroy()
+    this.physics.add.overlap(this.bullets, this.enemies, (bolt, enemy) => this.hit(bolt, enemy))
+    this.physics.add.overlap(this.player, this.enemies, (_, enemy) => this.hurt(enemy))
+    this.physics.add.overlap(this.player, this.drops, (_, drop) => this.collect(drop))
+    this.keys = this.input.keyboard.addKeys({
+      up: "W", down: "S", left: "A", right: "D",
+      up2: "UP", down2: "DOWN", left2: "LEFT", right2: "RIGHT",
+    })
+    this.input.keyboard.on("keydown-ESC", () => controller.pause())
+    this.input.keyboard.on("keydown-Q", event => { if (!event.repeat) this.combat?.castManual(0) })
+    this.input.keyboard.on("keydown-E", event => { if (!event.repeat) this.combat?.castManual(1) })
+    this.input.keyboard.on("keydown-R", event => { if (!event.repeat) this.ultimate?.cast() })
+    this.cameras.main.startFollow(this.player, true, .12, .12)
+    // Panel bounds can change before the engine gets its next resize tick.
+    const viewport = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      if (width > 0 && height > 0 && (this.scale.width !== width || this.scale.height !== height)) {
+        this.scale.setParentSize(width, height)
+      }
+    })
+    viewport.observe($("game"))
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => { viewport.disconnect(); this.art.destroy(); this.terrain.destroy() })
+    this.physics.world.pause()
+    controller.ready(this)
+  }
+  loadRun(run) {
+    this.physics.world.pause()
+    this.art.reset()
+    this.combat?.destroy(); this.combat = null
+    this.encounters?.destroy(); this.encounters = null
+    this.journey?.clearExits(); this.journey = null
+    this.ultimate?.destroy(); this.ultimate = null
+    this.hazards?.destroy(); this.hazards = null
+    this.fireArt.reset(); this.swordArt.reset()
+    for (const group of [this.enemies, this.bullets, this.drops]) group.clear(true, true)
+    this.meta = run
+    const node = run.snapshot?.journey?.node ?? 0
+    this.terrain.load(run.rules >= 8 ? nodeAt(node).arena : "", run.rules >= 8 ? skinAt(node) : "")
+    this.terrain.reset(run.rules >= 5)
+    this.rng = new Phaser.Math.RandomDataGenerator([run.seed])
+    this.elapsed = 0; this.level = 1; this.xp = 0; this.kills = 0; this.partnerKills = 0
+    this.nextId = 1; this.ranks = Object.fromEntries(Object.keys(UPGRADES).map(key => [key, 0]))
+    this.choices = []; this.spawnAt = 700; this.attackAt = 300; this.supportAt = 1500; this.hurtUntil = 0
+    this.hp = this.maxHp(); this.shield = 0; this.bossSpawned = false; this.outcome = "playing"; this.lowHealth = false
+    fitPlayer(this.player, run.player_class).setPosition(W / 2, H / 2).setVelocity(0)
+    fitCompanion(this.companion, run.companion_class).setPosition(W / 2 - 55, H / 2 + 20).setVelocity(0)
+    const s = run.snapshot
+    if (s) {
+      this.rng.state(s.rng); this.elapsed = s.elapsed; this.level = s.level; this.xp = s.xp
+      this.kills = s.kills; this.partnerKills = s.partner_kills; this.nextId = s.next_id
+      this.ranks = { ...(s.ranks || this.ranks) }; this.choices = [...s.choices]; this.spawnAt = s.spawn_at
+      this.attackAt = s.attack_at; this.supportAt = s.support_at; this.hurtUntil = s.hurt_until
+      this.hp = s.player.hp; this.shield = s.shield; this.bossSpawned = s.boss_spawned; this.outcome = s.outcome
+      this.player.setPosition(s.player.x, s.player.y); this.companion.setPosition(s.companion.x, s.companion.y)
+      for (const e of s.enemies) this.makeEnemy(e)
+      for (const b of s.bullets) this.makeBullet(b)
+      for (const d of s.drops) this.makeDrop(d)
+    }
+    if (run.rules >= 2) this.combat = new SkillCombat(this, controller, s)
+    if (run.rules >= 4) this.encounters = new Encounters(this, controller, s)
+    if (run.rules >= 8) { this.journey = new Journey(this, controller, s); this.journey.arrive(); this.journey.drawExits() }
+    if (run.rules >= 9) this.ultimate = new Ultimate(this, controller, s)
+    if (run.rules >= 16) this.hazards = new Hazards(this, s)
+    for (const actor of [this.player, this.companion, ...this.enemies.getChildren()]) this.terrain.restoreActor(actor)
+    this.terrain.updateDepth()
+    mountSkillHud(this)
+    this.combat?.paint()
+    this.activeRun = true; this.setPaused(true); this.updateHud()
+    $("hud").hidden = false; $("companion-line").hidden = false; $("pause").disabled = false
+    $("companion-text").textContent = `${run.character} · ${routeName(run, "companion")} · 默契 +${run.bonus}%`
+    $("player-avatar").src = actorImage(run.player_class)
+    $("companion-avatar").src = actorImage(run.companion_class, "companion")
+    $("player-role").textContent = `玩家 · ${routeName(run, "player")}`
+    $("companion-line").title = $("companion-text").textContent
+    $("build-label").textContent = partyLabel(run)
+    this.art.update()
+  }
+  maxHp() { return 100 + this.meta.loadout.bonuses.vitality + (this.combat ? this.combat.talent("player", "vitality") * 12 : this.ranks.vitality * 18) + (this.journey?.state.vigor || 0) }
+  moveSpeed() { return 170 * (1 + this.meta.loadout.bonuses.stride / 100) * (1 + (this.combat ? this.combat.talent("player", "stride") * .04 : this.ranks.stride * .06)) * (1 + (this.combat?.expanded?.stride() || 0)) }
+  pickupRange() { return 60 * (1 + this.meta.loadout.bonuses.reach / 100) + (this.combat ? this.combat.talent("player", "reach") * 12 : this.ranks.reach * 16) }
+  xpNeeded() { return this.combat ? 14 + this.level * 7 : 10 + this.level * 5 }
+  setPaused(value) {
+    this.paused = value
+    this.art?.release()
+    if (value) this.ultimate?.cancel()
+    this.player?.setVelocity(0); this.companion?.setVelocity(0); this.touch = { x: 0, y: 0 }
+    this.input.keyboard.resetKeys()
+    if (value) this.physics.world.pause()
+    else this.physics.world.resume()
+    $("joystick").hidden = value || !matchMedia("(pointer:coarse)").matches
+    $("skill-bar").hidden = value || !this.combat
+    if (value || !this.ultimate) $("ultimate").hidden = true
+    $("auto-skills").hidden = value || !this.combat
+    if (value) $("encounter-status").hidden = true
+  }
+  enterArena() {
+    this.player.setPosition(W / 2, H / 2).setVelocity(0); this.companion.setPosition(W / 2 - 55, H / 2 + 20).setVelocity(0)
+    for (const actor of [this.player, this.companion]) this.terrain.restoreActor(actor)
+    this.ring.setPosition(this.player.x, this.player.y + 14); this.partnerRing.setPosition(this.companion.x, this.companion.y + 14)
+    this.cameras.main.centerOn(this.player.x, this.player.y)
+  }
+  next() { return this.nextId++ }
+  makeEnemy(e) {
+    const enemy = this.enemies.create(e.x, e.y, TEXTURES[e.kind] ? e.kind : "boss")
+      .setScale(e.kind === "boss" ? 1.4 : ["sentinel", "oracle"].includes(e.kind) ? 1.12 : e.kind === "brute" || e.kind === "charger" ? .85 : .62)
+      .setDepth(6)
+    if (e.kind === "charger") enemy.setTint(0xdba58c)
+    if (e.kind === "caster") enemy.setTint(0xb6c6a0)
+    if (e.kind === "sentinel") enemy.setTint(0xabc69d)
+    if (e.kind === "oracle") enemy.setTint(0xb9a8cb)
+    enemy.body.setCircle(19, 13, 29)
+    fitFoe(enemy, e.kind)
+    if (this.terrain.enabled) enemy.setCollideWorldBounds(true)
+    this.terrain.restoreActor(enemy)
+    enemy.setData({ id: e.id, kind: e.kind, hp: e.hp, affix: e.affix || "" })
+    // Rule 12 elites are larger and tinted; the hurt flash restores this tint.
+    if (e.affix) enemy.setScale(enemy.scaleX * 1.28).setTint(AFFIXES[e.affix].color)
+    this.encounters?.track(enemy)
+    return enemy
+  }
+  makeBullet(b) {
+    const bolt = this.bullets.create(b.x, b.y, "bolt").setDepth(DEPTH.bolts)
+    bolt.body.setCircle(7, 3, 3)
+    if (b.owner === "companion") bolt.setTint(0x99c7ff)
+    bolt.setData({ id: b.id, life: b.life, damage: b.damage, owner: b.owner })
+    if (b.skill) {
+      bolt.setData({ skill: b.skill, pierce: b.pierce, hit_ids: [...b.hit_ids] })
+      bolt.setTint(b.skill === "fire" ? 0xefae76 : 0x8bd8ca)
+      if (this.meta.rules >= 3) {
+        bolt.setData("form", b.form)
+        // 48px artwork around the same centred 7px collision circle.
+        bolt.setTexture(`bolt-${b.skill === "stone" || b.form === "base" ? b.skill : b.form}`).clearTint()
+        bolt.body.setCircle(7, 17, 17); bolt.setRotation(Math.atan2(b.vy, b.vx))
+        if (b.form !== "base") bolt.setScale(1.15)
+        // Mastery III flame bird: a 320px additive picture around a 16px collision circle.
+        if (b.form === "bird" && this.textures.exists("fx-fire-bird")) {
+          bolt.setTexture("fx-fire-bird").setScale(.44).setBlendMode(Phaser.BlendModes.ADD)
+          bolt.body.setCircle(36, 124, 124)
+        } else if (b.form === "bird") bolt.setTexture("bolt-awakened").setScale(1.8)
+      }
+    }
+    bolt.setVelocity(b.vx, b.vy)
+    return bolt
+  }
+  makeDrop(d) {
+    if (this.drops.countActive() >= 160) {
+      const drop = this.drops.getFirstAlive()
+      drop.setData("amount", drop.getData("amount") + d.amount)
+      return null
+    }
+    const point = this.terrain.safePoint(d)
+    const drop = this.drops.create(point.x, point.y, "xp").setScale(.65).setDepth(DEPTH.floor)
+    drop.body.setCircle(9)
+    drop.setData({ id: d.id, amount: d.amount })
+    return drop
+  }
+  spawn() {
+    if (this.encounters) return this.encounters.spawnRegular()
+    if (this.enemies.countActive() >= 150) return
+    const angle = this.rng.realInRange(0, Math.PI * 2), distance = this.rng.between(370, 560)
+    const kind = this.elapsed > 180000 && this.rng.frac() < .18 ? "brute" : this.rng.frac() < .22 ? "wisp" : "slime"
+    const scale = 1 + this.elapsed / 240000
+    this.makeEnemy({ id: this.next(), kind, hp: (kind === "brute" ? 65 : kind === "wisp" ? 13 : 24) * scale,
+      x: Phaser.Math.Clamp(this.player.x + Math.cos(angle) * distance, 35, W - 35),
+      y: Phaser.Math.Clamp(this.player.y + Math.sin(angle) * distance, 35, H - 35) })
+  }
+  nearest(source, range) {
+    let target = null, distance = range * range
+    for (const e of this.enemies.getChildren()) {
+      const d = Phaser.Math.Distance.Squared(source.x, source.y, e.x, e.y)
+      if (d < distance && this.terrain.lineClear(source, e)) { target = e; distance = d }
+    }
+    return target
+  }
+  shoot(source, owner) {
+    if (this.combat) return this.combat.shoot(source, owner)
+    const isPlayer = owner === "player", kind = isPlayer ? this.meta.player_class : this.meta.companion_class
+    const target = this.nearest(source, kind === "guardian" ? 180 : 520)
+    if (!target) return
+    const angle = Phaser.Math.Angle.Between(source.x, source.y, target.x, target.y)
+    const count = isPlayer ? 1 + Math.min(3, this.ranks.multishot) : 1
+    const damage = (kind === "guardian" ? 28 : 20) * (1 + this.meta.loadout.bonuses.power / 100)
+      * (isPlayer ? 1 + this.ranks.power * .18 : (1 + this.ranks.partner * .2) * (1 + this.meta.bonus / 100) * .75)
+    for (let i = 0; i < count && this.bullets.countActive() < 160; i++) {
+      const a = angle + (i - (count - 1) / 2) * .18
+      const speed = kind === "guardian" ? 500 : 430
+      this.makeBullet({ id: this.next(), x: source.x, y: source.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
+        life: kind === "guardian" ? 340 : 1200, damage, owner })
+    }
+  }
+  hit(bolt, enemy) {
+    if (this.combat) return this.combat.hit(bolt, enemy)
+    if (this.paused || !bolt.active || !enemy.active) return
+    const before = enemy.getData("hp"), owner = bolt.getData("owner")
+    enemy.setData("hp", before - bolt.getData("damage"))
+    this.art.impact(bolt.x, bolt.y, owner === "companion" ? "guard" : "slash")
+    this.art.strike(enemy, Math.min(before, bolt.getData("damage")), owner, enemy.getData("hp") <= 0)
+    bolt.destroy()
+    if (enemy.getData("hp") > 0) return
+    const kind = enemy.getData("kind")
+    const x = enemy.x, y = enemy.y
+    enemy.destroy(); this.kills++
+    if (owner === "companion") this.partnerKills++
+    this.art.drop(this.makeDrop({ id: this.next(), x, y, amount: kind === "brute" ? 12 : kind === "wisp" ? 5 : 4 }))
+    if (kind === "boss") this.end("cleared")
+  }
+  hurt(enemy) {
+    if (!enemy.active) return
+    const kind = enemy.getData("kind"), amount = this.encounters && FOES[kind] ? FOES[kind].damage
+      : kind === "boss" ? 28 : kind === "brute" ? 18 : 9
+    if (this.takeDamage(amount * (AFFIXES[enemy.getData("affix")]?.damage ?? 1), enemy)) this.art?.lunge?.(enemy)
+  }
+  takeDamage(amount, enemy) {
+    if (this.paused || this.outcome !== "playing" || this.elapsed < this.hurtUntil || !enemy?.active) return false
+    const blocked = Math.min(this.shield, amount)
+    this.shield -= blocked; amount -= blocked
+    this.hp = Math.max(0, this.hp - amount); this.hurtUntil = this.elapsed + 700
+    this.art.hurt(amount, blocked)
+    if (this.hp / this.maxHp() <= .3 && !this.lowHealth) {
+      this.lowHealth = true; controller.notice(`${this.meta.character}：先拉开距离，我在你身边。`)
+    }
+    if (this.hp <= 0 && this.journey?.spare()) { this.hp = 1; this.hurtUntil = this.elapsed + 1500; controller.notice("替身护符碎了，你撑了下来。") }
+    if (this.hp <= 0) this.end("defeated")
+    else this.combat?.onHurt(enemy)
+    return true
+  }
+  collect(drop) {
+    if (this.paused || !drop.active) return
+    this.xp = Math.min(10000, this.xp + drop.getData("amount")); drop.destroy()
+    this.checkLevel()
+  }
+  checkLevel() {
+    if (this.combat) return this.combat.checkLevel()
+    if (this.xp < this.xpNeeded() || this.choices.length || this.level >= 65) return
+    const pool = Object.keys(UPGRADES).filter(key => this.ranks[key] < (key === "multishot" ? 3 : 8))
+    if (!pool.length) { this.xp = this.xpNeeded(); return }
+    this.xp -= this.xpNeeded(); this.level++
+    this.choices = []
+    // Always include a companion upgrade while one is still available.
+    const support = pool.filter(key => key === "partner" || key === "ward")
+    if (support.length) this.choices.push(support[this.rng.between(0, support.length - 1)])
+    while (this.choices.length < 3 && pool.some(key => !this.choices.includes(key))) {
+      const options = pool.filter(key => !this.choices.includes(key))
+      this.choices.push(options[this.rng.between(0, options.length - 1)])
+    }
+    this.setPaused(true); controller.upgrades(true)
+  }
+  choose(key) {
+    if (this.combat) return this.combat.choose(key)
+    if (!this.choices.includes(key)) return
+    this.ranks[key]++
+    if (key === "vitality") { this.hp = Math.min(this.maxHp(), this.hp + 18); this.lowHealth = this.hp / this.maxHp() <= .3 }
+    this.choices = []
+    controller.play()
+    this.checkLevel()
+    if (!this.choices.length) controller.save().catch(error => controller.failure(error))
+  }
+  end(outcome) {
+    if (this.outcome !== "playing") return
+    this.outcome = outcome; this.setPaused(true)
+    controller.finish()
+  }
+  snapshot() {
+    const clampX = x => Phaser.Math.Clamp(x, 0, W), clampY = y => Phaser.Math.Clamp(y, 0, H)
+    const snapshot = {
+      rules: 1, elapsed: this.elapsed, rng: this.rng.state(),
+      player: { x: this.player.x, y: this.player.y, hp: this.hp },
+      companion: { x: clampX(this.companion.x), y: clampY(this.companion.y) },
+      enemies: this.enemies.getChildren().map(e => ({
+        id: e.getData("id"), kind: e.getData("kind"), x: clampX(e.x), y: clampY(e.y), hp: e.getData("hp"),
+        ...(this.meta.rules >= 12 ? { affix: e.getData("affix") } : {}),
+      })),
+      bullets: this.bullets.getChildren().map(b => ({
+        id: b.getData("id"), x: clampX(b.x), y: clampY(b.y), vx: b.body.velocity.x, vy: b.body.velocity.y,
+        life: b.getData("life"), damage: b.getData("damage"), owner: b.getData("owner"),
+        ...(this.combat ? { skill: b.getData("skill"), pierce: b.getData("pierce"), hit_ids: [...b.getData("hit_ids")] } : {}),
+        ...(this.meta.rules >= 3 ? { form: b.getData("form") } : {}),
+      })),
+      drops: this.drops.getChildren().map(d => ({
+        id: d.getData("id"), x: clampX(d.x), y: clampY(d.y), amount: d.getData("amount"),
+      })),
+      level: this.level, xp: this.xp, kills: this.kills, partner_kills: this.partnerKills,
+      next_id: this.nextId, ranks: { ...this.ranks }, choices: [...this.choices],
+      spawn_at: this.spawnAt, attack_at: this.attackAt, support_at: this.supportAt,
+      hurt_until: this.hurtUntil, shield: this.shield, boss_spawned: this.bossSpawned, outcome: this.outcome,
+    }
+    if (this.combat) {
+      delete snapshot.ranks
+      Object.assign(snapshot, { rules: this.meta.rules }, this.combat.data())
+    }
+    if (this.encounters) Object.assign(snapshot, this.encounters.data())
+    if (this.journey) Object.assign(snapshot, this.journey.data())
+    if (this.ultimate) Object.assign(snapshot, this.ultimate.data())
+    if (this.hazards) Object.assign(snapshot, this.hazards.data())
+    return snapshot
+  }
+  updateHud() {
+    $("health-text").textContent = `生命 ${Math.ceil(this.hp)} / ${this.maxHp()}`
+    $("health-fill").style.width = `${Math.max(0, this.hp / this.maxHp()) * 100}%`
+    $("hud").classList.toggle("low-health", this.hp / this.maxHp() <= .3)
+    $("ward-text").textContent = this.shield > 0 ? `护盾 ${Math.ceil(this.shield)}` : ""
+    $("clock").textContent = this.journey ? `${timeText(this.elapsed)} · ${this.journey.stage()}` : `${timeText(this.elapsed)} / 20:00`
+    $("kills").textContent = `击败 ${this.kills}`
+    $("level").textContent = `Lv.${this.level}`
+    $("xp-fill").style.width = `${Math.min(100, this.xp / this.xpNeeded() * 100)}%`
+    const milestone = this.encounters && Object.entries(this.encounters.state.milestones).find(([_, mark]) => mark.spawned && !mark.defeated)
+    $("objective").textContent = this.journey ? this.journey.objective() : this.bossSpawned ? "击败林地守望者" : milestone ? `击败 ${FOES[milestone[0]].name}`
+      : this.encounters && this.elapsed < 720000 ? "抵御来袭 · 击败首领取得协同" : this.elapsed < 180000 ? "抵御来袭 · 收集魔力结晶" : "深入林地 · 形成你的构筑"
+    updateSkillHud(this)
+    this.encounters?.updateHud()
+    this.ultimate?.hud()
+  }
+  update(_, rawDelta) {
+    if (!this.activeRun || this.paused) return
+    // Hit-stop holds the simulation clock; no time is skipped or replayed afterwards.
+    this.ultimate?.frame()
+    if (this.paused || this.outcome !== "playing") return
+    if (this.art.stall()) return
+    const delta = Math.min(50, Math.max(0, Math.round(rawDelta)))
+    this.elapsed = Math.min(END, this.elapsed + delta)
+    this.terrain.beginFrame()
+    let x = Number(this.keys.right.isDown || this.keys.right2.isDown) - Number(this.keys.left.isDown || this.keys.left2.isDown) + this.touch.x
+    let y = Number(this.keys.down.isDown || this.keys.down2.isDown) - Number(this.keys.up.isDown || this.keys.up2.isDown) + this.touch.y
+    const length = Math.hypot(x, y)
+    if (length > 1) { x /= length; y /= length }
+    const speed = this.moveSpeed()
+    if (this.combat && length > .01) this.combat.facing = { x: x / Math.hypot(x, y), y: y / Math.hypot(x, y) }
+    this.player.setVelocity(x * speed, y * speed)
+    const follow = Phaser.Math.Distance.Between(this.player.x - 48, this.player.y + 28, this.companion.x, this.companion.y)
+    if (this.terrain.enabled) {
+      this.terrain.move(this.companion, { x: this.player.x - 48, y: this.player.y + 28 },
+        speed * (follow > 250 ? 1.6 : 1.15), 14)
+    } else {
+      if (follow > 350) this.companion.setPosition(this.player.x - 48, this.player.y + 28)
+      if (follow > 14) this.physics.moveTo(this.companion, this.player.x - 48, this.player.y + 28, speed * 1.15)
+      else this.companion.setVelocity(0)
+    }
+    this.ring.setPosition(this.player.x, this.player.y + 14)
+    this.partnerRing.setPosition(this.companion.x, this.companion.y + 14)
+    this.player.setAlpha(this.elapsed < this.hurtUntil ? .6 : 1)
+    if (this.elapsed >= this.spawnAt && (!this.encounters || this.elapsed >= this.encounters.state.rest_until)
+      && (!this.journey || this.journey.fighting)) {
+      this.spawn(); this.spawnAt = this.elapsed + (this.journey ? this.journey.interval() : Math.max(210, 1000 - this.elapsed / 1200))
+    }
+    this.encounters?.spawn()
+    if (!this.encounters && !this.bossSpawned && this.elapsed >= 1080000) {
+      this.bossSpawned = true
+      this.makeEnemy({ id: this.next(), kind: "boss", x: Phaser.Math.Clamp(this.player.x + 300, 80, W - 80), y: this.player.y, hp: 4500 })
+      controller.notice("林地守望者已经苏醒。")
+    }
+    if (!this.combat && this.elapsed >= this.attackAt) {
+      this.shoot(this.player, "player"); this.attackAt = this.elapsed + 650 / (1 + this.ranks.haste * .1)
+    }
+    if (!this.combat && this.elapsed >= this.supportAt) {
+      this.shoot(this.companion, "companion")
+      if (this.meta.companion_class === "guardian" || this.ranks.ward) {
+        this.shield = Math.max(this.shield, (12 + this.ranks.ward * 4) * (1 + this.ranks.partner * .2) * (1 + this.meta.bonus / 100))
+      }
+      this.supportAt = this.elapsed + (this.meta.companion_class === "guardian" ? 3500 : 1100)
+    }
+    for (const enemy of this.enemies.getChildren()) {
+      const kind = enemy.getData("kind")
+      const speed = (kind === "wisp" ? 76 : kind === "boss" ? 44 : FOES[kind]?.speed || 33)
+        * (1 + Math.min(.6, (this.journey ? this.journey.pace() : this.elapsed) / 1500000)) * (AFFIXES[enemy.getData("affix")]?.speed ?? 1)
+      if (!this.encounters?.foes.has(enemy.getData("id"))) this.terrain.move(enemy, this.player, speed)
+    }
+    this.encounters?.update()
+    this.hazards?.update()
+    if (this.outcome !== "playing" || this.paused) return
+    this.combat?.update(delta)
+    if (this.outcome !== "playing" || this.paused) return
+    this.journey?.update()
+    this.checkLevel()
+    if (this.paused || this.outcome !== "playing") return
+    if (this.encounters?.openReward()) return
+    if (this.journey?.openDoors()) return
+    const area = this.terrain.geometry.area
+    for (const bolt of [...this.bullets.getChildren()]) {
+      bolt.setData("life", bolt.getData("life") - delta)
+      if (bolt.getData("form") === "bird") this.art.spray("fx-tongue", bolt.x, bolt.y, 1, { speed: 40, lift: -30, life: 380, tint: 0xff9a4d, from: .9, to: .1 })
+      if (bolt.getData("life") <= 0 || bolt.x < 0 || bolt.x > W || bolt.y < 0 || bolt.y > H
+        || this.journey && (bolt.x < area.left - 40 || bolt.x > area.right + 40 || bolt.y < area.top - 40 || bolt.y > area.bottom + 40)) bolt.destroy()
+    }
+    for (const drop of this.drops.getChildren()) {
+      if (Phaser.Math.Distance.Between(this.player.x, this.player.y, drop.x, drop.y) < this.pickupRange()) {
+        this.physics.moveToObject(drop, this.player, 330)
+      } else drop.setVelocity(0)
+    }
+    this.updateHud()
+    this.art.update()
+    this.ultimate?.paint()
+    this.fireArt.paint(); this.swordArt.paint()
+    this.terrain.updateDepth()
+    if (this.elapsed >= END) this.end("timeout")
+    else controller.autosave()
+  }
+}
+
+class Controller {
+  constructor() {
+    this.api = new AdventureApi(); this.scene = null; this.busy = false; this.saving = null; this.lastSaved = 0; this.noticeTimer = null
+    this.foreground = document.hasFocus(); this.surfaceVisible = true
+  }
+  ready(scene) { this.scene = scene; this.refresh() }
+  screen(title, eyebrow = "边境冒险") {
+    $("screen").hidden = false
+    $("hud").hidden = $("companion-line").hidden = true
+    $("skill-bar").hidden = true
+    $("auto-skills").hidden = true
+    $("notice").hidden = true
+    $("encounter-status").hidden = true
+    $("pause").disabled = true
+    $("objective").textContent = title
+    $("build-label").textContent = ""
+    const body = $("screen-body")
+    delete body.dataset.owner
+    body.replaceChildren(element("p", eyebrow, "eyebrow"), element("h2", title))
+    $("screen").scrollTop = 0
+    return body
+  }
+  notice(text) {
+    $("notice").textContent = text
+    clearTimeout(this.noticeTimer)
+    this.noticeTimer = setTimeout(() => { $("notice").textContent = "" }, 5000)
+  }
+  async refresh() {
+    this.scene?.setPaused(true)
+    const body = this.screen("读取旅程")
+    try {
+      const view = await this.api.read()
+      this.preflight(view)
+      $("save-state").textContent = "旅程已读取"
+    } catch (error) {
+      body.append(element("p", errorText(error), "error"), button("重新读取", () => this.refresh()))
+      $("save-state").textContent = "尚未连接"
+    }
+  }
+  preflight(view) {
+    const active = view.run?.status === "active"
+    const body = this.screen(active ? "旅程仍在等你" : "与同行者一起出发", "第一章 / 边境林地")
+    body.append(wallet(view.economy))
+    body.append(element("p", active
+      ? `${view.run.character} · ${partyLabel(view.run)} · ${timeText(view.run.snapshot?.elapsed || 0)}`
+      : view.rules >= 8 ? "三片林地，九段路程。每清完一段，由你选择下一段的目标与奖励。"
+      : "守住林地边境，在魔力回响中找到彼此的战斗节奏。", "lead"))
+    if (active) {
+      const actions = element("div", "", "actions")
+      actions.append(button("继续旅程", () => this.resume(false), "primary"),
+        button("接管此旅程", () => this.takeover()), button("冒险商店", () => this.shop(), "", "ShoppingBag"))
+      body.append(loadoutSummary(view), actions)
+      return
+    }
+    const party = element("div", "", "party")
+    const player = element("div"), partner = element("div")
+    const playerSelect = document.createElement("select"), partnerSelect = document.createElement("select"), characterSelect = document.createElement("select")
+    playerSelect.id = "player-class"; partnerSelect.id = "partner-class"; characterSelect.id = "character"
+    for (const select of [playerSelect, partnerSelect]) {
+      const owner = select === playerSelect ? "player" : "companion"
+      const options = view.rules >= 7 ? { guardian: "轻甲装束", mage: "旅法装束" }
+        : view.rules === 6 ? Object.fromEntries(Object.values(ROUTES).map(route =>
+        [route.id, `${route.name} · ${route[owner].map(id => SKILLS[id].name).join(" / ")}`]))
+        : owner === "player" ? { guardian: "突击剑 · 迅斩 / 突进", mage: "火术 · 火丸 / 焰环" }
+          : { guardian: "守护剑 · 回势斩 / 岩甲", mage: "引风术 · 风刃 / 引风" }
+      for (const [key, name] of Object.entries(options)) {
+        const option = element("option", name); option.value = key; select.append(option)
+      }
+    }
+    partnerSelect.value = "mage"
+    playerSelect.value = "mage"
+    const preview = (parent, select, owner) => {
+      parent.classList.add("party-member")
+      parent.dataset.owner = owner
+      const image = document.createElement("img")
+      image.className = "party-avatar"; image.alt = ""; image.width = 76; image.height = 86
+      const update = () => { image.src = actorImage(view.rules === 6 ? ROUTES[select.value].class : select.value, owner) }
+      select.addEventListener("change", update); update(); parent.append(image)
+    }
+    preview(player, playerSelect, "player"); preview(partner, partnerSelect, "companion")
+    for (const name of view.characters) {
+      const option = element("option", name); option.value = name; characterSelect.append(option)
+    }
+    if (view.characters.includes(view.current_character)) characterSelect.value = view.current_character
+    const label = (text, id) => { const l = element("label", text); l.htmlFor = id; return l }
+    player.append(label(view.rules >= 7 ? "你的装束" : "你的流派", "player-class"), playerSelect)
+    partner.append(label("同行者", "character"), characterSelect, label(view.rules >= 7 ? "同行装束" : "同行流派", "partner-class"), partnerSelect)
+    if (view.rules === 6) for (const [parent, select, owner] of [[player, playerSelect, "player"], [partner, partnerSelect, "companion"]]) {
+      const style = element("p", "", "route-style")
+      const update = () => { style.textContent = ROUTES[select.value][`${owner}_style`] }
+      select.addEventListener("change", update); update(); parent.append(style)
+    }
+    characterSelect.className = "character-select"
+    party.append(player, partner); body.append(party, loadoutSummary(view))
+    const actions = element("div", "", "actions")
+    const start = button("进入林地", () => this.start({
+      character: characterSelect.value,
+      player_class: view.rules === 6 ? ROUTES[playerSelect.value].class : playerSelect.value,
+      companion_class: view.rules === 6 ? ROUTES[partnerSelect.value].class : partnerSelect.value,
+      ...(view.rules === 6 ? { player_route: playerSelect.value, companion_route: partnerSelect.value } : {}),
+    }), "primary")
+    start.disabled = !view.characters.length
+    actions.append(start, button("冒险商店", () => this.shop(), "", "ShoppingBag")); body.append(actions)
+    if (!view.characters.length) body.append(element("p", "请先在宿主中选择一位角色，再重新读取。", "muted"))
+    if (view.run?.status === "ended") {
+      const last = element("div", "", "last-journey")
+      last.append(element("span", `上次旅程 ${timeText(view.run.snapshot.elapsed)} · 击败 ${view.run.snapshot.kills}`, "muted"),
+        button("查看结算", () => this.results(view.run)))
+      body.append(last)
+    }
+  }
+  async shop(message = "") {
+    this.scene?.setPaused(true)
+    const body = this.screen("冒险商店", "营地 / 出征准备")
+    try {
+      const view = await this.api.read()
+      renderShop(body, view, (operation, upgrade, level) => this.trade(operation, upgrade, level), () => this.refresh())
+      if (message) {
+        const feedback = element("p", message, "shop-feedback")
+        feedback.setAttribute("role", "status")
+        body.append(feedback)
+      }
+      $("save-state").textContent = message ? "交易已保存" : "商店已读取"
+    } catch (error) {
+      if (message) body.append(element("p", message, "shop-feedback"))
+      body.append(element("p", errorText(error), "error"), button("重新读取商店", () => this.shop(message)))
+      $("save-state").textContent = message ? "交易已保存 · 待刷新" : "商店尚未读取"
+    }
+  }
+  trade(operation, upgrade, level) {
+    return this.action(async () => {
+      const result = await this.api.mutate(operation, { upgrade, level })
+      await this.shop(this.tradeMessage(result))
+    })
+  }
+  tradeMessage(result) {
+    const t = result.transaction, name = this.api.view.shop.find(item => item.id === t.upgrade).name
+    return result.operation === "buy" ? `${name}已强化至 ${t.after} 阶 · 花费 ${t.amount} 冒险金币`
+      : `${name}已退还一阶 · 返还 ${t.amount} 冒险金币`
+  }
+  async action(task) {
+    if (this.busy) return
+    this.busy = true
+    const buttons = [...$("screen-body").querySelectorAll("button")].map(node => [node, node.disabled])
+    for (const [node] of buttons) node.disabled = true
+    try { await task() }
+    catch (error) { this.failure(error) }
+    finally {
+      this.busy = false
+      for (const [node, disabled] of buttons) if (node.isConnected) node.disabled = disabled
+    }
+  }
+  start(values) {
+    return this.action(async () => {
+      const ack = await this.api.mutate("start", { rules: this.api.view.rules, ...values })
+      const view = await this.api.read()
+      if (!view.owns_control || view.run?.status !== "active" || view.run.id !== ack.run_id) throw new Error("无法取得这场冒险的控制，请重新读取。")
+      this.scene.loadRun(view.run); this.lastSaved = 0; this.play()
+      await this.save(false)
+    })
+  }
+  takeover(refresh = false) {
+    if (confirm("接管后，另一个窗口将不能再保存这场冒险。")) return this.resume(true, refresh)
+  }
+  resume(takeover, refresh = false) {
+    return this.action(async () => {
+      if (refresh) {
+        this.api.pending = null; this.api.pendingView = null; this.scene.activeRun = false
+        await this.api.read()
+        if (this.api.view.run?.status !== "active") { this.preflight(this.api.view); return }
+      }
+      const ack = await this.api.mutate("claim", { run_id: this.api.view.run.id, takeover })
+      const view = await this.api.read()
+      if (!view.owns_control || view.run?.status !== "active" || view.run.id !== ack.run_id) throw new Error("控制已发生变化，请重新读取。")
+      this.scene.loadRun(view.run); this.lastSaved = this.scene.elapsed
+      $("save-state").textContent = `已读取 ${timeText(this.lastSaved)}`
+      if (this.scene.choices.length) this.upgrades()
+      else if (this.scene.encounters?.state.pending) this.cooperation()
+      else this.play()
+    })
+  }
+  play() {
+    if (this.scene.combat?.craft?.preparation) { this.initialStudy(); return }
+    if (this.scene.journey && !this.scene.journey.fighting && !this.scene.journey.roaming && this.scene.outcome === "playing") { this.doors(); return }
+    if (document.hidden || !this.surfaceVisible || !this.foreground) { this.pause(true); return }
+    $("screen").hidden = true; this.scene.setPaused(false)
+    mountSkillHud(this.scene); $("skill-bar").hidden = !this.scene.combat
+    $("hud").hidden = $("companion-line").hidden = false
+    $("notice").hidden = false
+    $("build-label").textContent = partyLabel(this.scene.meta)
+    this.scene.updateHud()
+    $("pause").disabled = false
+  }
+  pause(force = false) {
+    if (!this.scene?.activeRun || this.scene.outcome !== "playing" || (this.scene.paused && !force)) return
+    this.scene.setPaused(true)
+    if (this.api.pending) {
+      if (this.saving && this.pauseSave !== this.saving) {
+        const scene = this.scene, saving = this.saving
+        this.pauseSave = saving
+        this.screen("正在保存进度")
+        // The save caller owns failure UI; success restores the paused screen.
+        saving.then(() => {
+          if (this.scene === scene && scene.activeRun && scene.paused && scene.outcome === "playing") this.pause(true)
+        }, () => {}).finally(() => {
+          if (this.pauseSave === saving) this.pauseSave = null
+        })
+      }
+      return
+    }
+    if (this.scene.combat?.craft?.preparation) { this.initialStudy(); return }
+    if (this.scene.choices.length) { this.upgrades(); return }
+    if (this.scene.encounters?.state.pending) { this.cooperation(); return }
+    if (this.scene.journey && !this.scene.journey.fighting) { this.doors(); return }
+    const body = this.screen("稍作休息", this.scene.journey ? `${timeText(this.scene.elapsed)} · ${this.scene.journey.stage()}` : `${timeText(this.scene.elapsed)} / 20:00`)
+    const actions = element("div", "", "actions")
+    actions.append(button("继续", () => this.play(), "primary"),
+      button("保存并返回", () => this.action(async () => { await this.save(true); this.scene.activeRun = false; await this.refresh() })),
+      button("结束本次旅程", () => {
+        if (confirm("结束后将不能继续本次旅程。")) this.scene.end("retreated")
+      }, "danger"))
+    if (this.scene.combat) {
+      actions.append(button("技能图鉴", () => this.codex(), "", "BookOpen"))
+      const craft = this.scene.combat.craft
+      if (craft) {
+        const refit = button(`战后整备 · ${craft.available("player") + craft.available("companion")}`, () => this.refit(), "", "RotateCw")
+        refit.disabled = !craft.available("player") && !craft.available("companion")
+        actions.append(refit)
+      }
+      body.append(buildDetails(this.scene.snapshot()))
+    }
+    body.append(actions)
+  }
+  codex() {
+    if (!this.scene.combat) return
+    this.scene.setPaused(true)
+    const body = this.screen("技能图鉴", "修行 / 分支与复合进化")
+    body.append(button("返回", () => this.scene.combat.craft?.preparation ? this.initialStudy()
+      : this.scene.choices.length ? this.upgrades() : this.pause(true), "", "ArrowLeft"))
+    renderCodex(body, this.scene)
+  }
+  initialStudy() {
+    if (!this.scene.combat?.craft?.preparation) return
+    this.scene.setPaused(true)
+    const body = this.screen("选择起手招式", "初入林地 / 自由研习")
+    renderStarter(body, this.scene)
+  }
+  refit(owner = "player", selected = "") {
+    if (!this.scene.combat?.craft || this.scene.combat.craft.preparation || this.scene.choices.length
+      || this.scene.encounters?.state.pending || this.api.pending || !["player", "companion"].includes(owner)) return
+    this.scene.setPaused(true)
+    const body = this.screen("战后整备", `${timeText(this.scene.elapsed)} / ${owner === "player" ? "玩家" : this.scene.meta.character}`)
+    renderRefit(body, this.scene, owner, selected)
+  }
+  upgrades(checkpoint = false) {
+    if (this.api.pending) return
+    this.scene.setPaused(true)
+    const body = this.screen("选择成长", `等级 ${this.scene.level}`)
+    if (this.scene.combat) {
+      body.querySelector("h2").textContent = "选择研习"
+      renderStudy(body, this.scene)
+      if (checkpoint) this.save().catch(error => this.failure(error))
+      return
+    }
+    const grid = element("div", "", "upgrade-grid")
+    for (const key of this.scene.choices) {
+      const [name, who, description] = UPGRADES[key]
+      const card = button("", () => { this.scene.choose(key) }, "upgrade")
+      card.dataset.upgrade = key
+      card.append(element("span", `${who} · ${this.scene.ranks[key] + 1} 阶`, "tag"),
+        element("strong", name), element("span", description))
+      grid.append(card)
+    }
+    body.append(grid)
+    if (checkpoint) this.save().catch(error => this.failure(error))
+  }
+  cooperation(checkpoint = false) {
+    if (!this.scene?.encounters?.state.pending) return
+    this.scene.setPaused(true)
+    const body = this.screen("并肩研习", `${timeText(this.scene.elapsed)} / 首领战后成长`)
+    this.scene.encounters.render(body)
+    if (checkpoint) this.save().catch(error => this.failure(error))
+  }
+  doors(checkpoint = false) {
+    const journey = this.scene?.journey
+    if (!journey || journey.fighting || this.scene.choices.length || this.scene.encounters.state.pending) return
+    this.scene.setPaused(true)
+    const body = this.screen(journey.heading(), journey.title())
+    journey.render(body)
+    if (checkpoint) this.save().catch(error => this.failure(error))
+  }
+  async save(exit = false, finish = false) {
+    const previous = this.saving
+    const snapshot = this.scene.snapshot()
+    const runId = this.scene.meta.id
+    const task = (async () => {
+      if (previous) await previous
+      if (this.api.pending) throw new Error("请先确认上次保存。")
+      $("save-state").textContent = "正在保存"
+      const result = await this.api.mutate(finish ? "finish" : exit ? "release" : "checkpoint", {
+        run_id: runId, snapshot,
+      })
+      if (finish) this.api.view.run = {
+        ...this.scene.meta, snapshot, status: "ended", settlement: result.settlement,
+      }
+      this.lastSaved = snapshot.elapsed
+      $("save-state").textContent = `已保存 ${timeText(snapshot.elapsed)}`
+    })()
+    this.saving = task
+    try {
+      await task
+    } finally { if (this.saving === task) this.saving = null }
+    if (exit) $("hud").hidden = $("companion-line").hidden = true
+  }
+  autosave() {
+    if (this.scene.elapsed - this.lastSaved < 10000 || this.saving || this.busy || this.api.pending) return
+    this.save().catch(error => this.failure(error))
+  }
+  failure(error) {
+    this.scene?.setPaused(true)
+    if (["adventure_controlled_elsewhere", "adventure_control_lost"].includes(adventureErrorCode(error))) {
+      const body = this.screen("旅程由其他页面持有")
+      body.append(element("p", "另一个游戏页面或已关闭的旧页面持有控制权。接管后，将从最新保存的位置继续。", "lead"),
+        button("接管此旅程", () => this.takeover(true), "primary"),
+        button("读取已保存进度", () => {
+          this.api.pending = null; this.api.pendingView = null; this.scene.activeRun = false
+          this.refresh()
+        }))
+      $("save-state").textContent = "等待接管旅程"
+      return
+    }
+    const financial = ["buy", "refund"].includes(this.api.pending?.operation)
+    const body = this.screen(financial ? "交易尚待确认" : "旅程已暂停")
+    body.append(element("p", errorText(error), "error"))
+    const actions = element("div", "", "actions")
+    if (this.api.pending) actions.append(button("确认上次操作", () => this.action(async () => {
+      const args = this.api.pending
+      const result = await this.api.retry()
+      $("save-state").textContent = `已保存 ${timeText(result.elapsed)}`
+      this.lastSaved = result.elapsed
+      if (args.operation === "buy" || args.operation === "refund") await this.shop(this.tradeMessage(result))
+      else if (args.operation === "finish") {
+        this.api.view.run = { ...this.scene.meta, snapshot: args.values.snapshot, status: "ended", settlement: result.settlement }
+        this.results()
+      }
+      else if (args.operation === "release") {
+        this.scene.activeRun = false
+        await this.refresh()
+      }
+      else if (args.operation === "checkpoint" && this.scene.activeRun) {
+        if (this.scene.outcome !== "playing") await this.finish()
+        else if (this.scene.combat?.craft?.preparation) this.initialStudy()
+        else if (this.scene.choices.length) this.upgrades()
+        else if (this.scene.encounters?.state.pending) this.cooperation()
+        else { this.scene.setPaused(false); this.pause() }
+      } else await this.refresh()
+    }), "primary"))
+    actions.append(button(financial ? "重新读取商店" : "读取已保存进度", () => {
+      if (this.scene?.activeRun && !confirm("读取会放弃尚未确认保存的进度，继续吗？")) return
+      this.api.pending = null; this.api.pendingView = null; this.scene.activeRun = false
+      if (financial) this.shop()
+      else this.refresh()
+    }))
+    body.append(actions)
+    $("save-state").textContent = financial ? "交易状态待确认" : "保存状态待确认"
+  }
+  async finish() {
+    this.scene.setPaused(true)
+    const body = this.screen("整理本次旅程")
+    body.append(element("p", "正在保存结果。", "muted"))
+    try { await this.save(false, true); this.results() }
+    catch (error) { this.failure(error) }
+  }
+  results(run = this.api.view.run) {
+    this.scene.activeRun = false
+    $("pause").disabled = true
+    const snapshot = run.snapshot
+    const title = { cleared: "林地的回响归于平静", defeated: "这次旅程暂告一段落", retreated: "平安归来", timeout: "留待下一次挑战" }[snapshot.outcome]
+    const body = this.screen(title, `${run.character} · 与你同行`)
+    const stats = element("div", "", "result-stats")
+    for (const [label, value] of [["旅途时间", timeText(snapshot.elapsed)], ["击败敌人", snapshot.kills], ["同行击败", snapshot.partner_kills],
+      ...(run.settlement?.formula === 2 ? [["走过路程", `${run.settlement.nodes} / 9 段`]] : [])]) {
+      const item = element("div", label, "muted"); item.append(element("strong", String(value))); stats.append(item)
+    }
+    body.append(stats, settlementDetails(run.settlement), buildDetails(snapshot))
+    const actions = element("div", "", "actions")
+    actions.append(button("返回营地", () => this.refresh(), "primary"),
+      button("冒险商店", () => this.shop(), "", "ShoppingBag")); body.append(actions)
+    $("save-state").textContent = run.settlement === null ? "旧版结果已读取" : "结果与金币已保存"
+  }
+}
+
+export const controller = new Controller()
+$("pause").replaceChildren(icon("Pause"))
+$("effects").replaceChildren(icon("Sparkles"))
+$("effects").addEventListener("click", () => {
+  const art = controller.scene?.art
+  if (!art) return
+  art.setReduced(!art.reduced)
+  $("effects").setAttribute("aria-pressed", String(art.reduced))
+})
+$("pause").addEventListener("click", () => controller.pause())
+$("ultimate").addEventListener("click", () => controller.scene?.ultimate?.cast())
+// A trusted interaction proves foreground use even if an embedded WebView reports stale focus.
+for (const type of ["pointerdown", "keydown", "click"]) document.addEventListener(type, event => {
+  if (event.isTrusted && !document.hidden) controller.foreground = true
+}, true)
+window.addEventListener("focus", () => { controller.foreground = true })
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { controller.foreground = false; controller.pause(true) }
+})
+window.addEventListener("blur", () => { controller.foreground = false; controller.pause(true) })
+window.addEventListener("message", event => {
+  if (event.source === window.parent && event.origin === location.origin
+    && event.data?.type === "love-with-you-game-visibility" && typeof event.data.visible === "boolean") {
+    controller.surfaceVisible = event.data.visible
+    if (!controller.surfaceVisible) { controller.foreground = false; controller.pause(true) }
+  }
+})
+const joystick = $("joystick")
+function touchMove(event) {
+  const rect = joystick.getBoundingClientRect()
+  let x = (event.clientX - rect.left - rect.width / 2) / 36, y = (event.clientY - rect.top - rect.height / 2) / 36
+  const length = Math.hypot(x, y)
+  if (length > 1) { x /= length; y /= length }
+  controller.scene.touch = { x, y }
+  joystick.firstElementChild.style.transform = `translate(${x * 30}px,${y * 30}px)`
+}
+joystick.addEventListener("pointerdown", event => { joystick.setPointerCapture(event.pointerId); touchMove(event) })
+joystick.addEventListener("pointermove", event => { if (joystick.hasPointerCapture(event.pointerId)) touchMove(event) })
+for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) joystick.addEventListener(name, () => {
+  if (controller.scene) controller.scene.touch = { x: 0, y: 0 }
+  joystick.firstElementChild.style.transform = ""
+})
+
+export const game = new Phaser.Game({
+  type: Phaser.AUTO, parent: "game", backgroundColor: "#304a3b",
+  // Hidden sidebar pages have zero bounds; WebGL framebuffers must stay nonzero.
+  scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH, min: { width: 1, height: 1 } },
+  physics: { default: "arcade", arcade: { gravity: { x: 0, y: 0 }, debug: false } },
+  scene: Forest, audio: { noAudio: true }, render: { antialias: true, roundPixels: true },
+})

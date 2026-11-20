@@ -1,0 +1,38 @@
+[project]
+name = "love_with_you"
+version = "0.9.24"
+dependencies = []
+
+# Editor-only: resolve the N.E.K.O SDK (`plugin.sdk.plugin`) from the sibling
+# host checkout during local development. Has no effect on packaging or runtime.
+[tool.pyright]
+extraPaths = ["../N.E.K.O"]
+
+[tool.pytest.ini_options]
+# The standalone source folder is not importable as a top-level Python package.
+# Keep the release CLI's plain `pytest tests` collection inside tests/.
+addopts = "--rootdir=tests --confcutdir=tests --import-mode=importlib -p no:cacheprovider --basetemp=../.pytest-love-with-you"
+
+# Keep tests, development tools and local pytest temp output out of the
+# installable package.
+[tool.neko.build]
+exclude_dirs = [
+    "pytest-of-*", ".benchmarks", "tools", "tests", "archive",
+    "docs/adventure", "docs/audits", "docs/plans",
+]
+include = [
+    "__init__.py", "plugin.toml", "pyproject.toml", "README.md",
+    "config.example.toml", "backend/**", "ui/**", "static/**",
+    "assets/**", "i18n/**", "vendor/**", "docs/guide.md", "docs/gifts.md",
+]
+exclude = [
+    "**/.env", "**/.env.*", "**/data/**", "**/saves/**",
+    "**/custom_portraits/**",
+    "docs/README.md",
+]
+exclude_files = [
+    ".env", ".env.*", "*.log", "*.bak", "*.backup*",
+    "*.db", "*.sqlite*", "*.pem", "*.key", "*.p12", "*.pfx",
+    "state.json", "state.*.json", "adventure.json", "adventure.*.json",
+    "appearance.json", "portraits.json", "config.toml", "plugin.config.toml",
+]

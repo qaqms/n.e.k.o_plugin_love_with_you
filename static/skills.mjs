@@ -1,0 +1,571 @@
+// Pure build rules. The scene supplies its saved RNG; rendering never draws choices.
+export const SKILLS = {}
+export const LEGACY_SKILLS = {}
+export const FROST_SKILLS = {}
+export const ROUTES = {}
+export const BUILD_MODS = {}
+export const SKILL_TAGS = {}
+// Rule 10: growth past level 5 (mastery) and a per-build school resonance.
+export const MASTERY = {}
+export const NUMERALS = ["Ⅰ", "Ⅱ", "Ⅲ"]
+export function installMastery(data) {
+  if (data?.cap !== 3 || !data.skills || !Object.keys(data.skills).every(id => SKILLS[id] && data.skills[id].length === data.cap)
+    || data.resonance?.tiers?.length !== 3 || !data.resonance.skills.every(id => SKILLS[id])) throw new Error("精通目录不完整")
+  Object.assign(MASTERY, structuredClone(data))
+}
+// Rule 11: a skill line. A finished root skill advances into a new form of the next rank;
+// earlier forms keep casting at a slower pace, so the screen fills up rank by rank.
+export const LINE = {}
+export function installLine(data) {
+  if (!SKILLS[data?.root] || data.stages?.length !== 3 || data.ranks?.length !== 4 || !data.stages.flat().every(id => data.arts?.[id])) throw new Error("技能线目录不完整")
+  Object.assign(LINE, structuredClone(data))
+}
+export const artOf = (build, id) => build.arts?.find(art => art.id === id) || null
+export const levelCap = build => build.arts ? 50 : 31
+function artChoices(build) {
+  const arts = build.arts, root = build.skills.find(skill => skill.id === LINE.root)
+  if (!arts || root?.level !== 5) return []
+  const last = arts.at(-1)
+  if (last && last.level < LINE.cap) return [`art:${last.id}`]
+  return (LINE.stages[arts.length] || []).map(id => `art:${id}`)
+}
+export function artStats(build, id) {
+  const art = artOf(build, id), spec = LINE.arts[id], level = art?.level || 1
+  const later = build.arts.findIndex(item => item.id === id) < build.arts.length - 1
+  return { damage: spec.damage * (1 + (level - 1) * .2) * (1 + build.talents.power * .08),
+    cooldown: Math.round(spec.cooldown * (1 - (level - 1) * .04) * (later && art ? LINE.slow : 1)), range: spec.range }
+}
+// Rule 13: the manual fire line grows out of the flame ring. One key casts the whole chain.
+export const CASTS = {}
+export function installCasts(data) {
+  if (!SKILLS[data?.root] || data.stages?.length !== 3 || data.ranks?.length !== 4 || !data.stages.flat().every(id => data.arts?.[id])) throw new Error("手动技能线目录不完整")
+  Object.assign(CASTS, structuredClone(data))
+}
+export const castOf = (build, id) => build.casts?.find(cast => cast.id === id) || null
+function castChoices(build) {
+  const casts = build.casts, root = build.skills.find(skill => skill.id === CASTS.root)
+  if (!casts || root?.level !== 5) return []
+  const last = casts.at(-1)
+  if (last && last.level < CASTS.cap) return [`cast:${last.id}`]
+  return (CASTS.stages[casts.length] || []).map(id => `cast:${id}`)
+}
+export function castStats(build, id) {
+  const level = castOf(build, id)?.level || 1, spec = CASTS.arts[id]
+  return { damage: spec.damage * (1 + (level - 1) * .2) * (1 + build.talents.power * .08),
+    cooldown: Math.round(spec.cooldown * (1 - (level - 1) * .04) * (resonance(build).tier >= 3 ? .88 : 1)), range: spec.range }
+}
+// Rule 15: the sword line grows out of the swift slash, with its own resonance.
+export const SWORDS = {}
+export function installSwords(data) {
+  if (!SKILLS[data?.root] || data.stages?.length !== 3 || data.ranks?.length !== 4 || !data.stages.flat().every(id => data.arts?.[id])
+    || data.resonance?.tiers?.length !== 3 || !data.resonance.skills.every(id => SKILLS[id])) throw new Error("剑系技能线目录不完整")
+  Object.assign(SWORDS, structuredClone(data))
+}
+export const swordOf = (build, id) => build.swords?.find(item => item.id === id) || null
+function swordChoices(build) {
+  const swords = build.swords, root = build.skills.find(skill => skill.id === SWORDS.root)
+  if (!swords || root?.level !== 5) return []
+  const last = swords.at(-1)
+  if (last && last.level < SWORDS.cap) return [`sword:${last.id}`]
+  return (SWORDS.stages[swords.length] || []).map(id => `sword:${id}`)
+}
+// Rule 18: the manual sword line grows out of the dash, cast as one chain like the flame line.
+export const STRIKES = {}
+export function installStrikes(data) {
+  if (!SKILLS[data?.root] || data.stages?.length !== 3 || data.ranks?.length !== 4 || !data.stages.flat().every(id => data.arts?.[id])) throw new Error("突进技能线目录不完整")
+  Object.assign(STRIKES, structuredClone(data))
+}
+export const strikeOf = (build, id) => build.strikes?.find(item => item.id === id) || null
+function strikeChoices(build) {
+  const strikes = build.strikes, root = build.skills.find(skill => skill.id === STRIKES.root)
+  if (!strikes || root?.level !== 5) return []
+  const last = strikes.at(-1)
+  if (last && last.level < STRIKES.cap) return [`strike:${last.id}`]
+  return (STRIKES.stages[strikes.length] || []).map(id => `strike:${id}`)
+}
+export function strikeStats(build, id) {
+  const level = strikeOf(build, id)?.level || 1, spec = STRIKES.arts[id]
+  return { damage: spec.damage * (1 + (level - 1) * .2) * (1 + build.talents.power * .08),
+    cooldown: Math.round(spec.cooldown * (1 - (level - 1) * .04) * (swordResonance(build).tier >= 3 ? .88 : 1)), range: spec.range }
+}
+export function swordResonance(build) {
+  if (!build.swords) return { points: 0, tier: 0 }
+  const points = build.skills.filter(skill => SWORDS.resonance.skills.includes(skill.id))
+    .reduce((sum, skill) => sum + 1 + Number(skill.level === 5), 0)
+    + build.swords.reduce((sum, item) => sum + 1 + Number(item.level === SWORDS.cap), 0)
+    + (build.strikes || []).reduce((sum, item) => sum + 1 + Number(item.level === STRIKES.cap), 0)
+  return { points, tier: SWORDS.resonance.tiers.filter(([need]) => points >= need).length }
+}
+export function swordStats(build, id) {
+  const item = swordOf(build, id), spec = SWORDS.arts[id], level = item?.level || 1
+  const later = build.swords.findIndex(entry => entry.id === id) < build.swords.length - 1
+  return { damage: spec.damage * (1 + (level - 1) * .2) * (1 + build.talents.power * .08),
+    cooldown: Math.round(spec.cooldown * (1 - (level - 1) * .04) * (later && item ? SWORDS.slow : 1) * (swordResonance(build).tier >= 3 ? .88 : 1)),
+    range: spec.range }
+}
+export const masteryOf = (build, id) => build.mastery?.[id] || 0
+// Points: one per school skill, one more once awakened or fused, one per mastery rank.
+export function resonance(build) {
+  if (!build.mastery) return { points: 0, tier: 0 }
+  const points = build.skills.filter(skill => MASTERY.resonance.skills.includes(skill.id))
+    .reduce((sum, skill) => sum + 1 + Number(skill.level === 5) + masteryOf(build, skill.id), 0)
+    + (build.arts || []).reduce((sum, art) => sum + 1 + Number(art.level === LINE.cap), 0)
+    + (build.casts || []).reduce((sum, cast) => sum + 1 + Number(cast.level === CASTS.cap), 0)
+  return { points, tier: MASTERY.resonance.tiers.filter(([need]) => points >= need).length }
+}
+export const TALENTS = {
+  power: ["磨砺", "攻击强度 +8%", ["player", "companion"]],
+  vitality: ["坚韧", "生命上限 +12，恢复等量生命", ["player"]],
+  stride: ["轻步", "移动速度 +4%", ["player"]],
+  reach: ["牵引", "拾取范围 +12", ["player"]],
+  ward: ["守望", "同行护盾强度 +12%", ["companion"]],
+}
+export const LIMITS = { player: { auto: 3, manual: 2, support: 0 }, companion: { auto: 2, manual: 0, support: 1 } }
+export function installCatalog(items, legacy, expanded = []) {
+  const ids = ["fire", "slash", "wind", "guard", "flame", "dash", "pull", "armor"]
+  const valid = (entries, keys) => Array.isArray(entries) && entries.length === keys.length
+    && new Set(entries.map(s => s.id)).size === keys.length && entries.every(s => keys.includes(s.id))
+  if (!valid(items, [...ids, "ice", "frost"]) || !valid(legacy, ids)) throw new Error("技能目录不完整")
+  if (expanded.length && !valid(expanded, ["spark", "stone", "thrust", "orbit", "rune", "quake", "whirl", "meteor", "heal", "beacon"])) throw new Error("扩展技能目录不完整")
+  for (const item of items) SKILLS[item.id] = Object.freeze(item)
+  for (const item of items) FROST_SKILLS[item.id] = Object.freeze(item)
+  for (const item of expanded) SKILLS[item.id] = Object.freeze(item)
+  for (const item of legacy) LEGACY_SKILLS[item.id] = Object.freeze(item)
+}
+export function installRoutes(routes) {
+  if (!Array.isArray(routes) || routes.length !== 8 || new Set(routes.map(r => r.id)).size !== 8
+    || !routes.every(route => ["guardian", "mage"].includes(route.class)
+      && ["player", "companion"].every(owner => route[owner]?.length === 2 && route[owner].every(id => SKILLS[id])))) throw new Error("流派目录不完整")
+  for (const route of routes) ROUTES[route.id] = Object.freeze(route)
+}
+export function installBuildMods(data) {
+  const ids = ["fork", "piercing", "circuit", "edge", "field", "follow"]
+  if (!data?.tags || Object.keys(data.tags).length !== 20 || !Object.keys(data.tags).every(id => SKILLS[id])
+    || !Array.isArray(data.mods) || data.mods.length !== ids.length || new Set(data.mods.map(m => m.id)).size !== ids.length
+    || !data.mods.every(m => ids.includes(m.id) && m.cap >= 1 && m.cap <= 2
+      && m.owners.every(owner => ["player", "companion"].includes(owner)))) throw new Error("构筑改造目录不完整")
+  Object.assign(SKILL_TAGS, data.tags)
+  for (const spec of data.mods) BUILD_MODS[spec.id] = Object.freeze(spec)
+}
+export const buildRules = build => Object.hasOwn(build, "strikes") ? 18 : Object.hasOwn(build, "swords") ? 15 : Object.hasOwn(build, "casts") ? 13 : Object.hasOwn(build, "arts") ? 11 : Object.hasOwn(build, "mastery") ? 10 : Object.hasOwn(build, "mods") ? 7 : Object.hasOwn(build.misses, "spark") ? 6 : Object.hasOwn(build.misses, "ice") ? 3 : 2
+export const catalogFor = rules => rules >= 6 ? SKILLS : rules === 2 ? LEGACY_SKILLS : FROST_SKILLS
+export const studyOwner = level => (level - 1) % 3 === 0 ? "companion" : "player"
+export function newSkill(id) { return { id, level: 1, focus: "", branch: "", evolution: "", ready_at: 0, react_at: 0 } }
+export function newBuild(owner, kind, rules = 3, route = kind) {
+  const starting = rules >= 7 ? [] : rules === 6 ? ROUTES[route]?.[owner] : null
+  return {
+    skills: (starting || (owner === "player" ? kind === "mage" ? ["fire", "flame"] : ["slash", "dash"]
+      : kind === "mage" ? ["wind", "pull"] : ["guard", "armor"])).map(newSkill),
+    talents: Object.fromEntries(Object.keys(TALENTS).map(key => [key, 0])),
+    misses: Object.fromEntries(Object.keys(catalogFor(rules)).map(key => [key, 0])),
+    ...(rules >= 7 ? { mods: Object.fromEntries(Object.keys(BUILD_MODS).map(key => [key, 0])), banished: [] } : {}),
+    ...(rules >= 10 ? { mastery: Object.fromEntries(Object.keys(MASTERY.skills).map(key => [key, 0])) } : {}),
+    ...(rules >= 11 ? { arts: [] } : {}),
+    ...(rules >= 13 ? { casts: [] } : {}),
+    ...(rules >= 15 ? { swords: [] } : {}),
+    ...(rules >= 18 ? { strikes: [] } : {}),
+  }
+}
+export function legalChoices(build, owner) {
+  const result = []
+  for (const spec of Object.values(catalogFor(buildRules(build)))) {
+    const skill = build.skills.find(s => s.id === spec.id)
+    if (!skill) {
+      if (!build.banished?.includes(spec.id) && build.skills.filter(s => SKILLS[s.id].slot === spec.slot).length < LIMITS[owner][spec.slot]) result.push(`${spec.id}:learn`)
+    } else if (skill.level === 1) result.push(`${spec.id}:power`, `${spec.id}:haste`)
+    else if (skill.level === 2) result.push(...spec.branches.map(([branch]) => `${spec.id}:${branch}`))
+    else if (skill.level === 3) result.push(`${spec.id}:deepen`)
+    else if (skill.level === 4) {
+      result.push(`${spec.id}:awaken`)
+      if (spec.fusion && build.skills.some(s => s.id === spec.fusion[0] && s.level >= 2)
+        && !build.skills.some(s => s.evolution === "fusion")) result.push(`${spec.id}:fuse`)
+    } else if (build.mastery && MASTERY.skills[spec.id] && build.mastery[spec.id] < MASTERY.cap
+      && !(build.arts && spec.id === LINE.root) && !(build.casts && spec.id === CASTS.root)) result.push(`${spec.id}:master`)
+  }
+  result.push(...artChoices(build), ...castChoices(build), ...swordChoices(build), ...strikeChoices(build))
+  for (const [key, [, , owners]] of Object.entries(TALENTS)) {
+    if (owners.includes(owner) && build.talents[key] < 4) result.push(`talent:${key}`)
+  }
+  if (buildRules(build) >= 7) for (const spec of Object.values(BUILD_MODS)) {
+    if (spec.owners.includes(owner) && build.mods[spec.id] < spec.cap && build.skills.some(s => SKILL_TAGS[s.id].includes(spec.tag))) result.push(`mod:${spec.id}`)
+  }
+  return result
+}
+export function drawChoices(build, owner, rng, advance = true) {
+  if (buildRules(build) >= 7) return drawFreeChoices(build, owner, rng, advance)
+  const pool = legalChoices(build, owner), chosen = []
+  const take = candidates => {
+    const available = candidates.filter(key => pool.includes(key) && !chosen.includes(key))
+    if (available.length && chosen.length < 3) chosen.push(available[rng.between(0, available.length - 1)])
+  }
+  const branches = build.skills.filter(s => s.level === 2)
+  take(branches.filter(s => build.misses[s.id] >= 2).flatMap(s => pool.filter(key => key.startsWith(`${s.id}:`))))
+  take(pool.filter(key => !key.startsWith("talent:") && !key.endsWith(":learn")))
+  const learning = pool.filter(key => key.endsWith(":learn"))
+  const catalysts = buildRules(build) >= 6 ? build.skills.flatMap(s => SKILLS[s.id].fusion?.[0] || []) : []
+  take([...learning, ...learning.filter(key => catalysts.includes(key.split(":")[0])), ...learning.filter(key => catalysts.includes(key.split(":")[0]))])
+  while (chosen.length < Math.min(3, pool.length)) take(pool)
+  if (advance) for (const skill of branches) {
+    build.misses[skill.id] = chosen.some(key => key.startsWith(`${skill.id}:`)) ? 0 : Math.min(2, build.misses[skill.id] + 1)
+  }
+  return chosen
+}
+function drawFreeChoices(build, owner, rng, advance) {
+  const pool = legalChoices(build, owner), chosen = [], branches = build.skills.filter(s => s.level === 2)
+  const take = options => {
+    const available = options.filter(key => !chosen.includes(key))
+    if (available.length && chosen.length < 4) chosen.push(available[rng.between(0, available.length - 1)])
+  }
+  const growth = pool.filter(key => !key.startsWith("talent:") && !key.startsWith("mod:") && !key.endsWith(":learn"))
+  take(growth.filter(key => branches.some(s => build.misses[s.id] >= 2 && key.startsWith(`${s.id}:`))))
+  take(growth)
+  const learning = pool.filter(key => key.endsWith(":learn"))
+  const missing = owner === "player" ? "manual" : "support"
+  const opening = !build.skills.some(s => SKILLS[s.id].slot === missing) ? learning.filter(key => SKILLS[key.split(":")[0]].slot === missing) : []
+  take([...learning, ...opening])
+  take(pool.filter(key => key.startsWith("mod:")))
+  while (chosen.length < Math.min(4, pool.length)) take(pool)
+  if (advance) for (const skill of branches) build.misses[skill.id] =
+    chosen.some(key => key.startsWith(`${skill.id}:`)) ? 0 : Math.min(2, build.misses[skill.id] + 1)
+  return chosen
+}
+export const starterSkills = () => Object.values(catalogFor(7)).filter(s => s.slot === "auto")
+export function replacementChoices(build, id) {
+  if (buildRules(build) < 7 || !build.skills.some(s => s.id === id)) return []
+  if (build.skills.some(s => s.id !== id && s.evolution === "fusion" && SKILLS[s.id].fusion[0] === id)) return []
+  return Object.values(catalogFor(7)).filter(spec => spec.slot === SKILLS[id].slot
+    && !build.skills.some(s => s.id === spec.id) && !build.banished.includes(spec.id)).map(s => s.id)
+}
+export function applyChoice(build, owner, key) {
+  if (!legalChoices(build, owner).includes(key)) return false
+  const [id, action] = key.split(":")
+  if (id === "talent") { build.talents[action]++; return true }
+  if (id === "mod") { build.mods[action]++; return true }
+  if (id === "art") {
+    const art = artOf(build, action)
+    if (art) art.level++
+    else build.arts.push({ id: action, level: 1 })
+    return true
+  }
+  if (id === "strike") {
+    const item = strikeOf(build, action)
+    if (item) item.level++
+    else build.strikes.push({ id: action, level: 1 })
+    return true
+  }
+  if (id === "sword") {
+    const item = swordOf(build, action)
+    if (item) item.level++
+    else build.swords.push({ id: action, level: 1 })
+    return true
+  }
+  if (id === "cast") {
+    const cast = castOf(build, action)
+    if (cast) cast.level++
+    else build.casts.push({ id: action, level: 1 })
+    return true
+  }
+  if (action === "learn") { build.skills.push(newSkill(id)); return true }
+  if (action === "master") { build.mastery[id]++; return true }
+  const skill = build.skills.find(s => s.id === id)
+  if (skill.level === 1) skill.focus = action
+  else if (skill.level === 2) skill.branch = action
+  else if (skill.level === 4) skill.evolution = action === "fuse" ? "fusion" : "pure"
+  skill.level++
+  return true
+}
+export function skillName(skill, build = null) {
+  const spec = SKILLS[skill.id], rank = build ? masteryOf(build, skill.id) : 0
+  if (build?.strikes?.length && skill.id === STRIKES.root) return `${spec.name} · 连招 ${build.strikes.map(item => STRIKES.arts[item.id].name).join("→")}`
+  if (build?.swords?.length && skill.id === SWORDS.root) return `${spec.name} · ${SWORDS.arts[build.swords.at(-1).id].name}`
+  if (build?.casts?.length && skill.id === CASTS.root) return `${spec.name} · 连招 ${build.casts.map(cast => CASTS.arts[cast.id].name).join("→")}`
+  if (rank) return `${skill.evolution === "fusion" ? spec.fusion[1] : spec.name} · 精通${NUMERALS[rank - 1]}`
+  return skill.evolution === "fusion" ? spec.fusion[1] : `${spec.name}${skill.level === 5 ? " · 觉醒" : ""}`
+}
+export function skillControl(build, id) {
+  const slot = SKILLS[id].slot
+  if (slot === "auto") return "自动攻击"
+  if (slot === "support") return "同行自动支援"
+  const manual = build.skills.filter(s => SKILLS[s.id].slot === "manual")
+  const index = manual.findIndex(s => s.id === id)
+  return `${(index < 0 ? manual.length : index) === 0 ? "Q" : "E"} 主动`
+}
+export function nextStep(build, skill) {
+  const spec = catalogFor(buildRules(build))[skill.id]
+  const branch = spec.branches.find(([key]) => key === skill.branch)
+  const selected = branch ? `已选${branch[1]} · ` : ""
+  if (skill.level === 5 && build.arts && skill.id === LINE.root) {
+    const last = build.arts.at(-1), next = LINE.stages[build.arts.length]
+    if (last && last.level < LINE.cap) return `${selected}${LINE.arts[last.id].name} ${last.level}级 · 升满 ${LINE.cap} 级后进阶`
+    return next ? `${selected}下次：进阶${LINE.ranks[build.arts.length + 1]} · ${next.map(id => LINE.arts[id].name).join(" / ")}`
+      : `${selected}${LINE.ranks[build.arts.length]}已满，这条线已经走到尽头`
+  }
+  if (skill.level === 5 && build.strikes && skill.id === STRIKES.root) {
+    const last = build.strikes.at(-1), next = STRIKES.stages[build.strikes.length]
+    if (last && last.level < STRIKES.cap) return `${selected}${STRIKES.arts[last.id].name} ${last.level}级 · 升满 ${STRIKES.cap} 级后进阶`
+    return next ? `${selected}下次：进阶${STRIKES.ranks[build.strikes.length + 1]} · ${next.map(id => STRIKES.arts[id].name).join(" / ")}`
+      : `${selected}${STRIKES.ranks[build.strikes.length]}已满，连招已经完整`
+  }
+  if (skill.level === 5 && build.swords && skill.id === SWORDS.root) {
+    const last = build.swords.at(-1), next = SWORDS.stages[build.swords.length]
+    if (last && last.level < SWORDS.cap) return `${selected}${SWORDS.arts[last.id].name} ${last.level}级 · 升满 ${SWORDS.cap} 级后进阶`
+    return next ? `${selected}下次：进阶${SWORDS.ranks[build.swords.length + 1]} · ${next.map(id => SWORDS.arts[id].name).join(" / ")}`
+      : `${selected}${SWORDS.ranks[build.swords.length]}已满，这条线已经走到尽头`
+  }
+  if (skill.level === 5 && build.casts && skill.id === CASTS.root) {
+    const last = build.casts.at(-1), next = CASTS.stages[build.casts.length]
+    if (last && last.level < CASTS.cap) return `${selected}${CASTS.arts[last.id].name} ${last.level}级 · 升满 ${CASTS.cap} 级后进阶`
+    return next ? `${selected}下次：进阶${CASTS.ranks[build.casts.length + 1]} · ${next.map(id => CASTS.arts[id].name).join(" / ")}`
+      : `${selected}${CASTS.ranks[build.casts.length]}已满，连招已经完整`
+  }
+  if (skill.level === 5 && build.mastery && MASTERY.skills[skill.id]) {
+    const rank = build.mastery[skill.id]
+    return rank >= MASTERY.cap ? `${selected}精通已满` : `${selected}下次：精通${NUMERALS[rank]} · ${MASTERY.skills[skill.id][rank][0]}`
+  }
+  if (skill.level === 5) return `${selected}${skill.evolution === "fusion" ? "复合进化完成，前置技能保留" : "本系觉醒完成"}`
+  if (skill.level === 1) return "下次：凝练 / 节律"
+  if (skill.level === 2) return `下次：${spec.branches.map(([, name]) => name).join(" / ")}`
+  if (skill.level === 3) return `${selected}下次：精研`
+  if (!spec.fusion) return `${selected}下次：觉醒`
+  const catalyst = build.skills.find(s => s.id === spec.fusion[0])
+  const allowed = catalyst?.level >= 2 && !build.skills.some(s => s.evolution === "fusion")
+  return `${selected}下次：觉醒${allowed ? ` / ${spec.fusion[1]}（前置保留）`
+    : `；复合需同角色${SKILLS[spec.fusion[0]].name}2级（当前${catalyst?.level || 0}级），每人限一项`}`
+}
+export function parameters(skill, build) {
+  const modern = buildRules(build) >= 3, spec = catalogFor(buildRules(build))[skill.id]
+  let damage = spec.damage * (1 + (skill.level - 1) * .18) * (skill.focus === "power" ? 1.25 : 1)
+    * (1 + build.talents.power * .08) * (skill.level === 5 ? 1.3 : 1)
+  let cooldown = spec.cooldown * (skill.focus === "haste" ? .82 : 1) * (skill.level >= 4 ? .9 : 1)
+  let range = spec.range, count = 1, radius = 90, duration = 4000, pierce = skill.id === "wind" ? 1 : 0
+  if (skill.branch === "volley") { count = 2; damage *= .72 }
+  if (skill.branch === "fan") { count = 3; damage *= .65 }
+  if (skill.branch === "rapid") { cooldown *= .62; damage *= .85 }
+  if (["cleave", "sweep"].includes(skill.branch)) range *= 1.3
+  if (skill.branch === "pierce") pierce = 3
+  if (skill.branch === "linger") duration = 6000
+  if (skill.branch === "burst") { radius = 120; damage *= 1.2 }
+  if (skill.branch === "hunt") radius = 145
+  if (skill.branch === "line") range = 240
+  if (skill.evolution === "fusion") { pierce = 3; range *= 1.2; damage *= 1.18 }
+  let half = ["cleave", "sweep"].includes(skill.branch) || skill.evolution === "fusion" ? 1.5 : .9
+  let width = 60, knockback = 25, reactCooldown = 5000, targets = 3, shieldBonus = 0, followBonus = 1.3, retaliateRange = 130
+  let blastRadius = 48, blastDuration = 1000, frostStacks = 1, frostDuration = 3000, breakDamage = 12
+  if (modern) {
+    if (skill.branch === "line") width = 80
+    if (skill.id === "frost") { radius = 115; duration = 3000; frostStacks = 2 }
+    if (skill.branch === "rime") { frostStacks = 2; damage *= .9; cooldown *= 1.15 }
+    if (skill.branch === "shards") { count = 2; damage *= .68 }
+    if (skill.branch === "shatter") frostStacks = 1
+    if (skill.level >= 4) {
+      if (skill.branch === "volley") count++
+      if (skill.branch === "blast") { blastRadius = 62; blastDuration = 1500 }
+      if (skill.branch === "cleave") range *= 1.1
+      if (skill.branch === "rapid") cooldown *= .9
+      if (skill.branch === "pierce") pierce++
+      if (skill.branch === "fan" || skill.branch === "shards") { count++; damage *= .85 }
+      if (skill.branch === "counter") reactCooldown = 4000
+      if (skill.branch === "sweep") knockback = 40
+      if (skill.branch === "linger") duration += 1000
+      if (skill.branch === "burst") radius += 15
+      if (skill.branch === "line") width += 10
+      if (skill.branch === "guarded") shieldBonus = 8
+      if (skill.id === "pull") radius += 15
+      if (skill.id === "armor" && skill.branch === "follow") followBonus = 1.5
+      if (skill.id === "armor" && skill.branch === "retaliate") retaliateRange = 160
+      if (skill.id === "ice") frostDuration += 1000
+      if (skill.id === "frost" && skill.branch === "shatter") breakDamage = 18
+      if (skill.id === "frost" && skill.branch === "mist") duration += 1000
+    }
+    if (skill.level === 5 && skill.evolution === "pure") {
+      if (["fire", "wind"].includes(skill.id)) { count++; damage *= .85 }
+      if (skill.id === "slash") { range *= 1.12; half = Math.min(Math.PI, half + .3) }
+      if (skill.id === "guard") half = Math.PI
+      if (skill.id === "flame") { radius *= 1.2; duration += 1000 }
+      if (skill.id === "dash") width += 15
+      if (skill.id === "pull") targets = 4
+      if (skill.id === "ice") { pierce++; frostDuration += 1000 }
+      if (skill.id === "frost") { radius = 145; frostStacks = 3 }
+    }
+  }
+  const extra = {}
+  if (buildRules(build) >= 6) {
+    const deep = skill.level >= 4, pure = skill.level === 5 && skill.evolution === "pure", branch = skill.branch
+    if (skill.id === "spark") {
+      Object.assign(extra, { jumps: branch === "relay" ? 5 + Number(deep) : branch === "charge" ? 2 : 3,
+        hop: branch === "relay" ? 185 : 145, decay: pure ? .84 : .72, first: branch === "charge" ? deep ? 1.85 : 1.6 : 1 })
+      if (branch === "relay") damage *= .9
+      if (pure) extra.jumps += 2
+    }
+    if (skill.id === "stone") {
+      Object.assign(extra, { speed: 245, splash: branch === "shrapnel" ? deep ? 78 : 65 : 0, splashDamage: .4 })
+      knockback = pure ? 48 : 32
+      if (branch === "lance") { pierce = 2 + Number(deep) + Number(pure); damage *= .85 }
+      if (pure && extra.splash) extra.splash = 90
+    }
+    if (skill.id === "thrust") {
+      width = 18 + (branch === "skewer" && deep ? 6 : 0) + (pure ? 4 : 0)
+      targets = branch === "skewer" ? 3 + Number(pure) : 1
+      if (branch === "duel") damage *= 1.6 * (deep ? 1.1 : 1) * (pure ? 1.2 : 1)
+      if (pure) range += 35
+    }
+    if (skill.id === "orbit") {
+      radius = pure ? 92 : 84; duration = 1600
+      Object.assign(extra, { blades: (branch === "twins" ? 2 : 1) + Number(pure),
+        band: branch === "broad" ? deep ? 36 : 30 : 16, rotation: branch === "twins" ? deep ? 2.6 : 2.1 : 1.8 })
+    }
+    if (skill.id === "rune") {
+      radius = (branch === "wide" ? deep ? 110 : 95 : 68) + (pure ? 15 : 0); duration = 8000
+      Object.assign(extra, { trigger: 30, cap: pure ? 4 : 3 })
+      if (branch === "quick") { cooldown *= deep ? .51 : .6; damage *= .8 }
+    }
+    if (skill.id === "quake") {
+      radius = pure ? 185 : 165; range = radius; duration = deep ? 4000 : 3000
+      knockback = pure ? 110 : 75
+      extra.echoDamage = deep ? .7 : .55
+    }
+    if (skill.id === "whirl") {
+      radius = pure ? 128 : 112; range = radius; duration = pure ? 4000 : 3000
+      Object.assign(extra, { stride: branch === "travel" ? deep ? .3 : .2 : 0, edge: branch === "edge" ? deep ? 1.85 : 1.6 : 1 })
+    }
+    if (skill.id === "meteor") {
+      radius = branch === "rain" ? 78 : branch === "impact" ? deep ? 145 : 132 : 110
+      Object.assign(extra, { waves: (branch === "rain" ? deep ? 4 : 3 : 1) + Number(pure), delay: 900 })
+      if (branch === "rain") damage *= .48
+      knockback = branch === "impact" ? 65 : 0
+    }
+    if (skill.id === "heal") {
+      extra.overflow = branch === "overflow" ? deep ? 1 : .7 : 0
+      extra.healBonus = branch === "follow" && deep ? 1.3 : 1
+      extra.ward = pure ? 6 : 0
+    }
+    if (skill.id === "beacon") {
+      radius = 260; duration = branch === "follow" && deep ? 7500 : 6000
+      Object.assign(extra, { lamps: pure ? 2 : 1, ward: branch === "ward" ? deep ? 4 : 2 : 0 })
+    }
+  }
+  if (buildRules(build) >= 7) {
+    const tags = SKILL_TAGS[skill.id], mods = build.mods
+    if (tags.includes("projectile")) {
+      if (mods.fork) { count++; damage *= .78 }
+      pierce = Math.min(5, pierce + mods.piercing)
+    }
+    if (tags.includes("chain")) extra.jumps = (extra.jumps ?? (skill.evolution === "fusion" ? 3 : 1)) + mods.circuit
+    if (mods.edge && tags.includes("melee")) {
+      if (["slash", "guard", "thrust"].includes(skill.id)) range += 20 * mods.edge
+      if (skill.id === "dash") width += 10 * mods.edge
+      if (skill.id === "orbit") extra.band += 6 * mods.edge
+      if (skill.id === "whirl") radius += 10 * mods.edge
+    }
+    if (mods.field && tags.includes("area")) {
+      radius = Math.min(skill.id === "beacon" ? 280 : 200, radius + 12 * mods.field)
+      if (skill.id === "quake") range = radius
+    }
+  }
+  const rank = masteryOf(build, skill.id)
+  if (rank) {
+    damage *= 1 + MASTERY.power * rank
+    if (skill.id === "fire" && rank >= 2) count++
+    if (skill.id === "flame" && rank >= 2) radius = Math.min(200, radius + 15)
+    if (skill.id === "meteor") { damage *= 1.25; radius = Math.min(200, radius + 15); if (rank >= 2) knockback += 45 }
+  }
+  if (build.mastery && MASTERY.resonance.skills.includes(skill.id) && resonance(build).tier >= 3) cooldown *= .88
+  if (build.arts?.length && skill.id === LINE.root) cooldown *= LINE.slow
+  if (build.swords?.length && skill.id === SWORDS.root) cooldown *= SWORDS.slow
+  if (build.swords && SWORDS.resonance.skills.includes(skill.id) && swordResonance(build).tier >= 3) cooldown *= .88
+  return { damage, cooldown: Math.max(250, Math.round(cooldown)), range, count, radius, duration, pierce,
+    half, width, knockback, reactCooldown, targets, shieldBonus, followBonus, retaliateRange,
+    blastRadius, blastDuration, frostStacks, frostDuration, breakDamage, ...extra }
+}
+export function choiceText(build, key, owner = "player") {
+  const [id, action] = key.split(":")
+  if (id === "talent") return { name: TALENTS[action][0], type: "基础强化",
+    detail: action === "ward" && buildRules(build) >= 6 ? "同行护盾与治疗强度 +12%" : TALENTS[action][1],
+    change: `${build.talents[action]} → ${build.talents[action] + 1} 阶`, icon: action === "vitality" ? "Heart" : "Plus" }
+  if (id === "art") {
+    const spec = LINE.arts[action], art = artOf(build, action), after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const next = artStats(after, action), rank = LINE.ranks[spec.rank]
+    if (!art) return { name: `进阶${rank} · ${spec.name}`, type: `进阶 / 自动攻击`, detail: `${spec.text} ${spec.link}`,
+      change: `${LINE.ranks[spec.rank - 1]} → ${rank} · 强度 ${Math.round(next.damage)} · 间隔 ${(next.cooldown / 1000).toFixed(2)} 秒`, icon: spec.icon }
+    const before = artStats(build, action)
+    return { name: `${spec.name} · ${rank}`, type: "强化 / 自动攻击",
+      detail: art.level + 1 === LINE.cap && LINE.stages[spec.rank] ? `${spec.text} 升满后可进阶${LINE.ranks[spec.rank + 1]}。` : spec.text,
+      change: `${art.level} → ${art.level + 1} 级 · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 间隔 ${(before.cooldown / 1000).toFixed(2)} → ${(next.cooldown / 1000).toFixed(2)} 秒`,
+      icon: spec.icon }
+  }
+  if (id === "strike") {
+    const spec = STRIKES.arts[action], item = strikeOf(build, action), after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const next = strikeStats(after, action), rank = STRIKES.ranks[spec.rank], slot = skillControl(build, STRIKES.root)
+    if (!item) return { name: `进阶${rank} · ${spec.name}`, type: `进阶 / ${slot}`, detail: `${spec.text} ${STRIKES.link}`,
+      change: `${STRIKES.ranks[spec.rank - 1]} → ${rank} · 强度 ${Math.round(next.damage)} · 连招冷却 ${(next.cooldown / 1000).toFixed(1)} 秒`, icon: spec.icon }
+    const before = strikeStats(build, action)
+    return { name: `${spec.name} · ${rank}`, type: `强化 / ${slot}`,
+      detail: item.level + 1 === STRIKES.cap && STRIKES.stages[spec.rank] ? `${spec.text} 升满后可进阶${STRIKES.ranks[spec.rank + 1]}。` : spec.text,
+      change: `${item.level} → ${item.level + 1} 级 · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 冷却 ${(before.cooldown / 1000).toFixed(1)} → ${(next.cooldown / 1000).toFixed(1)} 秒`,
+      icon: spec.icon }
+  }
+  if (id === "sword") {
+    const spec = SWORDS.arts[action], item = swordOf(build, action), after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const next = swordStats(after, action), rank = SWORDS.ranks[spec.rank]
+    if (!item) return { name: `进阶${rank} · ${spec.name}`, type: `进阶 / 自动攻击`, detail: `${spec.text} ${spec.link}`,
+      change: `${SWORDS.ranks[spec.rank - 1]} → ${rank} · 强度 ${Math.round(next.damage)} · 间隔 ${(next.cooldown / 1000).toFixed(2)} 秒`, icon: spec.icon }
+    const before = swordStats(build, action)
+    return { name: `${spec.name} · ${rank}`, type: "强化 / 自动攻击",
+      detail: item.level + 1 === SWORDS.cap && SWORDS.stages[spec.rank] ? `${spec.text} 升满后可进阶${SWORDS.ranks[spec.rank + 1]}。` : spec.text,
+      change: `${item.level} → ${item.level + 1} 级 · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 间隔 ${(before.cooldown / 1000).toFixed(2)} → ${(next.cooldown / 1000).toFixed(2)} 秒`,
+      icon: spec.icon }
+  }
+  if (id === "cast") {
+    const spec = CASTS.arts[action], cast = castOf(build, action), after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const next = castStats(after, action), rank = CASTS.ranks[spec.rank], slot = skillControl(build, CASTS.root)
+    const extra = spec.rank === 3 ? ` ${CASTS.pillarLink}` : ""
+    if (!cast) return { name: `进阶${rank} · ${spec.name}`, type: `进阶 / ${slot}`, detail: `${spec.text}${extra} ${CASTS.link}`,
+      change: `${CASTS.ranks[spec.rank - 1]} → ${rank} · 强度 ${Math.round(next.damage)} · 连招冷却 ${(next.cooldown / 1000).toFixed(1)} 秒`, icon: spec.icon }
+    const before = castStats(build, action)
+    return { name: `${spec.name} · ${rank}`, type: `强化 / ${slot}`,
+      detail: cast.level + 1 === CASTS.cap && CASTS.stages[spec.rank] ? `${spec.text} 升满后可进阶${CASTS.ranks[spec.rank + 1]}。` : spec.text + extra,
+      change: `${cast.level} → ${cast.level + 1} 级 · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 冷却 ${(before.cooldown / 1000).toFixed(1)} → ${(next.cooldown / 1000).toFixed(1)} 秒`,
+      icon: spec.icon }
+  }
+  if (id === "mod") {
+    const spec = BUILD_MODS[action], affected = build.skills.filter(s => SKILL_TAGS[s.id].includes(spec.tag)).map(s => SKILLS[s.id].name)
+    return { name: spec.name, type: action === "follow" ? "双人协同" : "体系改造",
+      detail: `${spec.description} 当前适用：${affected.join("、")}；以后学到的同类技能也生效。`,
+      change: `${build.mods[action]} → ${build.mods[action] + 1} 阶`, icon: spec.icon }
+  }
+  const spec = catalogFor(buildRules(build))[id], skill = build.skills.find(s => s.id === id)
+  const slot = skillControl(build, id)
+  if (action === "learn") return {
+    name: `学会 · ${spec.name}`, type: `学招 / ${slot}`,
+    detail: `${spec.description} ${spec.slot === "auto" ? "学会后立即加入自动攻击栏，不占 Q / E。" : spec.slot === "manual" ? `学会后进入 ${slot[0]} 槽。` : "学会后由同行自动支援。"}`,
+    change: "未学习 → 1 级", icon: spec.icon,
+  }
+  if (action === "master") {
+    const rank = build.mastery[id], [title, detail] = MASTERY.skills[id][rank], after = structuredClone(build)
+    applyChoice(after, owner, key)
+    const before = parameters(skill, build), next = parameters(after.skills.find(s => s.id === id), after)
+    return { name: `${spec.name} · 精通${NUMERALS[rank]} ${title}`, type: `精通 / ${slot}`,
+      detail: `${detail} 威力另 +${Math.round(MASTERY.power * 100)}%。`,
+      change: `精通 ${rank} → ${rank + 1} · 强度 ${Math.round(before.damage)} → ${Math.round(next.damage)} · 间隔 ${(before.cooldown / 1000).toFixed(2)} → ${(next.cooldown / 1000).toFixed(2)} 秒`,
+      icon: spec.icon }
+  }
+  const branch = spec.branches.find(([value]) => value === action)
+  const after = structuredClone(build)
+  // Description is a preview, never a mutation of the live build.
+  applyChoice(after, owner, key)
+  const beforeStats = parameters(skill, build), afterSkill = after.skills.find(s => s.id === id), next = parameters(afterSkill, after)
+  const detail = branch?.[2] || (action === "fuse" ? `进化为${spec.fusion[1]}；${SKILLS[spec.fusion[0]].name}保留。${spec.fusion_effect || ""}`
+    : action === "awaken" ? spec.awaken || "本系觉醒，提高招式强度。"
+      : action === "deepen" ? spec.deepen || "强化当前分支，提高强度并缩短间隔。"
+      : action === "haste" ? "选择施放节律，保留当前单次强度的成长。" : "选择单次威力，保留当前施放节律。")
+  return {
+    name: `${spec.name} · ${branch?.[1] || ({ power: "凝练", haste: "节律", deepen: "精研", awaken: "觉醒", fuse: "复合进化" }[action])}`,
+    type: `${branch ? "分支" : action === "fuse" ? "融合" : "强化"} / ${slot}`, detail,
+    change: `${skill.level} → ${skill.level + 1} 级 · 强度 ${Math.round(beforeStats.damage)} → ${Math.round(next.damage)} · 间隔 ${(beforeStats.cooldown / 1000).toFixed(2)} → ${(next.cooldown / 1000).toFixed(2)} 秒`,
+    icon: spec.icon,
+  }
+}

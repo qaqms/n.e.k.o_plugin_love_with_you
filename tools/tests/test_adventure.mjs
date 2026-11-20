@@ -1,0 +1,3512 @@
+import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs"
+import { createRequire } from "node:module"
+import { tmpdir } from "node:os"
+import { basename, dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import test from "node:test"
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
+const require = createRequire(process.env.NEKO_UI_DEPS
+  ? join(resolve(process.env.NEKO_UI_DEPS), "package.json") : import.meta.url)
+const { chromium } = require("playwright")
+const python = process.env.NEKO_PYTHON || resolve(root, "../N.E.K.O/.venv/Scripts/python.exe")
+const artifacts = process.env.NEKO_UI_ARTIFACTS || resolve(root, "archive/reviews/browser")
+mkdirSync(artifacts, { recursive: true })
+
+async function harness(options = {}) {
+  const { legacy = true, rules, displayRules, ...browserOptions } = options
+  const data = mkdtempSync(join(tmpdir(), "neko-adventure-test-"))
+  const server = spawn(python, ["-B", join(root, "tools/preview/adventure_preview.py"), "--port", "0", "--data", data], {
+    cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+  })
+  let browser
+  const close = async () => {
+    try { await browser?.close() } finally {
+      if (server.pid && server.exitCode === null && server.signalCode === null) {
+        const exited = new Promise(resolve => server.once("exit", resolve))
+        server.kill()
+        await exited
+      }
+      if (existsSync(data)) {
+        const target = realpathSync(data)
+        assert.equal(dirname(target), realpathSync(tmpdir()))
+        assert.match(basename(target), /^neko-adventure-test-[a-z0-9]+$/i)
+        rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
+      }
+    }
+  }
+  try {
+    const url = await new Promise((resolve, reject) => {
+      let output = "", errors = ""
+      const timer = setTimeout(() => reject(new Error(`preview timeout ${errors}`)), 15000)
+      server.stderr.on("data", value => { errors += value })
+      server.stdout.on("data", value => {
+        output += value
+        if (output.includes("\n")) {
+          clearTimeout(timer)
+          try { resolve(JSON.parse(output.split("\n")[0]).url) } catch (e) { reject(e) }
+        }
+      })
+      server.on("error", reject)
+      server.on("exit", code => { if (code) { clearTimeout(timer); reject(new Error(errors)) } })
+    })
+    browser = await chromium.launch({
+      executablePath: process.env.NEKO_UI_BROWSER, headless: true,
+      args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+    })
+    const context = await browser.newContext({ viewport: { width: 1280, height: 820 }, ...browserOptions })
+    const page = await context.newPage()
+    const errors = []
+    page.on("pageerror", error => errors.push(error.message))
+    await page.goto(url)
+    const frame = page.frameLocator("#surface")
+    try {
+      await frame.getByRole("button", { name: "进入林地", exact: true }).waitFor()
+    } catch (error) {
+      throw new Error(`${error.message}\nPage errors: ${errors.join("\n")}`)
+    }
+    const actual = () => page.frames().find(f => f.url().includes("/ui/index.html"))
+    const state = (fn, args) => actual().evaluate(async ({ source, args }) => {
+      const { controller } = await import("./adventure.mjs")
+      return new Function("c", "args", `return (${source})(c, args)`)(controller, args)
+    }, { source: fn.toString(), args })
+    const start = async () => {
+      if (legacy || rules) {
+        await frame.locator("#player-class").focus()
+        await state((c, rules) => c.start({ character: "YUI", player_class: rules === 1 ? "guardian" : "mage", companion_class: "mage", rules }), rules || 1)
+      } else {
+        await frame.locator("#player-class").focus()
+        await state(c => c.start({
+          character: document.querySelector("#character").value,
+          player_class: document.querySelector("#player-class").value,
+          companion_class: document.querySelector("#partner-class").value, rules: 3,
+        }))
+      }
+      if (rules === 7) await chooseStarters({ frame, state })
+      await frame.locator("#screen").waitFor({ state: "hidden" })
+      await poll(() => state(c => !c.saving && c.lastSaved === 0))
+    }
+    if (displayRules) await state((c, rules) => {
+      const read = c.api.read.bind(c.api)
+      c.api.read = async () => { const view = await read(); view.rules = rules; return view }
+      c.api.view.rules = rules; c.preflight(c.api.view)
+    }, displayRules)
+    return {
+      page, frame, browser, url, state, start, errors,
+      close,
+    }
+  } catch (error) {
+    await close()
+    throw error
+  }
+}
+async function chooseStarters(h, player = "fire", companion = "wind") {
+  for (const [owner, id] of [["player", player], ["companion", companion]]) {
+    await poll(() => h.state((c, owner) =>
+      !c.saving && !c.busy && !c.api.pending && c.scene.combat.craft.preparation === owner, owner))
+    await h.frame.locator(`[data-starter="${id}"]`).click()
+  }
+}
+async function startFree(h, player = "fire", companion = "wind") {
+  await h.frame.getByRole("button", { name: "进入林地", exact: true }).click()
+  await chooseStarters(h, player, companion)
+  await h.frame.locator("#screen").waitFor({ state: "hidden" })
+  await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending))
+}
+
+test("free preparation separates appearance from starters and resumes the companion step without advancing time", async () => {
+  const h = await harness()
+  try {
+    assert.equal(await h.frame.locator("#player-class option").count(), 2)
+    assert.equal(await h.frame.locator(".route-style").count(), 0)
+    assert.match(await h.frame.locator(".party").textContent(), /你的装束/)
+    await h.frame.getByRole("button", { name: "进入林地", exact: true }).click()
+    await poll(() => h.state(c => !c.busy && !c.saving))
+    assert.equal(await h.frame.locator("[data-starter]").count(), 10)
+    assert.equal(await h.state(c => c.scene.elapsed), 0)
+    await h.frame.locator('[data-starter="stone"]').click()
+    await poll(() => h.state(c => !c.busy && !c.saving && c.scene.combat.craft.preparation === "companion"))
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await poll(() => h.state(c => !c.busy && c.scene.combat?.craft.preparation === "companion"))
+    assert.deepEqual(await h.state(c => c.scene.combat.builds.player.skills.map(s => s.id)), ["stone"])
+    assert.equal(await h.state(c => c.scene.elapsed), 0)
+    await h.frame.getByRole("button", { name: "技能图鉴", exact: true }).click()
+    assert.equal(await h.frame.locator(".codex-row").count(), 21)
+    await h.frame.getByRole("button", { name: "返回", exact: true }).click()
+    await h.frame.locator('[data-starter="rune"]').click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    assert.equal(await h.frame.locator('.skill-button[data-state="empty"]').count(), 2)
+    assert.match(await h.frame.locator("#support-state").textContent(), /支援未学/)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("free learned Q and E cast, projectile mods affect real shots and shared follow triggers unbranched healing", async () => {
+  const h = await harness({ rules: 7 })
+  try {
+    await h.start()
+    assert.match(await learn(h, "meteor:learn"), /进入 Q 槽/)
+    assert.match(await learn(h, "flame:learn"), /进入 E 槽/)
+    await learn(h, "heal:learn")
+    await learn(h, "mod:fork")
+    await learn(h, "fire:power")
+    await learn(h, "mod:follow")
+    const fired = await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.drops.clear(true, true)
+      s.spawnAt = 1200000; s.hurtUntil = 1200000
+      for (const b of Object.values(s.combat.builds)) for (const skill of b.skills) skill.ready_at = 1200000
+      const p = s.terrain.safePoint({ x: s.player.x + 80, y: s.player.y })
+      s.makeEnemy({ id: s.next(), kind: "brute", x: p.x, y: p.y, hp: 5000 })
+      s.combat.shoot(s.player, "player", s.combat.skill("player", "fire"))
+      s.hp = 60; s.combat.skill("player", "meteor").ready_at = 0
+      s.combat.skill("player", "flame").ready_at = 0; s.combat.skill("companion", "heal").ready_at = 0
+      return s.bullets.countActive()
+    })
+    assert.equal(fired, 2)
+    await h.page.keyboard.press("q")
+    await poll(() => h.state(c => c.scene.combat.stats.followups === 1))
+    assert.ok(await h.state(c => c.scene.hp > 60))
+    assert.equal(await h.state(c => c.scene.combat.skill("companion", "heal").branch), "")
+    await h.page.keyboard.press("e")
+    await h.state(async c => { c.scene.setPaused(true); c.pause(true); await c.save(true); c.scene.activeRun = false })
+    assert.deepEqual(await h.state(c => [...new Set(c.scene.combat.zones.map(z => z.kind))].sort()), ["flame", "meteor"])
+    const saved = await h.state(c => c.scene.snapshot())
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    const restored = await h.state(c => { c.scene.setPaused(true); return c.scene.snapshot() })
+    assert.deepEqual(restored.builds, saved.builds)
+    assert.deepEqual(restored.zones, saved.zones)
+    assert.equal(restored.stats.followups, 1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("free banishment and reroll persist exact decisions and replay a lost response without spending twice", async () => {
+  const h = await harness({ rules: 7 }), requests = []
+  try {
+    await h.start()
+    await h.state(c => { c.scene.xp = c.scene.xpNeeded(); c.scene.checkLevel() })
+    await poll(() => h.state(c => !c.saving && !c.busy))
+    assert.equal(await h.frame.locator("[data-upgrade]").count(), 4)
+    let lost = false
+    await h.page.route("**/preview/action", async route => {
+      const args = route.request().postDataJSON()
+      if (args.operation === "checkpoint" && args.values?.snapshot?.builds.player.banished.length) {
+        requests.push(args.request_id)
+        const response = await route.fetch()
+        if (!lost) { lost = true; await route.abort(); return }
+        await route.fulfill({ response }); return
+      }
+      await route.continue()
+    })
+    await h.frame.locator(".banish-button").first().click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await poll(() => h.state(c => !c.busy && !c.api.pending && c.scene.choices.length === 4))
+    assert.equal(requests.length, 2); assert.equal(requests[0], requests[1])
+    const banned = await h.state(c => c.scene.combat.builds.player.banished[0])
+    assert.equal(await h.frame.locator(`[data-upgrade="${banned}:learn"]`).count(), 0)
+    assert.equal(await h.state(c => c.scene.combat.rerolls), 2)
+    await h.frame.getByRole("button", { name: "重选 · 2", exact: true }).click()
+    await poll(() => h.state(c => !c.busy && !c.saving && c.scene.combat.rerolls === 1))
+    const saved = await h.state(c => c.scene.snapshot())
+    await h.page.reload()
+    h.page.once("dialog", dialog => dialog.accept())
+    await h.frame.getByRole("button", { name: "接管此旅程", exact: true }).click()
+    await h.frame.locator("[data-upgrade]").first().waitFor()
+    const restored = await h.state(c => c.scene.snapshot())
+    assert.deepEqual(restored.choices, saved.choices)
+    assert.equal(restored.rng, saved.rng)
+    assert.deepEqual(restored.builds, saved.builds)
+    assert.equal(restored.rerolls, 1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("free miniboss cooperation earns per-owner refits and a lost swap acknowledgement cannot grant extra refits", async () => {
+  const h = await harness({ rules: 7 }), requests = []
+  try {
+    await h.start()
+    await h.state(c => {
+      const s = c.scene
+      s.setPaused(true); s.level = 31; s.elapsed = 360000; s.spawnAt = 1200000; s.hurtUntil = 1200000
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.drops.clear(true, true)
+      s.encounters.spawn()
+      const boss = s.enemies.getChildren().find(e => e.getData("kind") === "sentinel")
+      s.combat.deal(boss, 10000, "player"); s.encounters.openReward(true)
+    })
+    await h.frame.locator("[data-cooperation]").first().waitFor()
+    await poll(() => h.state(c => !c.saving && !c.busy))
+    await h.frame.locator("[data-cooperation]").first().click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.frame.getByRole("button", { name: "战后整备 · 2", exact: true }).click()
+    await h.state(c => { c.scene.combat.skill("player", "fire").ready_at = 390000 })
+    let lost = false
+    await h.page.route("**/preview/action", async route => {
+      const args = route.request().postDataJSON()
+      if (args.operation === "checkpoint" && args.values?.snapshot?.swaps.player === 1) {
+        requests.push(args.request_id); const response = await route.fetch()
+        if (!lost) { lost = true; await route.abort(); return }
+        await route.fulfill({ response }); return
+      }
+      await route.continue()
+    })
+    await h.frame.locator('input[name="replacement"][value="stone"]').check()
+    await h.frame.getByRole("button", { name: "确认换招", exact: true }).click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await poll(() => h.state(c => !c.busy && !c.api.pending))
+    assert.equal(requests.length, 2); assert.equal(requests[0], requests[1])
+    assert.deepEqual(await h.state(c => c.scene.combat.craft.swaps), { player: 1, companion: 0 })
+    assert.equal(await h.state(c => c.scene.combat.skill("player", "stone").ready_at), 390000)
+    await h.page.reload()
+    h.page.once("dialog", dialog => dialog.accept())
+    await h.frame.getByRole("button", { name: "接管此旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.frame.getByRole("button", { name: "战后整备 · 1", exact: true }).click()
+    assert.equal(await h.frame.locator('input[name="replacement"]:not(:disabled)').count(), 0)
+    await h.frame.getByRole("button", { name: "YUI · 1次", exact: true }).click()
+    assert.ok(await h.frame.locator('input[name="replacement"]:not(:disabled)').count() > 0)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+for (const viewport of [{ width: 1280, height: 820 }, { width: 390, height: 844 }]) {
+  test(`free starters, four offers and refit controls fit at ${viewport.width}px`, async () => {
+    const h = await harness({ viewport })
+    try {
+      await h.page.screenshot({ path: join(artifacts, `adventure-free-camp-${viewport.width}.png`) })
+      await h.frame.getByRole("button", { name: "进入林地", exact: true }).click()
+      await poll(() => h.state(c => !c.busy && !c.saving))
+      await h.page.screenshot({ path: join(artifacts, `adventure-free-starters-${viewport.width}.png`) })
+      await chooseStarters(h, "thrust", "spark")
+      await h.frame.locator("#screen").waitFor({ state: "hidden" })
+      await poll(() => h.state(c => !c.busy && !c.saving))
+      await h.state(c => { c.scene.xp = c.scene.xpNeeded(); c.scene.checkLevel() })
+      await h.frame.locator("[data-upgrade]").first().waitFor()
+      await poll(() => h.state(c => !c.saving))
+      assert.equal(await h.state(() => document.getElementById("screen").scrollTop), 0)
+      await h.page.screenshot({ path: join(artifacts, `adventure-free-study-${viewport.width}.png`) })
+      const fit = await h.state(() => {
+        const grid = document.querySelector(".free-study-grid")
+        return { columns: getComputedStyle(grid).gridTemplateColumns.split(" ").length,
+          overflow: [...document.querySelectorAll("#screen-body button, #screen-body select")].some(el => el.scrollWidth > el.clientWidth + 1),
+          fits: document.documentElement.scrollWidth <= innerWidth }
+      })
+      assert.equal(fit.columns, viewport.width > 600 ? 2 : 1)
+      assert.equal(fit.overflow, false); assert.equal(fit.fits, true)
+      await h.state(c => {
+        const s = c.scene
+        s.choices = []; s.combat.studyOwner = ""
+        s.encounters.state.resolved = ["sentinel"]; s.encounters.state.selected = ["escort"]
+        c.refit()
+      })
+      await h.frame.locator('input[name="replacement"]').first().waitFor()
+      assert.equal(await h.state(() => document.getElementById("screen").scrollTop), 0)
+      await h.page.screenshot({ path: join(artifacts, `adventure-free-refit-${viewport.width}.png`) })
+      assert.equal(await h.state(() => document.documentElement.scrollWidth <= innerWidth), true)
+      assert.deepEqual(h.errors, [])
+    } finally { await h.close() }
+  })
+}
+async function poll(fn, expected = true) {
+  const deadline = Date.now() + 12000
+  while (Date.now() < deadline) {
+    if (await fn() === expected) return
+    await new Promise(resolve => setTimeout(resolve, 80))
+  }
+  assert.fail("condition timed out")
+}
+
+async function learn(h, key) {
+  await h.state(async (c, key) => {
+    const { drawChoices, studyOwner } = await import("./skills.mjs")
+    const s = c.scene, owner = studyOwner(s.level + 1)
+    // Seed the real draw, then select its card through the UI and save normally.
+    for (let seed = 0; seed < 1000; seed++) {
+      s.rng.sow([`${key}:${seed}`])
+      const state = s.rng.state()
+      if (!drawChoices(structuredClone(s.combat.builds[owner]), owner, s.rng, false).includes(key)) continue
+      s.rng.state(state); s.xp = s.xpNeeded(); s.checkLevel()
+      return
+    }
+    throw new Error(`No legal draw for ${key}`)
+  }, key)
+  const card = h.frame.locator(`[data-upgrade="${key}"]`)
+  await card.waitFor()
+  const text = await card.textContent()
+  await poll(() => h.state(c => !c.saving && !c.api.pending && !c.busy))
+  await card.click()
+  await h.frame.locator("#screen").waitFor({ state: "hidden" })
+  await poll(() => h.state(c => !c.saving && !c.api.pending && !c.busy))
+  return text
+}
+
+test("eight selectable routes launch distinct owner skills, show their tradeoffs and preserve route identities", async () => {
+  const h = await harness({ displayRules: 6 })
+  try {
+    assert.equal(await h.frame.locator("#player-class option").count(), 8)
+    assert.equal(await h.frame.locator("#partner-class option").count(), 8)
+    for (const route of ["guardian", "mage", "frost", "thunder", "earth", "blade", "trapper", "lancer"]) {
+      await h.frame.locator("#player-class").selectOption(route)
+      await h.frame.locator("#partner-class").selectOption(route)
+      assert.ok((await h.frame.locator('.party-member[data-owner="player"] .route-style').textContent()).length > 15)
+      const result = await h.state(async (c, route) => {
+        const { ROUTES } = await import("./skills.mjs")
+        await c.start({ character: "YUI", player_class: ROUTES[route].class, companion_class: ROUTES[route].class,
+          player_route: route, companion_route: route })
+        c.scene.setPaused(true)
+        return { player: c.scene.combat.builds.player.skills.map(s => s.id), companion: c.scene.combat.builds.companion.skills.map(s => s.id),
+          expected: ROUTES[route], playerAtlas: c.scene.player.frame.name, companionAtlas: c.scene.companion.frame.name }
+      }, route)
+      assert.deepEqual(result.player, result.expected.player)
+      assert.deepEqual(result.companion, result.expected.companion)
+      assert.match(result.playerAtlas, new RegExp(`^${result.expected.class}-`))
+      assert.match(result.companionAtlas, new RegExp(`^companion-${result.expected.class}-`))
+      await h.state(c => c.scene.end("retreated"))
+      await h.frame.getByRole("button", { name: "返回营地", exact: true }).click()
+      await h.frame.getByRole("button", { name: "进入林地", exact: true }).waitFor()
+    }
+    await h.frame.locator("#player-class").selectOption("lancer")
+    await h.frame.locator("#partner-class").selectOption("frost")
+    await h.frame.getByRole("button", { name: "进入林地", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    await poll(() => h.state(c => !c.saving && !c.busy))
+    await h.state(async c => { c.scene.setPaused(true); await c.save(true); c.scene.activeRun = false; await c.refresh() })
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    assert.deepEqual(await h.state(c => [c.scene.meta.player_route, c.scene.meta.companion_route]), ["lancer", "frost"])
+    assert.match(await h.frame.locator("#build-label").textContent(), /贯锋剑 × 凝霜术/)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("expanded skills learned from real cards attack and bind E; a pending meteor resumes exactly once", async () => {
+  const h = await harness({ legacy: false, rules: 6 })
+  try {
+    await h.start()
+    assert.match(await learn(h, "spark:learn"), /自动攻击栏/)
+    assert.match(await learn(h, "meteor:learn"), /E 主动/)
+    await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.drops.clear(true, true)
+      s.spawnAt = 1200000; s.hurtUntil = 1200000
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      s.combat.skill("player", "spark").ready_at = 0
+      s.combat.skill("player", "meteor").ready_at = 0
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 90, y: s.player.y, hp: 5000 })
+    })
+    await poll(() => h.state(c => c.scene.combat.stats.player_damage > 0))
+    assert.equal(await h.frame.locator('.auto-skill[data-owner="player"][data-skill="spark"]').count(), 1)
+    await h.page.keyboard.press("e")
+    await h.state(c => { c.scene.setPaused(true); c.pause(true) })
+    assert.equal(await h.state(c => c.scene.combat.zones.filter(z => z.kind === "meteor").length), 1)
+    const saved = await h.state(async c => {
+      c.scene.enemies.getFirstAlive().setVelocity(0)
+      await c.save(true)
+      return c.scene.snapshot()
+    })
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    const resumed = await h.state(c => {
+      const s = c.scene
+      s.setPaused(true)
+      const zones = structuredClone(s.combat.zones), stats = { ...s.combat.stats }
+      s.elapsed = zones[0].tick_at
+      s.combat.update(0)
+      const damage = s.combat.stats.player_damage
+      s.combat.update(0)
+      return { zones, before: stats.player_damage, after: damage, twice: s.combat.stats.player_damage,
+        remaining: s.combat.zones.filter(z => z.kind === "meteor").length, ready: s.combat.skill("player", "meteor").ready_at }
+    })
+    assert.deepEqual(resumed.zones, saved.zones)
+    assert.ok(resumed.after > resumed.before)
+    assert.equal(resumed.twice, resumed.after)
+    assert.equal(resumed.remaining, 0)
+    assert.equal(resumed.ready, saved.builds.player.skills.find(s => s.id === "meteor").ready_at)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("real scene rocks, mines, blades, lamps and healing produce distinct effects and save valid checkpoints", async () => {
+  const h = await harness({ legacy: false, rules: 6 })
+  try {
+    await h.start()
+    const result = await h.state(async c => {
+      const { newBuild, newSkill } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat
+      s.setPaused(true); s.spawnAt = 1200000
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.drops.clear(true, true)
+      combat.zones = []
+      combat.builds = { player: newBuild("player", "guardian", 6, "blade"), companion: newBuild("companion", "mage", 6, "thunder") }
+      combat.builds.player.skills.push(newSkill("rune"), newSkill("stone"), newSkill("quake"))
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 84, y: s.player.y, hp: 5000 })
+      const close = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 10, y: s.player.y, hp: 5000 })
+      for (const owner of ["player", "companion"]) for (const skill of combat.builds[owner].skills) skill.ready_at = 1200000
+      for (const id of ["orbit", "rune", "stone"]) combat.shoot(s.player, "player", combat.skill("player", id))
+      combat.skill("companion", "beacon").ready_at = 0
+      combat.support(combat.skill("companion", "beacon"))
+      combat.zones.find(z => z.kind === "beacon").tick_at = s.elapsed + 1000
+      const textures = s.bullets.getChildren().map(b => b.texture.key), kinds = combat.zones.map(z => z.kind)
+      const slow = Math.hypot(s.bullets.getFirstAlive().body.velocity.x, s.bullets.getFirstAlive().body.velocity.y)
+      const before = close.getData("hp")
+      s.elapsed += 499; combat.update(499); const unarmed = close.getData("hp")
+      s.elapsed++; combat.update(1); const exploded = close.getData("hp")
+      combat.builds.companion = newBuild("companion", "mage", 6, "frost")
+      combat.zones = combat.zones.filter(z => z.owner === "player")
+      s.hp = 70
+      const healed = combat.support(combat.skill("companion", "heal"))
+      combat.paint(); s.art.update()
+      const saved = s.snapshot()
+      await c.save()
+      return { textures, kinds, slow, before, unarmed, exploded, healed, hp: s.hp, expectedHp: 70 + 12 * (1 + s.meta.bonus / 100), saved,
+        persisted: (await c.api.read()).run.snapshot }
+    })
+    assert.ok(result.textures.includes("bolt-stone"))
+    assert.ok(Math.abs(result.slow - 245) < .001)
+    assert.deepEqual(result.kinds.sort(), ["beacon", "orbit", "rune"])
+    assert.equal(result.unarmed, result.before)
+    assert.ok(result.exploded < result.unarmed)
+    assert.equal(result.healed, true); assert.equal(result.hp, result.expectedHp)
+    assert.deepEqual(result.persisted, result.saved)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+for (const viewport of [{ width: 1280, height: 820 }, { width: 390, height: 844 }]) {
+  test(`expanded route, effects and skill study render at ${viewport.width}px`, async () => {
+    const h = await harness({ viewport, displayRules: 6 })
+    try {
+      await h.frame.locator("#player-class").selectOption("blade")
+      await h.frame.locator("#partner-class").selectOption("thunder")
+      await h.page.screenshot({ path: join(artifacts, `adventure-expanded-preparation-${viewport.width}.png`) })
+      await h.frame.getByRole("button", { name: "进入林地", exact: true }).click()
+      await h.frame.locator("#screen").waitFor({ state: "hidden" })
+      await poll(() => h.state(c => !c.saving && !c.busy))
+      await h.state(async c => {
+        const { newSkill } = await import("./skills.mjs")
+        const s = c.scene, combat = s.combat
+        s.enemies.clear(true, true); s.bullets.clear(true, true); s.drops.clear(true, true)
+        s.spawnAt = 1200000; s.hurtUntil = 1200000
+        combat.builds.player.skills.push(newSkill("meteor"), newSkill("rune"))
+        for (let i = 0; i < 10; i++) {
+          const a = i / 10 * Math.PI * 2
+          const point = s.terrain.safePoint({ x: s.player.x + Math.cos(a) * 115, y: s.player.y + Math.sin(a) * 115 })
+          s.makeEnemy({ id: s.next(), kind: "brute", x: point.x, y: point.y, hp: 5000 })
+        }
+        combat.castManual(0); combat.castManual(1)
+        combat.shoot(s.player, "player", combat.skill("player", "orbit"))
+        combat.shoot(s.player, "player", combat.skill("player", "rune"))
+        combat.support(combat.skill("companion", "beacon"))
+        combat.shoot(s.companion, "companion", combat.skill("companion", "spark"))
+        combat.paint(); s.art.update(); c.play(); s.activeRun = false; s.physics.world.pause()
+      })
+      await h.page.screenshot({ path: join(artifacts, `adventure-expanded-effects-${viewport.width}.png`) })
+      const drawn = await h.state(c => ({ zones: c.scene.combat.zones.length, lines: c.scene.combat.expanded.lines.length,
+        fits: document.documentElement.scrollWidth <= innerWidth }))
+      const png = await h.frame.locator("canvas").screenshot()
+      const colors = await h.page.evaluate(async base64 => {
+        const image = new Image(); image.src = `data:image/png;base64,${base64}`; await image.decode()
+        const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height
+        const ctx = canvas.getContext("2d"); ctx.drawImage(image, 0, 0)
+        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data, colors = new Set()
+        for (let i = 0; i < pixels.length; i += 204) colors.add(`${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`)
+        return colors.size
+      }, png.toString("base64"))
+      assert.ok(drawn.zones >= 4); assert.ok(drawn.lines > 0); assert.equal(drawn.fits, true); assert.ok(colors > 100)
+      await h.state(c => {
+        const s = c.scene
+        s.activeRun = true; s.setPaused(false); s.xp = s.xpNeeded(); s.checkLevel()
+      })
+      await h.frame.locator(".upgrade").first().waitFor()
+      await h.page.screenshot({ path: join(artifacts, `adventure-expanded-study-${viewport.width}.png`) })
+      await h.frame.getByRole("button", { name: "技能图鉴", exact: true }).click()
+      assert.equal(await h.frame.locator(".codex-row").count(), 16)
+      await h.frame.getByRole("button", { name: "同行 · YUI", exact: true }).click()
+      assert.equal(await h.frame.locator(".codex-row").count(), 14)
+      assert.equal(await h.state(() => document.documentElement.scrollWidth <= innerWidth), true)
+      assert.deepEqual(h.errors, [])
+    } finally { await h.close() }
+  })
+}
+
+test("expanded dense builds keep entity and visual budgets and persist without changing RNG while painting", async () => {
+  const h = await harness({ legacy: false, rules: 6 })
+  try {
+    await h.start()
+    const result = await h.state(async c => {
+      const { newBuild, newSkill } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat
+      s.setPaused(true); s.spawnAt = 1200000
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.drops.clear(true, true)
+      combat.zones = []
+      combat.builds = { player: newBuild("player", "guardian", 6, "blade"), companion: newBuild("companion", "mage", 6, "thunder") }
+      combat.builds.player.skills.push(newSkill("spark"), newSkill("rune"), newSkill("meteor"))
+      combat.builds.companion.skills.push(newSkill("rune"))
+      for (let i = 0; i < 150; i++) {
+        const a = i * 2.399, d = 20 + (i % 13) * 20
+        const point = s.terrain.safePoint({ x: s.player.x + Math.cos(a) * d, y: s.player.y + Math.sin(a) * d })
+        s.makeEnemy({ id: s.next(), kind: "brute", x: point.x, y: point.y, hp: 5000 })
+      }
+      combat.castManual(0); combat.castManual(1)
+      let zones = 0, particles = 0, lines = 0
+      for (let i = 0; i < 120; i++) {
+        s.elapsed += 50; combat.update(50); s.art.update()
+        zones = Math.max(zones, combat.zones.length)
+        particles = Math.max(particles, s.art.particles.length)
+        lines = Math.max(lines, combat.expanded.lines.length)
+      }
+      const before = JSON.stringify(s.snapshot()), rng = s.rng.state()
+      for (let i = 0; i < 40; i++) { combat.paint(); s.art.update() }
+      const stable = JSON.stringify(s.snapshot()) === before && s.rng.state() === rng
+      await c.save()
+      return { zones, particles, lines, stable, shots: s.bullets.countActive(), pending: c.api.pending,
+        damage: combat.stats.player_damage + combat.stats.companion_damage }
+    })
+    assert.ok(result.zones <= 12 && result.particles <= 180 && result.lines <= 48 && result.shots <= 160)
+    assert.ok(result.damage > 0); assert.equal(result.stable, true); assert.equal(result.pending, null)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("new automatic skills learned from upgrade cards attack for the correct owner", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.start()
+    assert.match(await learn(h, "wind:learn"), /自动攻击栏/)
+    assert.equal(await h.frame.locator('.auto-skill[data-owner="player"][data-skill="wind"]').count(), 1)
+    assert.match(await h.frame.locator('.skill-button[data-slot="1"]').getAttribute("aria-label"), /尚未学习主动技能/)
+    await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.spawnAt = s.elapsed + 60000; s.hurtUntil = s.elapsed + 60000
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = s.elapsed + 60000
+      s.combat.skill("player", "wind").ready_at = 0
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 200, y: s.player.y, hp: 5000 })
+    })
+    await poll(() => h.state(c => c.scene.combat.stats.player_damage > 0))
+    assert.ok(await h.state(c => c.scene.combat.skill("player", "wind").ready_at > 0))
+    await learn(h, "slash:learn")
+    const damage = await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.spawnAt = s.elapsed + 60000
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = s.elapsed + 60000
+      s.combat.skill("player", "slash").ready_at = 0
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 250, y: s.player.y, hp: 5000 })
+      return s.combat.stats.player_damage
+    })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    assert.equal(await h.state(c => c.scene.combat.skill("player", "slash").ready_at), 0)
+    await poll(async () => await h.frame.locator('.auto-skill[data-owner="player"][data-skill="slash"] .auto-state').textContent() === "待近敌")
+    await h.page.screenshot({ path: join(artifacts, "adventure-learned-auto-skills.png") })
+    await h.state(c => c.scene.enemies.getFirstAlive().setPosition(c.scene.player.x + 70, c.scene.player.y))
+    await poll(async () => await h.state(c => c.scene.combat.stats.player_damage) > damage)
+    assert.equal(await h.state(c => c.scene.bullets.countActive()), 0)
+    await learn(h, "fire:learn")
+    const companionDamage = await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.spawnAt = s.elapsed + 60000
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = s.elapsed + 60000
+      s.combat.skill("companion", "fire").ready_at = 0
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.companion.x - 180, y: s.companion.y, hp: 5000 })
+      return s.combat.stats.companion_damage
+    })
+    await poll(async () => await h.state(c => c.scene.combat.stats.companion_damage) > companionDamage)
+    assert.equal(await h.frame.locator('.auto-skill[data-owner="companion"][data-skill="fire"]').count(), 1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("learning a second active skill through its card binds E, casts, and survives reopening", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.start()
+    assert.match(await learn(h, "dash:learn"), /E 主动/)
+    await h.frame.locator('.skill-button[data-slot="1"]:not(:disabled)').waitFor()
+    const before = await h.state(c => c.scene.player.x)
+    await h.page.keyboard.press("e")
+    assert.ok(await h.state(c => c.scene.player.x) > before + 100)
+    const readyAt = await h.state(c => c.scene.combat.skill("player", "dash").ready_at)
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    assert.match(await h.frame.locator('.skill-button[data-slot="1"]').getAttribute("aria-label"), /破阵突进/)
+    assert.equal(await h.state(c => c.scene.combat.skill("player", "dash").ready_at), readyAt)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("learned close-range and active spells expose their conditions and execute on valid targets", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.frame.locator("#player-class").selectOption("guardian")
+    await h.start()
+    await learn(h, "guard:learn")
+    await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.spawnAt = s.elapsed + 5000; s.hurtUntil = s.elapsed + 5000
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = s.elapsed + 5000
+      s.combat.skill("player", "guard").ready_at = 0
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 70, y: s.player.y, hp: 5000 })
+    })
+    await poll(() => h.state(c => c.scene.combat.stats.player_damage > 0 && c.scene.combat.skill("player", "guard").ready_at > 0))
+    assert.match(await learn(h, "flame:learn"), /学会后进入 E 槽/)
+    await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.spawnAt = s.elapsed + 5000
+    })
+    await h.page.keyboard.press("e")
+    await poll(async () => /范围内没有敌人/.test(await h.frame.locator("#notice").textContent()))
+    assert.equal(await h.state(c => c.scene.combat.skill("player", "flame").ready_at), 0)
+    const damage = await h.state(c => {
+      const s = c.scene
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 200, y: s.player.y, hp: 5000 })
+      return s.combat.stats.player_damage
+    })
+    await h.frame.locator('.skill-button[data-slot="1"]').click()
+    await poll(() => h.state(c => c.scene.combat.zones.some(z => z.kind === "flame")))
+    await poll(async () => await h.state(c => c.scene.combat.stats.player_damage) > damage)
+    await h.state(c => {
+      const s = c.scene
+      s.player.setPosition(1765, 600); s.combat.facing = { x: 1, y: 0 }
+      s.combat.skill("player", "dash").ready_at = 0
+    })
+    await h.page.keyboard.press("q")
+    await poll(async () => /地图边界/.test(await h.frame.locator("#notice").textContent()))
+    assert.equal(await h.state(c => c.scene.combat.skill("player", "dash").ready_at), 0)
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.frame.getByRole("button", { name: "技能图鉴", exact: true }).click()
+    assert.match(await h.frame.locator(".codex-list").textContent(), /E 主动.*无目标时不消耗冷却/s)
+    assert.match(await h.frame.locator(".codex-list").textContent(), /进入近身范围/)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("canvas renders original sprites and a forest; keyboard movement and pause work", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    const before = await h.state(c => c.scene.player.x)
+    await h.page.keyboard.down("d")
+    await poll(async () => await h.state(c => c.scene.player.x) > before + 25)
+    await h.page.keyboard.up("d")
+    assert.ok(await h.state(c => c.scene.player.x) > before + 25)
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    const paused = await h.state(c => c.scene.elapsed)
+    await new Promise(resolve => setTimeout(resolve, 250))
+    assert.equal(await h.state(c => c.scene.elapsed), paused)
+    await h.frame.getByRole("button", { name: "继续", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    const png = await h.frame.locator("canvas").screenshot({ path: join(artifacts, "adventure-desktop.png") })
+    const colors = await h.page.evaluate(async base64 => {
+      const image = new Image(); image.src = `data:image/png;base64,${base64}`; await image.decode()
+      const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height
+      const ctx = canvas.getContext("2d"); ctx.drawImage(image, 0, 0)
+      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+      const colors = new Set()
+      for (let i = 0; i < pixels.length; i += 204) colors.add(`${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`)
+      return colors.size
+    }, png.toString("base64"))
+    assert.ok(colors > 35, `canvas has only ${colors} colors`)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("new builds have separate owner choices and save pending companion study exactly", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.start()
+    assert.equal(await h.state(c => c.scene.snapshot().rules), 3)
+    for (const owner of ["player", "player", "companion"]) {
+      await h.state(c => { c.scene.xp = c.scene.xpNeeded(); c.scene.checkLevel() })
+      await h.frame.locator(".upgrade").first().waitFor()
+      await poll(() => h.state(c => !c.saving && !c.api.pending && !c.busy))
+      assert.equal(await h.state(c => c.scene.combat.studyOwner), owner)
+      assert.equal(await h.frame.locator(`.upgrade[data-owner="${owner}"]`).count(), 3)
+      if (owner === "companion") break
+      await h.frame.locator(".upgrade").first().click()
+      await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    }
+    await h.frame.getByRole("button", { name: "重选 · 2", exact: true }).click()
+    await poll(() => h.state(c => !c.saving && !c.api.pending))
+    assert.equal(await h.state(c => c.scene.combat.rerolls), 1)
+    const saved = await h.state(c => c.scene.snapshot())
+    await h.page.screenshot({ path: join(artifacts, "adventure-study-companion.png") })
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator(".upgrade").first().waitFor()
+    const restored = await h.state(c => c.scene.snapshot())
+    assert.deepEqual(restored, saved)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("Q creates a saved fire field; companion follows once and cooldown prevents duplicate support", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.frame.locator("#player-class").selectOption("mage")
+    await h.start()
+    await h.state(c => {
+      const s = c.scene, pull = s.combat.skill("companion", "pull")
+      pull.level = 3; pull.focus = "power"; pull.branch = "follow"; pull.ready_at = 0
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 140, y: s.player.y, hp: 5000 })
+    })
+    await h.page.keyboard.press("q")
+    assert.equal(await h.state(c => c.scene.combat.stats.followups), 1)
+    assert.ok(await h.state(c => c.scene.combat.zones.some(z => z.kind === "flame")))
+    await h.page.keyboard.press("q")
+    assert.equal(await h.state(c => c.scene.combat.stats.followups), 1)
+    await h.page.screenshot({ path: join(artifacts, "adventure-fire-followup.png") })
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    const saved = await h.state(c => c.scene.snapshot())
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    const restored = await h.state(c => c.scene.snapshot())
+    assert.deepEqual(restored.builds, saved.builds)
+    assert.equal(restored.stats.followups, 1)
+    assert.ok(restored.zones.some(z => z.kind === "flame"))
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("sword is an area slash, dash links armor, and paused keys cannot cast", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.frame.locator("#player-class").selectOption("guardian")
+    await h.frame.locator("#partner-class").selectOption("guardian")
+    await h.start()
+    const values = await h.state(c => {
+      const s = c.scene
+      const target = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 80, y: s.player.y, hp: 5000 })
+      const bullets = s.bullets.countActive(), hp = target.getData("hp")
+      s.shoot(s.player, "player")
+      const armor = s.combat.skill("companion", "armor")
+      armor.level = 3; armor.focus = "power"; armor.branch = "follow"; armor.ready_at = 0
+      return { bullets: s.bullets.countActive() - bullets, damage: hp - target.getData("hp"), x: s.player.x }
+    })
+    assert.equal(values.bullets, 0)
+    assert.ok(values.damage > 0)
+    await h.page.keyboard.press("q")
+    assert.ok(await h.state(c => c.scene.player.x) > values.x + 100)
+    assert.equal(await h.state(c => c.scene.combat.stats.followups), 1)
+    assert.ok(await h.state(c => c.scene.shield) > 0)
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    const before = await h.state(c => c.scene.snapshot())
+    await h.page.keyboard.press("q")
+    assert.deepEqual(await h.state(c => c.scene.snapshot()), before)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("learning an E skill and a same-owner evolution update controls without losing the catalyst", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.start()
+    await h.state(async c => {
+      const { applyChoice } = await import("./skills.mjs")
+      const build = c.scene.combat.builds.player
+      for (const key of ["dash:learn", "wind:learn", "wind:power", "fire:power", "fire:blast", "fire:deepen", "fire:fuse"]) {
+        if (!applyChoice(build, "player", key)) throw new Error(`Illegal fixture ${key}`)
+      }
+      c.play()
+      const s = c.scene
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 80, y: s.player.y, hp: 5000 })
+    })
+    await h.frame.locator('.skill-button[data-slot="1"]:not(:disabled)').waitFor()
+    const before = await h.state(c => c.scene.player.x)
+    await h.page.keyboard.press("e")
+    assert.ok(await h.state(c => c.scene.player.x) > before + 100)
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.frame.getByRole("button", { name: "技能图鉴", exact: true }).click()
+    assert.match(await h.frame.locator(".codex-list").textContent(), /前置技能保留/)
+    await h.frame.getByRole("button", { name: "返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    assert.equal(await h.state(c => c.scene.combat.skill("player", "fire").evolution), "fusion")
+    assert.equal(await h.state(c => c.scene.combat.skill("player", "wind").level), 2)
+    assert.equal(await h.frame.locator(".skill-button").count(), 2)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("lost upgrade-save responses keep the chosen build paused and replay the same choice once", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.start()
+    await h.state(c => { c.scene.xp = c.scene.xpNeeded(); c.scene.checkLevel() })
+    await poll(() => h.state(c => !c.saving && !c.api.pending))
+    let dropped = false
+    const ids = []
+    await h.page.route("**/preview/action", async route => {
+      const args = route.request().postDataJSON()
+      if (args.operation === "checkpoint") {
+        ids.push(args.request_id)
+        const response = await route.fetch()
+        if (!dropped) { dropped = true; await route.abort("failed"); return }
+        await route.fulfill({ response }); return
+      }
+      await route.continue()
+    })
+    await h.frame.locator(".upgrade").first().click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).waitFor()
+    const selected = await h.state(c => c.scene.snapshot())
+    assert.equal(await h.state(c => c.scene.paused), true)
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续", exact: true }).waitFor()
+    assert.deepEqual(await h.state(c => c.scene.snapshot()), selected)
+    assert.equal(ids.length, 2)
+    assert.equal(ids[0], ids[1])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("dense new builds keep effects bounded and save a valid checkpoint", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.start()
+    await h.state(async c => {
+      const { applyChoice } = await import("./skills.mjs")
+      const s = c.scene, build = s.combat.builds.player
+      for (const key of ["wind:learn", "slash:learn", "fire:power", "fire:blast", "fire:deepen", "fire:fuse",
+        "wind:haste", "wind:fan", "wind:deepen", "wind:awaken"]) applyChoice(build, "player", key)
+      for (const key of ["ice:learn", "ice:power", "ice:rime", "ice:deepen", "ice:awaken"]) {
+        applyChoice(s.combat.builds.companion, "companion", key)
+      }
+      s.level = 31; s.hurtUntil = 1200000
+      for (let i = 0; i < 150; i++) {
+        const a = i * Math.PI * 2 / 150
+        s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + Math.cos(a) * 250,
+          y: s.player.y + Math.sin(a) * 250, hp: 5000 })
+      }
+      s.combat.castManual(0)
+    })
+    await poll(() => h.state(c => c.scene.elapsed > 700 && c.scene.combat.stats.player_damage > 0
+      && c.scene.combat.frost.marks.size > 0))
+    const values = await h.state(c => ({
+      zones: c.scene.combat.zones.length, bullets: c.scene.bullets.countActive(),
+      marks: c.scene.combat.frost.marks.size,
+      hits: c.scene.combat.stats.player_damage, elapsed: c.scene.elapsed,
+    }))
+    assert.ok(values.hits > 0 && values.elapsed > 700, JSON.stringify(values))
+    assert.ok(values.zones <= 12 && values.bullets <= 160)
+    assert.ok(values.marks > 0 && values.marks <= 160)
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.page.screenshot({ path: join(artifacts, "adventure-skills-density.png") })
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("new touch controls cast skills and keep the joystick and HUD apart at 390px", async () => {
+  const h = await harness({ legacy: false, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  try {
+    await h.frame.locator("#player-class").selectOption("mage")
+    await h.start()
+    for (const key of ["wind:learn", "slash:learn", "wind:power", "dash:learn"]) await learn(h, key)
+    await h.state(c => {
+      const s = c.scene
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 130, y: s.player.y, hp: 5000 })
+    })
+    await h.frame.locator('.skill-button[data-slot="0"]').click()
+    assert.ok(await h.state(c => c.scene.combat.zones.some(z => z.kind === "flame")))
+    const stick = await h.frame.locator("#joystick").boundingBox()
+    const skills = await h.frame.locator("#skill-bar").boundingBox()
+    assert.ok(stick.x + stick.width <= skills.x)
+    const auto = await h.frame.locator("#auto-skills").boundingBox()
+    assert.ok(auto.y + auto.height < stick.y && auto.y + auto.height < skills.y)
+    assert.equal(await h.frame.locator('.auto-skill[data-owner="player"]').count(), 3)
+    assert.equal(await h.state(() => document.documentElement.scrollWidth <= innerWidth), true)
+    assert.equal(await h.frame.locator("#auto-skills").evaluate(node =>
+      [...node.querySelectorAll(".auto-skill, .auto-name, .auto-state")].every(item =>
+        item.scrollWidth <= item.clientWidth && item.scrollHeight <= item.clientHeight)), true)
+    await h.page.screenshot({ path: join(artifacts, "adventure-skills-mobile.png") })
+    await h.page.setViewportSize({ width: 844, height: 390 })
+    try {
+      await poll(() => h.state(() => {
+        const canvas = document.querySelector("canvas"), box = canvas.getBoundingClientRect()
+        return canvas.width === Math.round(box.width) && canvas.height === Math.round(box.height)
+      }))
+    } catch {
+      assert.fail(`Canvas resize ${JSON.stringify(await h.state(c => {
+        const canvas = document.querySelector("canvas"), box = canvas.getBoundingClientRect()
+        return { buffer: [canvas.width, canvas.height], display: [box.width, box.height],
+          camera: [c.scene.cameras.main.width, c.scene.cameras.main.height],
+          parent: [canvas.parentElement.clientWidth, canvas.parentElement.clientHeight],
+          scale: [c.scene.scale.width, c.scene.scale.height], paused: c.scene.paused }
+      }))}`)
+    }
+    await h.state(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    const compact = await h.frame.locator("#auto-skills").boundingBox()
+    const landscapeStick = await h.frame.locator("#joystick").boundingBox()
+    const landscapeSkills = await h.frame.locator("#skill-bar").boundingBox()
+    assert.ok(compact.x > landscapeStick.x + landscapeStick.width)
+    assert.ok(compact.x + compact.width < landscapeSkills.x)
+    const notice = await h.frame.locator("#notice").boundingBox()
+    assert.ok(notice.y + notice.height <= compact.y)
+    assert.equal(await h.state(() => document.documentElement.scrollWidth <= innerWidth), true)
+    await h.page.screenshot({ path: join(artifacts, "adventure-skills-landscape.png") })
+    await h.state(c => { c.scene.xp = c.scene.xpNeeded(); c.scene.checkLevel() })
+    await h.frame.locator(".upgrade").first().waitFor()
+    assert.ok(await h.frame.locator(".study-next").count() > 0)
+    assert.equal(await h.frame.locator("#notice").isVisible(), false)
+    assert.equal(await h.state(() => document.documentElement.scrollWidth <= innerWidth), true)
+    await h.frame.locator("#screen").evaluate(node => { node.scrollTop = 0 })
+    await h.page.screenshot({ path: join(artifacts, "adventure-study-landscape.png") })
+    await h.page.setViewportSize({ width: 390, height: 844 })
+    await h.frame.locator(".upgrade").last().scrollIntoViewIfNeeded()
+    assert.equal(await h.frame.locator(".upgrade").last().evaluate(node => {
+      const box = node.getBoundingClientRect(), screen = document.getElementById("screen").getBoundingClientRect()
+      return box.left >= screen.left && box.right <= screen.right && box.bottom <= screen.bottom
+    }), true)
+    await h.frame.locator("#screen").evaluate(node => { node.scrollTop = 0 })
+    await h.page.screenshot({ path: join(artifacts, "adventure-study-mobile.png") })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("Arcade collisions resolve companion attacks and shared experience upgrades", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    await h.state(c => {
+      const s = c.scene
+      s.makeEnemy({ id: s.next(), kind: "slime", x: s.companion.x - 35, y: s.companion.y, hp: 1 })
+      s.shoot(s.companion, "companion")
+    })
+    await poll(() => h.state(c => c.scene.partnerKills > 0))
+    await h.state(c => { c.scene.xp = c.scene.xpNeeded(); c.scene.checkLevel() })
+    await h.frame.locator(".upgrade").first().waitFor()
+    const choices = await h.state(c => c.scene.choices)
+    assert.ok(choices.includes("partner") || choices.includes("ward"))
+    const elapsed = await h.state(c => c.scene.elapsed)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    assert.equal(await h.state(c => c.scene.elapsed), elapsed)
+    const selected = choices[0]
+    await h.frame.locator(".upgrade").first().click()
+    assert.equal((await h.state(c => c.scene.ranks))[selected], 1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("save and reopen preserve actual enemy, rank, RNG and health state", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    await h.state(c => { c.scene.hp = 62; c.scene.ranks.power = 2; c.scene.spawn() })
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    const saved = await h.state(c => c.scene.snapshot())
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    const restored = await h.state(c => c.scene.snapshot())
+    assert.equal(restored.player.hp, saved.player.hp)
+    assert.deepEqual(restored.ranks, saved.ranks)
+    assert.equal(restored.rng, saved.rng)
+    assert.equal(restored.enemies.length, saved.enemies.length)
+    assert.ok(restored.elapsed >= saved.elapsed && restored.elapsed < saved.elapsed + 500)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("lost checkpoint response preserves request identity and retries without another save", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    let dropped = false
+    const ids = []
+    await h.page.route("**/preview/action", async route => {
+      const args = route.request().postDataJSON()
+      if (args.operation === "release") {
+        ids.push(args.request_id)
+        const response = await route.fetch()
+        if (!dropped) { dropped = true; await route.abort("failed"); return }
+        await route.fulfill({ response }); return
+      }
+      await route.continue()
+    })
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).waitFor()
+    const revision = await h.state(c => c.api.view.revision)
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    assert.equal(ids.length, 2)
+    assert.equal(ids[0], ids[1])
+    assert.equal(await h.state(c => c.api.view.revision), revision + 1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("blur pauses, death saves a terminal result and reopening never resumes a dead run", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    await h.state(() => window.dispatchEvent(new Event("blur")))
+    await h.frame.getByRole("button", { name: "继续", exact: true }).waitFor()
+    const elapsed = await h.state(c => c.scene.elapsed)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    assert.equal(await h.state(c => c.scene.elapsed), elapsed)
+    await h.frame.getByRole("button", { name: "继续", exact: true }).click()
+    await h.state(c => {
+      const s = c.scene
+      s.hp = 1; s.shield = 0; s.hurtUntil = 0
+      s.makeEnemy({ id: s.next(), kind: "slime", x: s.player.x, y: s.player.y, hp: 100 })
+    })
+    await h.frame.getByRole("button", { name: "返回营地", exact: true }).waitFor()
+    assert.equal(await h.state(c => c.scene.outcome), "defeated")
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "进入林地", exact: true }).waitFor()
+    assert.equal(await h.frame.getByRole("button", { name: "继续旅程", exact: true }).count(), 0)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("390px touch viewport has no horizontal overflow and provides a working joystick", async () => {
+  const h = await harness({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  try {
+    assert.equal(await h.state(() => document.documentElement.scrollWidth <= innerWidth), true)
+    await h.start()
+    await h.frame.locator("#joystick").waitFor({ state: "visible" })
+    const box = await h.frame.locator("#joystick").boundingBox()
+    const before = await h.state(c => c.scene.player.x)
+    await h.page.mouse.move(box.x + box.width - 12, box.y + box.height / 2)
+    await h.page.mouse.down()
+    try {
+      await poll(async () => await h.state(c => c.scene.player.x) > before + 15)
+    } finally { await h.page.mouse.up() }
+    const movement = await h.state(c => ({ x: c.scene.player.x, paused: c.scene.paused, elapsed: c.scene.elapsed,
+      touch: c.scene.touch, fps: c.scene.game.loop.actualFps, velocity: c.scene.player.body.velocity.x }))
+    assert.ok(movement.x > before + 15, JSON.stringify({ before, ...movement }))
+    await h.page.screenshot({ path: join(artifacts, "adventure-mobile.png") })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("pending upgrade choices survive a reload and an explicit takeover", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    await h.state(c => { c.scene.xp = c.scene.xpNeeded(); c.scene.checkLevel() })
+    await h.frame.locator(".upgrade").first().waitFor()
+    await poll(() => h.state(c => !c.saving && !c.api.pending))
+    const choices = await h.state(c => c.scene.choices)
+    const rng = await h.state(c => c.scene.rng.state())
+    await h.page.reload()
+    h.page.once("dialog", dialog => dialog.accept())
+    await h.frame.getByRole("button", { name: "接管此旅程", exact: true }).click()
+    await h.frame.locator(".upgrade").first().waitFor()
+    assert.deepEqual(await h.state(c => c.scene.choices), choices)
+    assert.equal(await h.state(c => c.scene.rng.state()), rng)
+    await h.page.screenshot({ path: join(artifacts, "adventure-upgrades.png") })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("another window requires takeover and the original window cannot overwrite its progress", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    const other = await h.page.context().newPage()
+    await other.goto(h.url)
+    const otherFrame = other.frameLocator("#surface")
+    other.once("dialog", dialog => dialog.accept())
+    await otherFrame.getByRole("button", { name: "接管此旅程", exact: true }).click()
+    await otherFrame.locator("#screen").waitFor({ state: "hidden" })
+    await h.page.bringToFront()
+    await h.state(c => c.pause(true))
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).waitFor()
+    assert.equal(await h.state(async c => (await c.api.read()).owns_control), false)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("final boss spawns at eighteen minutes and its defeat saves a cleared result", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    await h.state(c => { c.scene.elapsed = 1080000 })
+    await poll(() => h.state(c => c.scene.bossSpawned))
+    await h.state(c => {
+      const s = c.scene, boss = s.enemies.getChildren().find(e => e.getData("kind") === "boss")
+      boss.setPosition(s.player.x + 65, s.player.y); boss.setData("hp", 1)
+      s.shoot(s.player, "player")
+    })
+    await h.frame.getByRole("button", { name: "返回营地", exact: true }).waitFor()
+    assert.equal(await h.state(c => c.scene.outcome), "cleared")
+    assert.equal(await h.state(async c => (await c.api.read()).run.status), "ended")
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("fully upgraded builds keep playing instead of opening an empty choice screen", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    await h.state(c => {
+      for (const key of Object.keys(c.scene.ranks)) c.scene.ranks[key] = key === "multishot" ? 3 : 8
+      c.scene.xp = c.scene.xpNeeded(); c.scene.checkLevel()
+    })
+    assert.equal(await h.state(c => c.scene.paused), false)
+    assert.deepEqual(await h.state(c => c.scene.choices), [])
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("the static page also works in a standalone tab through the existing action endpoint", async () => {
+  const h = await harness()
+  try {
+    await h.page.goto(`${h.url}/plugin/love_with_you/ui/index.html`)
+    await h.page.getByRole("button", { name: "进入林地", exact: true }).click()
+    await h.page.locator('[data-starter="fire"]').click()
+    await h.page.locator('#screen-body[data-owner="companion"]').waitFor()
+    await h.page.locator('[data-starter="wind"]').click()
+    await h.page.locator("#screen").waitFor({ state: "hidden" })
+    await h.page.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.page.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.page.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("a failed journey earns coins and buying health changes the next start and survives reload", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    await h.state(c => { c.scene.elapsed = 420000; c.scene.hp = 0; c.scene.end("defeated") })
+    await h.frame.locator(".reward-total").waitFor()
+    assert.equal(await h.frame.locator(".reward-total").textContent(), "冒险金币 +42")
+    await h.frame.getByRole("button", { name: "冒险商店", exact: true }).click()
+    const product = h.frame.locator('[data-product="vitality"]')
+    await product.locator(".buy-upgrade").click()
+    await poll(() => h.state(c => c.api.view.economy.levels.vitality === 1 && !c.busy))
+    assert.equal(await h.frame.locator(".wallet strong").textContent(), "2")
+    await h.frame.getByRole("button", { name: "返回营地", exact: true }).click()
+    await h.start()
+    assert.equal(await h.state(c => c.scene.maxHp()), 104)
+    assert.equal(await h.state(c => c.scene.hp), 104)
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "冒险商店", exact: true }).click()
+    assert.equal(await h.frame.locator(".buy-upgrade:not(:disabled)").count(), 0)
+    assert.equal(await h.frame.locator(".refund-upgrade:not(:disabled)").count(), 0)
+    await h.frame.getByRole("button", { name: "返回营地", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    assert.equal(await h.state(c => c.scene.maxHp()), 104)
+    assert.equal(await h.state(c => c.scene.meta.loadout.levels.vitality), 1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("all four permanent upgrades affect actual combat values and stay fixed in a saved run", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    await h.state(c => { c.scene.elapsed = 1200000; c.scene.bossSpawned = true; c.scene.end("cleared") })
+    await h.frame.locator(".reward-total").waitFor()
+    await h.page.screenshot({ path: join(artifacts, "adventure-economy-result.png") })
+    await h.frame.getByRole("button", { name: "冒险商店", exact: true }).click()
+    for (const key of ["vitality", "power", "stride", "reach"]) {
+      await h.frame.locator(`[data-product="${key}"] .buy-upgrade`).click()
+      await poll(async () => {
+        const current = await h.state(c => ({ levels: c.api.view.economy.levels, busy: c.busy }))
+        return current.levels[key] === 1 && !current.busy
+      })
+    }
+    assert.equal(await h.frame.locator(".wallet strong").textContent(), "40")
+    await h.page.screenshot({ path: join(artifacts, "adventure-shop-desktop.png") })
+    await h.frame.getByRole("button", { name: "返回营地", exact: true }).click()
+    await h.start()
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    const values = await h.state(c => {
+      const s = c.scene
+      s.makeEnemy({ id: s.next(), kind: "slime", x: s.player.x + 60, y: s.player.y, hp: 100 })
+      s.shoot(s.player, "player"); s.shoot(s.companion, "companion")
+      return { hp: s.maxHp(), speed: s.moveSpeed(), pickup: s.pickupRange(), loadout: s.meta.loadout,
+        playerDamage: s.bullets.getChildren().find(b => b.getData("owner") === "player").getData("damage"),
+        partnerDamage: s.bullets.getChildren().find(b => b.getData("owner") === "companion").getData("damage") }
+    })
+    assert.equal(values.hp, 104)
+    assert.ok(Math.abs(values.speed - 173.4) < .001)
+    assert.ok(Math.abs(values.pickup - 63.6) < .001)
+    assert.ok(Math.abs(values.playerDamage - 28.56) < .001)
+    assert.ok(Math.abs(values.partnerDamage - 15.912) < .001)
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    assert.deepEqual(await h.state(c => c.scene.meta.loadout), values.loadout)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("lost finish, purchase and refund responses replay without duplicate income or charges", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    const calls = new Map(), dropped = new Set()
+    await h.page.route("**/preview/action", async route => {
+      const args = route.request().postDataJSON()
+      if (["finish", "buy", "refund"].includes(args.operation)) {
+        calls.set(args.operation, [...(calls.get(args.operation) || []), args.request_id])
+        const response = await route.fetch()
+        if (!dropped.has(args.operation)) { dropped.add(args.operation); await route.abort("failed"); return }
+        await route.fulfill({ response }); return
+      }
+      await route.continue()
+    })
+    await h.state(c => { c.scene.elapsed = 420000; c.scene.end("retreated") })
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await h.frame.locator(".reward-total").waitFor()
+    assert.equal(await h.frame.locator(".reward-total").textContent(), "冒险金币 +42")
+    await h.frame.getByRole("button", { name: "冒险商店", exact: true }).click()
+    await h.frame.locator('[data-product="vitality"] .buy-upgrade').click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await h.frame.locator('[data-product="vitality"] .refund-upgrade:not(:disabled)').waitFor()
+    assert.equal(await h.frame.locator(".wallet strong").textContent(), "2")
+    await h.frame.locator('[data-product="vitality"] .refund-upgrade').click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await poll(() => h.state(c => c.api.view.economy.balance === 42 && !c.busy))
+    for (const operation of ["finish", "buy", "refund"]) {
+      assert.equal(calls.get(operation).length, 2)
+      assert.equal(calls.get(operation)[0], calls.get(operation)[1])
+    }
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "冒险商店", exact: true }).click()
+    assert.equal(await h.frame.locator(".wallet strong").textContent(), "42")
+    assert.equal(await h.state(c => c.api.view.economy.levels.vitality), 0)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("a confirmed purchase followed by a failed refresh only retries the read", async () => {
+  const h = await harness()
+  try {
+    await h.start()
+    await h.state(c => { c.scene.elapsed = 420000; c.scene.end("retreated") })
+    await h.frame.getByRole("button", { name: "冒险商店", exact: true }).click()
+    let purchases = 0, failRead = false
+    await h.page.route("**/preview/action", async route => {
+      const args = route.request().postDataJSON()
+      if (args.operation === "buy") { purchases++; failRead = true }
+      if (args.operation === "read" && failRead) { failRead = false; await route.abort("failed"); return }
+      await route.continue()
+    })
+    await h.frame.locator('[data-product="vitality"] .buy-upgrade').click()
+    await h.frame.getByRole("button", { name: "重新读取商店", exact: true }).waitFor()
+    assert.equal(await h.state(c => c.api.pending), null)
+    assert.match(await h.frame.locator("#save-state").textContent(), /交易已保存/)
+    await h.frame.getByRole("button", { name: "重新读取商店", exact: true }).click()
+    await h.frame.locator(".shop-row").first().waitFor()
+    assert.equal(purchases, 1)
+    assert.equal(await h.frame.locator(".wallet strong").textContent(), "2")
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("the mobile shop scrolls without horizontal overflow and supports full-price refunds", async () => {
+  const h = await harness({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  try {
+    await h.start()
+    await h.state(c => { c.scene.elapsed = 420000; c.scene.end("retreated") })
+    await h.frame.getByRole("button", { name: "冒险商店", exact: true }).click()
+    const product = h.frame.locator('[data-product="reach"]')
+    await product.locator(".buy-upgrade").click()
+    await poll(() => h.state(c => c.api.view.economy.levels.reach === 1 && !c.busy))
+    assert.equal(await h.state(() => document.documentElement.scrollWidth <= innerWidth), true)
+    await h.frame.locator("#screen").evaluate(node => { node.scrollTop = 0 })
+    await h.page.screenshot({ path: join(artifacts, "adventure-shop-mobile.png") })
+    await product.locator(".refund-upgrade").click()
+    await poll(() => h.state(c => c.api.view.economy.levels.reach === 0 && !c.busy))
+    assert.equal(await h.frame.locator(".wallet strong").textContent(), "42")
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("ice and frost learned through real cards attack, bind E and connect companion frost to player sword", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.frame.locator("#player-class").selectOption("guardian")
+    await h.start()
+    assert.match(await learn(h, "ice:learn"), /自动攻击栏/)
+    assert.match(await learn(h, "frost:learn"), /E 主动/)
+    await learn(h, "ice:learn")
+    await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.combat.frost.marks.clear()
+      s.spawnAt = 1200000; s.hurtUntil = 1200000
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      s.combat.skill("companion", "ice").ready_at = 0
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.companion.x + 210, y: s.companion.y, hp: 5000 })
+    })
+    await poll(() => h.state(c => [...c.scene.combat.frost.marks.values()].some(m => m.source === "companion" && m.stacks)))
+    const combo = await h.state(c => {
+      const s = c.scene, combat = s.combat, enemy = s.enemies.getFirstAlive()
+      s.setPaused(true); s.bullets.clear(true, true)
+      enemy.setPosition(s.player.x + 100, s.player.y)
+      const before = { ...combat.stats }, hp = enemy.getData("hp")
+      combat.melee("player", combat.skill("player", "slash"), enemy)
+      const once = { ...combat.stats }, after = enemy.getData("hp")
+      combat.melee("player", combat.skill("player", "slash"), enemy)
+      return { before, once, twice: combat.stats, firstDamage: hp - after, secondDamage: after - enemy.getData("hp") }
+    })
+    assert.ok(combo.before.companion_damage > 0)
+    assert.equal(combo.once.shatters, combo.before.shatters + 1)
+    assert.equal(combo.once.cross_shatters, combo.before.cross_shatters + 1)
+    assert.equal(combo.twice.shatters, combo.once.shatters)
+    assert.ok(combo.firstDamage > combo.secondDamage)
+    await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.combat.frost.marks.clear()
+      s.combat.skill("player", "frost").ready_at = 0
+      c.play()
+    })
+    await h.page.keyboard.press("e")
+    await poll(async () => /霜爆范围内没有敌人/.test(await h.frame.locator("#notice").textContent()))
+    assert.equal(await h.state(c => c.scene.combat.skill("player", "frost").ready_at), 0)
+    await h.state(c => {
+      const s = c.scene
+      s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 220, y: s.player.y, hp: 5000 })
+    })
+    await h.page.keyboard.press("e")
+    await poll(() => h.state(c => c.scene.combat.skill("player", "frost").ready_at > c.scene.elapsed))
+    assert.ok(await h.state(c => [...c.scene.combat.frost.marks.values()].some(m => m.source === "player" && m.stacks === 2)))
+    assert.match(await h.frame.locator("#notice").textContent(), /霜爆 · 已施放/)
+    await poll(async () => /秒/.test(await h.frame.locator('.skill-button[data-slot="1"] .skill-cooldown').textContent()))
+    await h.page.screenshot({ path: join(artifacts, "adventure-frost-combo.png") })
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("frost marks, freeze immunity, sword cooldown, mist ticks and awakened projectiles survive reopening", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.start()
+    await h.state(async c => {
+      const { applyChoice } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat
+      s.setPaused(true); s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.spawnAt = 1200000; s.hurtUntil = 1200000
+      for (const key of ["ice:learn", "ice:power", "ice:rime", "ice:deepen", "ice:awaken", "frost:learn", "frost:power", "frost:mist"]) {
+        assertChoice(applyChoice(combat.builds.player, "player", key), key)
+      }
+      for (const key of ["ice:learn", "ice:power", "ice:rime"]) assertChoice(applyChoice(combat.builds.companion, "companion", key), key)
+      function assertChoice(ok, key) { if (!ok) throw new Error(key) }
+      const a = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 220, y: s.player.y, hp: 5000 })
+      const b = s.makeEnemy({ id: s.next(), kind: "boss", x: s.player.x + 245, y: s.player.y + 10, hp: 5000 })
+      combat.frost.apply(a, "companion", combat.skill("companion", "ice"), 3)
+      combat.frost.apply(b, "companion", combat.skill("companion", "ice"), 3)
+      combat.frost.strike(b, "player", "slash", 30)
+      combat.frost.apply(b, "companion", combat.skill("companion", "ice"), 2)
+      combat.shoot(s.player, "player", combat.skill("player", "ice"))
+      c.play(); combat.castManual(1); s.setPaused(true)
+      for (const build of Object.values(combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      combat.update(0)
+      s.bullets.getFirstAlive().setVelocity(0, 0)
+      c.pause(true)
+    })
+    const saved = await h.state(c => c.scene.snapshot())
+    assert.ok(saved.frosts.some(mark => mark.frozen_until > saved.elapsed))
+    assert.equal(saved.frosts.find(mark => mark.target === saved.enemies.find(e => e.kind === "boss").id).frozen_until, 0)
+    assert.equal(saved.bullets[0].form, "awakened")
+    assert.ok(saved.zones.some(zone => zone.kind === "frost"))
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    await h.state(c => c.pause(true))
+    const restored = await h.state(c => c.scene.snapshot())
+    assert.deepEqual(restored.stats, saved.stats)
+    assert.deepEqual(restored.frosts, saved.frosts)
+    assert.equal(restored.shatter_at, saved.shatter_at)
+    assert.ok(restored.frosts.every(mark => mark.freeze_at === saved.frosts.find(m => m.target === mark.target).freeze_at))
+    assert.equal(restored.bullets[0].form, "awakened")
+    assert.equal(await h.state(c => c.scene.bullets.getFirstAlive().texture.key), "bolt-awakened")
+    assert.equal(restored.zones[0].tick_at, saved.zones[0].tick_at)
+    const check = await h.state(c => {
+      const s = c.scene, combat = s.combat
+      const boss = s.enemies.getChildren().find(e => e.getData("kind") === "boss")
+      boss.setVelocity(100, 0); combat.frost.update()
+      const velocity = boss.body.velocity.x
+      const before = combat.stats.shatters
+      combat.frost.strike(boss, "player", "dash", 30)
+      return { velocity, before, after: combat.stats.shatters }
+    })
+    assert.ok(check.velocity >= 88 && check.velocity < 100)
+    assert.equal(check.after, check.before)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("frost branches consume stacks once or add timed mist and awakening expands control", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.start()
+    const values = await h.state(async c => {
+      const { newSkill } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat
+      s.setPaused(true); s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.spawnAt = 1200000; s.hurtUntil = 1200000
+      const frost = { ...newSkill("frost"), level: 3, focus: "power", branch: "shatter" }
+      combat.builds.player.skills[1] = frost
+      const a = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 200, y: s.player.y, hp: 5000 })
+      combat.frost.apply(a, "player", frost, 3)
+      c.play(); combat.castManual(0); s.setPaused(true)
+      const first = 5000 - a.getData("hp"), stacks = combat.frost.marks.get(a.getData("id")).stacks
+      combat.frost.marks.clear(); a.setData("hp", 5000); frost.ready_at = 0
+      c.play(); combat.castManual(0); s.setPaused(true)
+      const plain = 5000 - a.getData("hp")
+      frost.branch = "mist"; frost.ready_at = 0
+      c.play(); combat.castManual(0); s.setPaused(true)
+      const zone = combat.zones.find(z => z.kind === "frost")
+      combat.update(0)
+      const tick1 = a.getData("hp"), nextTick = zone.tick_at
+      combat.update(0)
+      const sameTick = a.getData("hp")
+      s.elapsed += 1000; combat.update(0)
+      const tick2 = a.getData("hp")
+      frost.level = 5; frost.evolution = "pure"; frost.ready_at = 0
+      combat.frost.marks.clear()
+      c.play(); combat.castManual(0); s.setPaused(true)
+      return { first, plain, stacks, tick1, sameTick, tick2, nextTick, now: s.elapsed,
+        awakened: combat.frost.marks.get(a.getData("id")), radius: combat.zones.at(-1).radius,
+        shatters: combat.stats.shatters }
+    })
+    assert.ok(values.first > values.plain + 30)
+    assert.equal(values.stacks, 1)
+    assert.equal(values.tick1, values.sameTick)
+    assert.ok(values.tick2 < values.sameTick)
+    assert.equal(values.awakened.stacks, 3)
+    assert.ok(values.awakened.frozen_until > values.now)
+    assert.equal(values.radius, 145)
+    assert.equal(values.shatters, 0)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("new sword widths, circle guard, four-target pull and first-hit fusion affect real enemies", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.start()
+    const values = await h.state(async c => {
+      const { newSkill } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat
+      s.setPaused(true); s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.spawnAt = 1200000; s.hurtUntil = 1200000
+      const skill = (id, branch, evolution = "pure") => ({ ...newSkill(id), level: 5, focus: "power", branch, evolution })
+      const enemy = (dx, dy) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp: 5000 })
+      const back = enemy(-100, 0), front = enemy(100, 0), guard = skill("guard", "counter")
+      combat.builds.player.skills = [guard, skill("dash", "line")]
+      combat.melee("player", guard, front)
+      const circle = back.getData("hp") < 5000
+      s.enemies.clear(true, true)
+      const wide = enemy(100, 100), outside = enemy(100, 115)
+      c.play(); combat.castManual(0); s.setPaused(true)
+      const dash = [wide.getData("hp") < 5000, outside.getData("hp") === 5000]
+      s.enemies.clear(true, true)
+      for (let i = 0; i < 5; i++) enemy(50 + i * 10, 0)
+      const pull = skill("pull", "hunt"); combat.builds.companion.skills[1] = pull
+      combat.support(pull, s.enemies.getFirstAlive())
+      const targets = combat.zones.find(z => z.kind === "pull").targets.length
+      s.enemies.clear(true, true); combat.zones = []
+      combat.builds.player.skills = [skill("fire", "volley", "fusion"), { ...newSkill("wind"), level: 2, focus: "power" }, newSkill("flame")]
+      const first = enemy(100, 0), second = enemy(135, 0), third = enemy(170, 0)
+      combat.shoot(s.player, "player", combat.skill("player", "fire"))
+      const bolt = s.bullets.getFirstAlive(); bolt.setPosition(first.x, first.y)
+      c.play(); combat.hit(bolt, first); s.setPaused(true)
+      const afterFirst = third.getData("hp")
+      bolt.setPosition(second.x, second.y)
+      c.play(); combat.hit(bolt, second); s.setPaused(true)
+      const noRepeatSplash = third.getData("hp") === afterFirst
+      s.bullets.clear(true, true)
+      combat.builds.player.skills[0] = skill("slash", "cleave", "fusion")
+      const count = s.bullets.countActive()
+      combat.melee("player", combat.skill("player", "slash"), first)
+      return { circle, dash, targets, noRepeatSplash, echo: s.bullets.countActive() === count + 1,
+        shatters: combat.stats.shatters }
+    })
+    assert.equal(values.circle, true)
+    assert.deepEqual(values.dash, [true, true])
+    assert.equal(values.targets, 4)
+    assert.equal(values.noRepeatSplash, true)
+    assert.equal(values.echo, true)
+    assert.equal(values.shatters, 0)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule2 retains the frozen catalog, original geometry and exact saved candidates", async () => {
+  const h = await harness({ legacy: false, rules: 2 })
+  try {
+    await h.start()
+    const choices = await h.state(async c => {
+      const { legalChoices, applyChoice, parameters } = await import("./skills.mjs")
+      const s = c.scene, build = s.combat.builds.player
+      for (const key of ["dash:learn", "dash:power", "dash:line", "dash:deepen", "dash:awaken"]) applyChoice(build, "player", key)
+      if (parameters(s.combat.skill("player", "dash"), build).width !== 60) throw new Error("old geometry changed")
+      const legal = legalChoices(build, "player")
+      s.xp = s.xpNeeded(); s.checkLevel()
+      return legal
+    })
+    assert.ok(!choices.some(key => /^(ice|frost):/.test(key)))
+    await poll(() => h.state(c => !c.saving && !c.api.pending))
+    const saved = await h.state(c => c.scene.snapshot())
+    await h.frame.getByRole("button", { name: "技能图鉴", exact: true }).click()
+    assert.doesNotMatch(await h.frame.locator(".codex-list").textContent(), /冰针|霜爆/)
+    await h.frame.getByRole("button", { name: "返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator(".upgrade").first().waitFor()
+    assert.deepEqual(await h.state(c => c.scene.snapshot()), saved)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("killing the boss stops a multi-target sword before more frost contributions or damage", async () => {
+  const h = await harness({ legacy: false })
+  try {
+    await h.frame.locator("#player-class").selectOption("guardian")
+    await h.start()
+    await h.state(async c => {
+      const { applyChoice } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat
+      s.setPaused(true); s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.elapsed = 1080000; s.bossSpawned = true; s.spawnAt = 1200000
+      applyChoice(combat.builds.companion, "companion", "ice:learn")
+      const boss = s.makeEnemy({ id: s.next(), kind: "boss", x: s.player.x + 70, y: s.player.y, hp: 1 })
+      const other = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 80, y: s.player.y, hp: 5000 })
+      combat.frost.apply(other, "companion", combat.skill("companion", "ice"), 3)
+      combat.melee("player", combat.skill("player", "slash"), boss)
+    })
+    await h.frame.getByRole("button", { name: "返回营地", exact: true }).waitFor()
+    const terminal = await h.state(c => ({ current: c.scene.snapshot(), saved: c.api.view.run.snapshot }))
+    assert.deepEqual(terminal.current, terminal.saved)
+    assert.equal(terminal.saved.stats.shatters, 0)
+    assert.equal(terminal.saved.enemies[0].hp, 5000)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule4 milestone death grants normal study then one saved cooperation that resumes exactly", async () => {
+  const h = await harness({ legacy: false, rules: 4 })
+  try {
+    await h.start()
+    assert.equal(await h.state(c => c.scene.snapshot().rules), 4)
+    await h.state(c => {
+      const s = c.scene
+      s.elapsed = 360000; s.encounters.spawn()
+      const sentinel = s.enemies.getChildren().find(e => e.getData("kind") === "sentinel")
+      sentinel.setData("hp", 1)
+      s.combat.deal(sentinel, 20, "player")
+    })
+    await poll(() => h.state(c => c.scene.encounters.state.milestones.sentinel.defeated))
+    await h.frame.locator(".upgrade").first().waitFor()
+    assert.equal(await h.state(c => c.scene.encounters.state.milestones.sentinel.defeated), true)
+    await poll(() => h.state(c => !c.saving && !c.api.pending))
+    await h.frame.locator(".upgrade").first().click()
+    await h.frame.locator('[data-cooperation]').first().waitFor()
+    await poll(() => h.state(c => !c.saving && !c.api.pending && !c.busy))
+    assert.equal(await h.frame.locator('[data-cooperation]').count(), 3)
+    const candidates = await h.state(c => c.scene.encounters.state.choices)
+    const pending = await h.state(c => c.scene.snapshot())
+    assert.equal(pending.encounters.pending, "sentinel")
+    assert.deepEqual(pending.encounters.choices, candidates)
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator('[data-cooperation]').first().waitFor()
+    await poll(() => h.state(c => !c.saving && !c.api.pending && !c.busy))
+    assert.deepEqual(await h.state(c => c.scene.encounters.state.choices), candidates)
+    await h.frame.locator(`[data-cooperation="${candidates[0]}"]`).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    assert.equal(await h.state(c => c.scene.encounters.state.resolved[0]), "sentinel")
+    assert.equal(await h.state(c => c.scene.encounters.state.selected.length), 1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("charger and caster telegraphs are dodgeable, deal bounded damage, and restore before impact", async () => {
+  const h = await harness({ legacy: false, rules: 4 })
+  try {
+    await h.start()
+    const value = await h.state(c => {
+      const s = c.scene, encounters = s.encounters
+      s.elapsed = 10000; s.hurtUntil = 0; s.hp = 100; s.shield = 0
+      const charger = s.makeEnemy({ id: s.next(), kind: "charger", x: s.player.x + 260, y: s.player.y, hp: 48 })
+      const chargerAi = encounters.foes.get(charger.getData("id")); chargerAi.ready_at = 0
+      encounters.prepare(charger, chargerAi)
+      const line = encounters.threats[0], target = { x: line.ex, y: line.ey }
+      s.player.setPosition(s.player.x, s.player.y + 140)
+      s.elapsed = line.trigger_at; encounters.update()
+      const dodged = s.hp
+      const caster = s.makeEnemy({ id: s.next(), kind: "caster", x: s.player.x + 300, y: s.player.y, hp: 36 })
+      const casterAi = encounters.foes.get(caster.getData("id")); casterAi.ready_at = 0
+      encounters.prepare(caster, casterAi)
+      const circle = encounters.threats.find(t => t.source === caster.getData("id"))
+      const hp = s.hp
+      s.elapsed = circle.trigger_at; encounters.update()
+      encounters.threats = []
+      encounters.prepare(caster, casterAi)
+      s.setPaused(true)
+      return { dodged, hp, after: s.hp, target, circle, state: s.snapshot(), chargerId: charger.getData("id") }
+    })
+    assert.equal(value.dodged, 100)
+    assert.equal(value.after, value.hp - 13)
+    assert.ok(value.target && value.circle.kind === "circle")
+    assert.equal(value.state.threats.some(t => t.source === value.chargerId), false)
+    await h.state(c => c.pause(true))
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).waitFor({ timeout: 3000 })
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    const restored = await h.state(c => c.scene.snapshot())
+    assert.deepEqual(restored.threats, value.state.threats)
+    assert.equal(restored.foes.length, value.state.foes.length)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("milestone breaks grant a short wave respite and the final boss has a readable second phase", async () => {
+  const h = await harness({ legacy: false, rules: 4 })
+  try {
+    await h.start()
+    const bossState = await h.state(c => {
+      const s = c.scene, encounters = s.encounters
+      s.setPaused(true); s.enemies.clear(true, true); encounters.foes.clear(); encounters.threats = []
+      encounters.state.milestones.sentinel = { spawned: true, defeated: true, enemy: 0 }
+      encounters.state.milestones.oracle = { spawned: true, defeated: true, enemy: 0 }
+      encounters.state.resolved = ["sentinel", "oracle"]; encounters.state.selected = ["cadence", "warmth"]
+      s.elapsed = 1080000; s.bossSpawned = false; s.spawnAt = 1200000; c.lastSaved = s.elapsed; encounters.spawn()
+      const boss = s.enemies.getChildren().find(e => e.getData("kind") === "boss")
+      const ai = encounters.foes.get(boss.getData("id"))
+      boss.setData("hp", 1500); ai.step = 1
+      s.setPaused(false); encounters.update()
+      encounters.prepare(boss, ai)
+      encounters.updateHud()
+      return { hp: boss.getData("hp"), phase: ai.phase, count: encounters.threats.length,
+        paused: s.paused, outcome: s.outcome, active: s.activeRun, snapshot: s.snapshot() }
+    })
+    assert.equal(bossState.phase, 2)
+    assert.equal(bossState.count, 3)
+    assert.equal(bossState.hp, 1500)
+    assert.ok(await h.frame.locator("#encounter-status .encounter-name").textContent().then(text => /第二阶段/.test(text)))
+    assert.ok(await h.frame.locator("#encounter-status .encounter-fill").evaluate(node => parseFloat(node.style.width) > 0))
+    await h.state(c => { c.scene.setPaused(true); c.pause(true) })
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).waitFor({ timeout: 3000 })
+    await h.frame.getByRole("button", { name: "保存并返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).waitFor()
+    await h.page.reload()
+    await h.frame.getByRole("button", { name: "继续旅程", exact: true }).click()
+    await h.frame.locator("#screen").waitFor({ state: "hidden" })
+    const resumed = await h.state(c => c.scene.snapshot())
+    assert.equal(resumed.foes.find(foe => foe.target === resumed.enemies.find(e => e.kind === "boss").id).phase, 2)
+    assert.equal(resumed.threats.length, 3)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("a lost cooperation acknowledgement retries the chosen reward without granting another one", async () => {
+  const h = await harness({ legacy: false, rules: 4 })
+  try {
+    await h.start()
+    await h.state(c => {
+      const s = c.scene
+      s.level = 31; s.elapsed = 360000; s.encounters.spawn()
+      const enemy = s.enemies.getChildren().find(e => e.getData("kind") === "sentinel")
+      s.combat.deal(enemy, 10000, "player")
+    })
+    await h.frame.locator("[data-cooperation]").first().waitFor()
+    await poll(() => h.state(c => !c.saving && !c.api.pending && !c.busy))
+    const ids = []
+    let dropped = false
+    await h.page.route("**/preview/action", async route => {
+      const args = route.request().postDataJSON()
+      if (args.operation !== "checkpoint") return route.continue()
+      ids.push(args.request_id)
+      const response = await route.fetch()
+      if (!dropped) { dropped = true; return route.abort("failed") }
+      await route.fulfill({ response })
+    })
+    await h.frame.locator("[data-cooperation]").first().click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).waitFor()
+    const selected = await h.state(c => c.scene.encounters.data())
+    assert.equal(selected.encounters.selected.length, 1)
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续", exact: true }).waitFor()
+    assert.deepEqual(await h.state(c => c.scene.encounters.data()), selected)
+    assert.equal(ids.length, 2)
+    assert.equal(ids[0], ids[1])
+    await h.frame.getByRole("button", { name: "技能图鉴", exact: true }).click()
+    await h.frame.getByRole("button", { name: "返回", exact: true }).click()
+    await h.frame.getByRole("button", { name: "继续", exact: true }).waitFor()
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("cooperations affect actual spell cooldowns, support healing, damage and companion shatter", async () => {
+  const h = await harness({ legacy: false, rules: 4 })
+  try {
+    await h.start()
+    const result = await h.state(async c => {
+      const { applyChoice, parameters } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat, selected = s.encounters.state.selected
+      s.setPaused(true); s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.elapsed = 10000; s.hp = 50
+      const enemy = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 80, y: s.player.y, hp: 5000 })
+      const base = combat.damage("companion", 100)
+      s.encounters.state.selected = ["escort"]
+      const boosted = combat.damage("companion", 100)
+      s.encounters.state.selected = ["cadence"]
+      const flame = combat.skill("player", "flame"), p = parameters(flame, combat.builds.player)
+      flame.ready_at = 0; s.paused = false
+      const cast = combat.castManual(0), cooldown = flame.ready_at - s.elapsed
+      s.encounters.state.selected = ["warmth"]
+      const pull = combat.skill("companion", "pull")
+      pull.ready_at = 0
+      const supported = combat.support(pull, enemy), healed = s.hp
+      const repeated = combat.support(pull, enemy), afterRepeat = s.hp
+      s.encounters.state.selected = ["embers"]
+      combat.zones = []; pull.ready_at = 0
+      combat.support(pull, enemy)
+      const radius = combat.zones[0].radius, normalRadius = parameters(pull, combat.builds.companion).radius
+      combat.zones = []; flame.ready_at = 0
+      combat.castManual(0)
+      const flameDamage = combat.zones[0].damage, normalDamage = combat.damage("player", p.damage)
+      applyChoice(combat.builds.player, "player", "slash:learn")
+      applyChoice(combat.builds.companion, "companion", "ice:learn")
+      s.encounters.state.selected = ["rime"]
+      combat.frost.apply(enemy, "companion", combat.skill("companion", "ice"), 3)
+      const shatter = combat.frost.strike(enemy, "player", "slash", 0)
+      s.encounters.state.selected = selected; s.setPaused(true)
+      return { base, boosted, cast, cooldown, normalCooldown: p.cooldown, supported, healed, repeated,
+        afterRepeat, radius, normalRadius, flameDamage, normalDamage, shatter,
+        expectedShatter: combat.damage("player", 45), cross: combat.stats.cross_shatters }
+    })
+    assert.ok(Math.abs(result.boosted - result.base * 1.12) < 1e-6)
+    assert.equal(result.cast, true)
+    assert.equal(result.cooldown, result.normalCooldown * .9)
+    assert.equal(result.supported, true)
+    assert.equal(result.healed, 54)
+    assert.equal(result.repeated, false)
+    assert.equal(result.afterRepeat, 54)
+    assert.equal(result.radius, result.normalRadius + 20)
+    assert.ok(Math.abs(result.flameDamage - result.normalDamage * 1.15) < 1e-6)
+    assert.equal(result.shatter, result.expectedShatter)
+    assert.equal(result.cross, 1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("freezing a charger cancels its warning and encounter movement keeps the frost slowdown", async () => {
+  const h = await harness({ legacy: false, rules: 4 })
+  try {
+    await h.start()
+    const result = await h.state(async c => {
+      const { applyChoice } = await import("./skills.mjs")
+      const s = c.scene, encounters = s.encounters, combat = s.combat
+      s.setPaused(true); s.enemies.clear(true, true); s.elapsed = 10000
+      applyChoice(combat.builds.companion, "companion", "ice:learn")
+      const enemy = s.makeEnemy({ id: s.next(), kind: "charger", x: s.player.x + 220, y: s.player.y, hp: 5000 })
+      const ai = encounters.foes.get(enemy.getData("id"))
+      encounters.prepare(enemy, ai)
+      const before = encounters.threats.length
+      combat.frost.apply(enemy, "companion", combat.skill("companion", "ice"), 3)
+      encounters.update()
+      const cancelled = encounters.threats.length === 0 && ai.state === "recover"
+      s.elapsed += 800
+      combat.frost.marks.get(enemy.getData("id")).stacks = 1
+      ai.state = "move"; ai.ready_at = s.elapsed + 2000
+      s.paused = false; s.spawnAt = s.elapsed + 5000; c.lastSaved = s.elapsed
+      for (const build of Object.values(combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      s.update(0, 16)
+      const speed = Math.hypot(enemy.body.velocity.x, enemy.body.velocity.y)
+      s.setPaused(true)
+      return { before, cancelled, speed, hp: s.hp }
+    })
+    assert.equal(result.before, 1)
+    assert.equal(result.cancelled, true)
+    assert.ok(Math.abs(result.speed - 46 * .88) < 1e-6)
+    assert.equal(result.hp, 100)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+for (const viewport of [{ width: 1280, height: 820 }, { width: 390, height: 844 }]) {
+  test(`rule7 launch renders readable boss warnings at ${viewport.width}px`, async () => {
+    const h = await harness({ viewport, displayRules: 7 })
+    try {
+      await startFree(h)
+      assert.equal(await h.state(c => c.scene.meta.rules), 7)
+      await h.state(c => {
+        const s = c.scene
+        s.elapsed = 360000; s.spawnAt = 1200000; s.hurtUntil = 1200000; c.lastSaved = s.elapsed
+        for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+        s.encounters.spawn()
+        const enemy = s.enemies.getChildren().find(e => e.getData("kind") === "sentinel")
+        s.terrain.place(enemy, { x: s.player.x + 150, y: s.player.y - 80 }, false)
+        s.encounters.prepare(enemy, s.encounters.foes.get(enemy.getData("id")))
+        s.encounters.paint(); s.updateHud()
+      })
+      await h.frame.locator("#encounter-status").waitFor({ state: "visible" })
+      await h.page.screenshot({ path: join(artifacts, `adventure-encounters-${viewport.width}.png`) })
+      const png = await h.frame.locator("canvas").screenshot()
+      const colors = await h.page.evaluate(async base64 => {
+        const image = new Image(); image.src = `data:image/png;base64,${base64}`; await image.decode()
+        const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height
+        const ctx = canvas.getContext("2d"); ctx.drawImage(image, 0, 0)
+        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data, colors = new Set()
+        for (let i = 0; i < pixels.length; i += 204) colors.add(`${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`)
+        return colors.size
+      }, png.toString("base64"))
+      assert.ok(colors > 20)
+      assert.equal(await h.state(() => document.documentElement.scrollWidth <= innerWidth), true)
+      const rects = await h.state(() => ["hud", "encounter-status", "notice"].map(id => {
+        const r = document.getElementById(id).getBoundingClientRect()
+        return { top: r.top, bottom: r.bottom }
+      }))
+      assert.ok(rects[1].top >= rects[0].bottom)
+      assert.ok(rects[2].top >= rects[1].bottom)
+      await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+      await h.frame.locator("#encounter-status").waitFor({ state: "hidden" })
+      await h.state(c => {
+        const s = c.scene
+        s.level = 31
+        const enemy = s.enemies.getChildren().find(e => e.getData("kind") === "sentinel")
+        s.combat.deal(enemy, 10000, "player")
+        s.encounters.openReward(true)
+      })
+      await h.frame.locator("[data-cooperation]").first().waitFor()
+      await poll(() => h.state(c => !c.saving && !c.api.pending && !c.busy))
+      await h.frame.getByRole("button", { name: "技能图鉴", exact: true }).click()
+      await h.frame.getByRole("button", { name: "返回", exact: true }).click()
+      await h.frame.locator("[data-cooperation]").first().waitFor()
+      assert.equal(await h.state(() => document.documentElement.scrollWidth <= innerWidth), true)
+      await h.page.screenshot({ path: join(artifacts, `adventure-cooperation-${viewport.width}.png`) })
+      assert.deepEqual(h.errors, [])
+    } finally { await h.close() }
+  })
+}
+
+test("rule 5 walking hits a rock, can walk around it, and companions and enemies route around it", async () => {
+  const h = await harness({ legacy: false, rules: 5 })
+  try {
+    await h.start()
+    await h.state(c => {
+      const s = c.scene
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.spawnAt = 1200000; s.hurtUntil = 1200000
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      s.terrain.place(s.player, { x: 600, y: 400 }, false)
+    })
+    await h.page.keyboard.down("d")
+    await poll(() => h.state(c => c.scene.player.body.blocked.right))
+    await h.page.keyboard.up("d")
+    const stopped = await h.state(c => ({ x: c.scene.player.x, y: c.scene.player.y }))
+    assert.ok(stopped.x > 630 && stopped.x < 646, JSON.stringify(stopped))
+    await h.page.keyboard.down("w")
+    await poll(() => h.state(c => c.scene.player.y < 360))
+    await h.page.keyboard.up("w")
+    await h.page.keyboard.down("d")
+    await poll(() => h.state(c => c.scene.player.x > 750))
+    await h.page.keyboard.up("d")
+    await h.page.keyboard.down("s")
+    await poll(() => h.state(c => c.scene.player.y > 410))
+    await h.page.keyboard.up("s")
+    await h.state(c => {
+      const s = c.scene
+      s.terrain.place(s.player, { x: 800, y: 372 }, false)
+      s.terrain.place(s.companion, { x: 600, y: 400 }, false)
+      s.makeEnemy({ id: s.next(), kind: "wisp", x: 600, y: 400, hp: 1000 })
+      s.mapCrossings = []
+      s.events.on("postupdate", () => {
+        const actor = s.companion
+        if (actor.x > 640 && actor.x < 720) s.mapCrossings.push({ x: actor.x, y: actor.y })
+      })
+    })
+    await poll(() => h.state(c => c.scene.companion.x > 735))
+    await poll(() => h.state(c => c.scene.enemies.getFirstAlive().x > 735))
+    const result = await h.state(c => ({ points: c.scene.mapCrossings, searches: c.scene.terrain.searches }))
+    assert.ok(result.searches > 0)
+    assert.ok(result.points.length > 0)
+    assert.ok(result.points.every(p => p.x < 646 || p.x > 714 || p.y < 378 || p.y > 426), JSON.stringify(result.points.slice(0, 15)))
+    const charger = await h.state(c => {
+      const s = c.scene
+      s.setPaused(true); s.enemies.clear(true, true)
+      s.terrain.place(s.player, { x: 800, y: 400 }, false)
+      const enemy = s.makeEnemy({ id: s.next(), kind: "charger", x: 600, y: 400, hp: 1000 })
+      const ai = s.encounters.foes.get(enemy.getData("id")); ai.ready_at = 0
+      s.terrain.beginFrame(); s.encounters.update()
+      return { state: ai.state, warnings: s.encounters.threats.length, speed: enemy.body.velocity.length() }
+    })
+    assert.equal(charger.state, "move"); assert.equal(charger.warnings, 0); assert.ok(charger.speed > 0)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule 5 dash, knockback, projectiles and enemy charge respect the same obstacle", async () => {
+  const h = await harness({ legacy: false, rules: 5 })
+  try {
+    await h.start()
+    const result = await h.state(async c => {
+      const { applyChoice } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat
+      s.setPaused(true); s.elapsed = 1000; s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.spawnAt = 1200000; s.shield = 0; s.hurtUntil = 0
+      for (const build of Object.values(combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      applyChoice(combat.builds.player, "player", "dash:learn")
+      const dash = combat.skill("player", "dash")
+      s.terrain.place(s.player, { x: 600, y: 400 }, false); combat.facing = { x: 1, y: 0 }
+      const victim = s.makeEnemy({ id: s.next(), kind: "brute", x: 750, y: 400, hp: 1000 })
+      s.setPaused(false); const cast = combat.castManual(1); s.setPaused(true)
+      const dashX = s.player.x, hp = victim.getData("hp")
+      dash.ready_at = 0; s.setPaused(false); const blocked = combat.castManual(1); s.setPaused(true)
+      const cooldown = dash.ready_at
+      s.terrain.place(victim, { x: 600, y: 400 }, false)
+      combat.push(victim, { x: 550, y: 400 }, 300)
+      const pushX = victim.x
+      s.enemies.clear(true, true)
+      s.terrain.place(s.player, { x: 780, y: 400 }, false); s.hp = 100; s.hurtUntil = 0
+      const charger = s.makeEnemy({ id: s.next(), kind: "charger", x: 580, y: 400, hp: 1000 })
+      const ai = s.encounters.foes.get(charger.getData("id"))
+      s.encounters.prepare(charger, ai)
+      const warning = { ...s.encounters.threats[0] }
+      s.elapsed = warning.trigger_at; s.setPaused(false); s.encounters.update(); s.setPaused(true)
+      const chargeX = charger.x, playerHp = s.hp
+      s.enemies.clear(true, true); s.encounters.threats = []
+      s.makeBullet({ id: s.next(), x: 600, y: 410, vx: 430, vy: 0, life: 1200, damage: 20,
+        owner: "player", skill: "fire", form: "base", pierce: 0, hit_ids: [] })
+      s.setPaused(false)
+      return { cast, dashX, hp, blocked, cooldown, pushX, chargeX, playerHp, warning }
+    })
+    assert.equal(result.cast, true)
+    assert.ok(result.dashX > 630 && result.dashX < 646)
+    assert.equal(result.hp, 1000)
+    assert.equal(result.blocked, false); assert.equal(result.cooldown, 0)
+    assert.ok(result.pushX > 620 && result.pushX < 640)
+    assert.ok(result.warning.ex < 640 && result.chargeX < 640)
+    assert.equal(result.playerHp, 100)
+    await poll(() => h.state(c => c.scene.bullets.countActive() === 0))
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule 5 depth follows the feet, foliage fades, and safe recovery preserves RNG across resume", async () => {
+  const h = await harness({ legacy: false, rules: 5 })
+  try {
+    await h.start()
+    const result = await h.state(c => {
+      const s = c.scene
+      s.setPaused(true); s.spawnAt = 1200000
+      const tree = s.terrain.visuals.find(v => v.prop.id === "tree-0" && v.canopy)
+      const wall = s.terrain.visuals.find(v => v.prop.id === "wall-0")
+      s.terrain.place(s.player, { x: 430, y: 400 }, false); s.terrain.updateDepth()
+      const behind = { actor: s.player.depth, tree: tree.image.depth, alpha: tree.image.alpha }
+      s.terrain.place(s.player, { x: 430, y: 500 }, false); s.terrain.updateDepth()
+      const front = { actor: s.player.depth, alpha: tree.image.alpha }
+      const rng = s.rng.state()
+      s.terrain.place(s.player, { x: 680, y: 410 }, false)
+      s.terrain.place(s.companion, { x: 1234, y: 432 }, false)
+      s.terrain.updateDepth()
+      return { behind, front, rng, after: s.rng.state(), position: { x: s.player.x, y: s.player.y },
+        snapshot: s.snapshot(), warningDepth: s.encounters.graphics.depth, wallDepth: wall.image.depth }
+    })
+    assert.ok(result.behind.actor < result.behind.tree); assert.ok(result.behind.alpha < .5)
+    assert.ok(result.front.actor > result.behind.tree); assert.equal(result.front.alpha, 1)
+    assert.equal(result.rng, result.after); assert.notDeepEqual(result.position, { x: 680, y: 410 })
+    assert.ok(result.warningDepth > result.wallDepth)
+    await h.state(async c => { await c.save(); await c.resume(false); c.scene.setPaused(true) })
+    const restored = await h.state(c => c.scene.snapshot())
+    assert.deepEqual(restored, result.snapshot)
+    await h.state(c => c.scene.loadRun({ ...c.scene.meta, rules: 4, snapshot: null }))
+    assert.equal(await h.state(c => c.scene.terrain.enabled), false)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule 5 resumes occupied saved positions safely without changing combat facts or random state", async () => {
+  const h = await harness({ legacy: false, rules: 5 })
+  try {
+    await h.start()
+    const before = await h.state(async c => {
+      const s = c.scene
+      s.setPaused(true); s.spawnAt = 1200000
+      s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.player.setPosition(680, 410); s.companion.setPosition(1234, 432)
+      const enemy = s.makeEnemy({ id: s.next(), kind: "brute", x: 600, y: 410, hp: 123 })
+      enemy.setPosition(680, 410)
+      const state = s.snapshot()
+      await c.save(); await c.resume(false); s.setPaused(true)
+      return state
+    })
+    const after = await h.state(async c => {
+      const { bodyShape } = await import("./forest-map.mjs")
+      const s = c.scene
+      const safe = [s.player, s.companion, ...s.enemies.getChildren()].every(actor => {
+        const shape = bodyShape(actor)
+        return s.terrain.geometry.free({ x: actor.x + shape.ox, y: actor.y + shape.oy }, shape)
+      })
+      return { safe, state: s.snapshot() }
+    })
+    assert.equal(after.safe, true)
+    assert.notDeepEqual({ x: after.state.player.x, y: after.state.player.y }, { x: before.player.x, y: before.player.y })
+    for (const key of ["rng", "elapsed", "builds", "stats", "kills", "xp", "foes", "threats"]) assert.deepEqual(after.state[key], before[key])
+    assert.equal(after.state.enemies[0].hp, 123)
+    await h.state(async c => { await c.save(); await c.resume(false); c.scene.setPaused(true) })
+    assert.deepEqual(await h.state(c => c.scene.snapshot()), after.state)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule 5 clips a saved charge warning and never replays a fired charge after reload", async () => {
+  const h = await harness({ legacy: false, rules: 5 })
+  try {
+    await h.start()
+    const before = await h.state(async c => {
+      const s = c.scene
+      s.setPaused(true); s.elapsed = 1000; s.spawnAt = 1200000; s.hurtUntil = 0
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.shield = 0
+      s.terrain.place(s.player, { x: 780, y: 400 }, false)
+      const charger = s.makeEnemy({ id: s.next(), kind: "charger", x: 580, y: 400, hp: 1000 })
+      s.encounters.prepare(charger, s.encounters.foes.get(charger.getData("id")))
+      const state = s.snapshot()
+      await c.save(); await c.resume(false); s.setPaused(true)
+      return state
+    })
+    assert.ok(before.threats[0].ex < 640)
+    assert.deepEqual(await h.state(c => c.scene.snapshot().threats), before.threats)
+    const fired = await h.state(async c => {
+      const s = c.scene
+      s.elapsed = s.encounters.threats[0].trigger_at
+      s.setPaused(false); s.encounters.update(); s.setPaused(true)
+      const state = s.snapshot()
+      await c.save(); await c.resume(false); s.setPaused(true)
+      s.setPaused(false); s.encounters.update(); s.setPaused(true)
+      return { state, after: s.snapshot() }
+    })
+    assert.equal(fired.state.threats[0].fired, true)
+    assert.deepEqual(fired.after, fired.state)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule 5 dense navigation keeps a per-frame search budget with all enemy sizes spawning clear", async () => {
+  const h = await harness({ legacy: false, rules: 5 })
+  try {
+    await h.start()
+    const result = await h.state(async c => {
+      const { bodyShape } = await import("./forest-map.mjs")
+      const s = c.scene
+      s.setPaused(true); s.enemies.clear(true, true); s.bullets.clear(true, true)
+      s.terrain.place(s.player, { x: 800, y: 372 }, false)
+      const rng = s.rng.state(), actors = []
+      for (const kind of ["slime", "wisp", "brute", "charger", "caster", "sentinel", "oracle", "boss"]) {
+        const enemy = s.makeEnemy({ id: s.next(), kind, x: 680, y: 410, hp: 1000 })
+        const shape = bodyShape(enemy)
+        actors.push(s.terrain.geometry.free({ x: enemy.x + shape.ox, y: enemy.y + shape.oy }, shape))
+      }
+      s.enemies.clear(true, true)
+      for (let i = 0; i < 145; i++) {
+        s.makeEnemy({ id: s.next(), kind: "slime", x: 600, y: 400, hp: 1000 })
+      }
+      let max = 0
+      for (let frame = 0; frame < 40; frame++) {
+        s.terrain.beginFrame()
+        for (const enemy of s.enemies.getChildren()) s.terrain.move(enemy, s.player, 40)
+        max = Math.max(max, s.terrain.searchesThisFrame)
+      }
+      return { actors, max, searches: s.terrain.searches, rng, after: s.rng.state(), graphs: s.terrain.graphs.size }
+    })
+    assert.ok(result.actors.every(Boolean)); assert.ok(result.max <= 4)
+    assert.equal(result.searches, 145); assert.equal(result.rng, result.after)
+    assert.ok(result.graphs <= 4)
+    await h.state(c => { c.scene.scene.stop(); c.scene.terrain.destroy() })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+for (const viewport of [{ width: 1280, height: 820 }, { width: 390, height: 844 }]) {
+  test(`rule 5 terrain layers render around ruins at ${viewport.width}px`, async () => {
+    const h = await harness({ legacy: false, rules: 5, viewport })
+    try {
+      await h.start()
+      await h.state(c => {
+        const s = c.scene
+        s.enemies.clear(true, true); s.spawnAt = 1200000; s.hurtUntil = 1200000
+        for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+        s.terrain.place(s.player, { x: 1190, y: 375 }, false)
+        s.terrain.place(s.companion, { x: 1110, y: 415 }, false)
+        s.makeEnemy({ id: s.next(), kind: "slime", x: 1250, y: 520, hp: 1000 })
+        s.terrain.updateDepth()
+        s.cameras.main.stopFollow(); s.cameras.main.centerOn(1180, 430)
+      })
+      await h.page.screenshot({ path: join(artifacts, `adventure-map-ruins-${viewport.width}.png`) })
+      const result = await h.state(async c => {
+        const image = await new Promise(resolve => c.scene.game.renderer.snapshot(resolve))
+        const context = document.createElement("canvas").getContext("2d")
+        context.canvas.width = image.width; context.canvas.height = image.height
+        context.drawImage(image, 0, 0)
+        const pixels = context.getImageData(0, 0, image.width, image.height).data
+        const colors = new Set()
+        for (let i = 0; i < pixels.length; i += 64) colors.add(`${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`)
+        return { colors: colors.size, props: c.scene.terrain.visuals.length,
+          fits: document.documentElement.scrollWidth <= innerWidth }
+      })
+      assert.ok(result.colors > 100, JSON.stringify(result)); assert.ok(result.props > 50); assert.equal(result.fits, true)
+      assert.deepEqual(h.errors, [])
+    } finally { await h.close() }
+  })
+}
+
+test("pausing during an in-flight automatic checkpoint opens the pause menu after acknowledgement", async () => {
+  const h = await harness({ legacy: false, rules: 4 })
+  let releaseResponse
+  try {
+    await h.start()
+    await h.page.route("**/preview/action", async route => {
+      if (route.request().postDataJSON().operation !== "checkpoint") return route.continue()
+      const response = await route.fetch()
+      await new Promise(resolve => { releaseResponse = resolve })
+      await route.fulfill({ response })
+    })
+    await h.state(c => { c.scene.elapsed = 10001; c.autosave() })
+    await poll(() => Boolean(releaseResponse))
+    await h.frame.getByRole("button", { name: "暂停", exact: true }).click()
+    await h.frame.getByRole("heading", { name: "正在保存进度", exact: true }).waitFor()
+    const time = await h.state(c => c.scene.elapsed)
+    assert.equal(await h.state(c => c.scene.paused), true)
+    releaseResponse()
+    await h.frame.getByRole("button", { name: "继续", exact: true }).waitFor()
+    assert.equal(await h.state(c => c.scene.elapsed), time)
+    assert.equal(await h.state(c => c.api.pending), null)
+    await h.frame.getByRole("button", { name: "继续", exact: true }).click()
+    await poll(async () => await h.state(c => c.scene.elapsed) > time)
+    assert.deepEqual(h.errors, [])
+  } finally { releaseResponse?.(); await h.close() }
+})
+
+test("art sample animation and particles preserve the saved simulation, RNG and collision bodies", async () => {
+  const h = await harness({ legacy: false, rules: 4 })
+  try {
+    await h.start()
+    const result = await h.state(c => {
+      const s = c.scene
+      s.setPaused(true); s.elapsed = 1000
+      s.enemies.clear(true, true); s.bullets.clear(true, true)
+      const enemy = s.makeEnemy({ id: s.next(), kind: "slime", x: s.player.x + 180, y: s.player.y, hp: 100 })
+      s.player.setVelocity(-80, 0); s.companion.setVelocity(0, 80)
+      const bodies = () => [s.player, s.companion, enemy].map(actor =>
+        [actor.body.width, actor.body.height, actor.body.offset.x, actor.body.offset.y, actor.body.radius])
+      const before = JSON.stringify(s.snapshot()), bodyBefore = bodies()
+      for (let i = 0; i < 100; i++) {
+        s.art.burst(s.player.x, s.player.y, 30, 0xb2e6f0, "shatter")
+        s.art.update()
+      }
+      const preserved = before === JSON.stringify(s.snapshot())
+      const first = s.player.frame.name
+      s.elapsed += 100; s.art.update()
+      const second = s.player.frame.name
+      return { preserved, bodyBefore, bodyAfter: bodies(), first, second, partner: s.companion.frame.name,
+        particles: s.art.particles.length, bursts: s.art.bursts.length }
+    })
+    assert.equal(result.preserved, true)
+    assert.deepEqual(result.bodyAfter, result.bodyBefore)
+    assert.match(result.first, /^mage-left-walk-/)
+    assert.notEqual(result.first, result.second)
+    assert.match(result.partner, /^companion-mage-down-walk-/)
+    assert.ok(result.particles <= 180 && result.bursts <= 24)
+    const paused = await h.state(c => [c.scene.elapsed, c.scene.player.frame.name])
+    await new Promise(resolve => setTimeout(resolve, 180))
+    assert.deepEqual(await h.state(c => [c.scene.elapsed, c.scene.player.frame.name]), paused)
+    await h.state(c => c.scene.art.reset())
+    assert.deepEqual(await h.state(c => [c.scene.art.particles.length, c.scene.art.bursts.length]), [0, 0])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+for (const viewport of [{ width: 1280, height: 820 }, { width: 390, height: 844 }]) {
+  test(`art sample renders skills, study and reduced effects at ${viewport.width}px`, async () => {
+    const h = await harness({ legacy: false, rules: 4, viewport })
+    try {
+      await h.page.screenshot({ path: join(artifacts, `adventure-art-preparation-${viewport.width}.png`) })
+      await h.start()
+      await h.state(async c => {
+        const { applyChoice } = await import("./skills.mjs")
+        const s = c.scene
+        s.enemies.clear(true, true); s.bullets.clear(true, true)
+        s.spawnAt = 1200000; s.hurtUntil = 1200000
+        for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+        applyChoice(s.combat.builds.player, "player", "slash:learn")
+        applyChoice(s.combat.builds.companion, "companion", "ice:learn")
+        const enemy = s.makeEnemy({ id: s.next(), kind: "slime", x: s.player.x + 60, y: s.player.y + 8, hp: 5000 })
+        s.combat.frost.apply(enemy, "companion", s.combat.skill("companion", "ice"), 3)
+        s.combat.melee("player", s.combat.skill("player", "slash"), enemy)
+        for (let i = 0; i < 12; i++) s.makeEnemy({ id: s.next(), kind: i % 2 ? "wisp" : "slime",
+          x: s.player.x + Math.cos(i) * 180, y: s.player.y + Math.sin(i) * 150, hp: 1000 })
+        s.combat.shoot(s.player, "player", s.combat.skill("player", "fire"))
+        s.combat.skill("player", "slash").ready_at = 1200000
+        s.combat.skill("companion", "ice").ready_at = 1200000
+      })
+      await poll(() => h.state(c => c.scene.art.particles.length > 0))
+      await h.page.screenshot({ path: join(artifacts, `adventure-art-battle-${viewport.width}.png`) })
+      assert.equal(await h.state(c => c.scene.combat.stats.cross_shatters), 1)
+      await h.frame.getByRole("button", { name: "简化特效", exact: true }).click()
+      assert.equal(await h.frame.locator("#effects").getAttribute("aria-pressed"), "true")
+      assert.equal(await h.state(c => c.scene.art.reduced), true)
+      assert.equal(await h.state(c => c.scene.art.particles.length), 0)
+      await h.state(c => { c.scene.level = 3; c.scene.xp = c.scene.xpNeeded(); c.scene.checkLevel() })
+      await h.frame.locator("[data-upgrade]").first().waitFor()
+      await poll(() => h.state(c => !c.saving && !c.api.pending && !c.busy))
+      assert.match(await h.frame.locator(".study-identity").textContent(), /同行/)
+      await h.page.screenshot({ path: join(artifacts, `adventure-art-study-${viewport.width}.png`) })
+      const layout = await h.state(() => ({
+        fits: document.documentElement.scrollWidth <= innerWidth,
+        cards: [...document.querySelectorAll("[data-upgrade]")].every(card => card.scrollWidth <= card.clientWidth + 1),
+        images: [...document.querySelectorAll(".study-identity img, #player-avatar, #companion-avatar")]
+          .every(image => image.complete && image.naturalWidth > 0),
+      }))
+      assert.equal(layout.fits, true); assert.equal(layout.cards, true); assert.equal(layout.images, true)
+      assert.deepEqual(h.errors, [])
+    } finally { await h.close() }
+  })
+}
+
+test("combat feedback shows damage numbers, hit reactions and death beats without touching the saved simulation", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const result = await h.state(c => {
+      const s = c.scene, art = s.art
+      s.setPaused(true); s.elapsed = 5000; s.spawnAt = 1200000
+      s.enemies.clear(true, true); s.bullets.clear(true, true); s.drops.clear(true, true)
+      const foe = s.makeEnemy({ id: s.next(), kind: "charger", x: s.player.x + 90, y: s.player.y, hp: 500 })
+      const bodies = () => [s.player, s.companion, foe].map(actor =>
+        [actor.body.width, actor.body.height, actor.body.offset.x, actor.body.offset.y, actor.body.radius, actor.body.x, actor.body.y])
+      const tint = [foe.isTinted, foe.tintTopLeft, foe.tintFill]
+      const before = JSON.stringify(s.snapshot()), rng = s.rng.state(), bodyBefore = bodies()
+      // Presentation calls alone: nothing in the checkpoint may move.
+      art.strike(foe, 30, "player", false); art.strike(foe, 12, "companion", false)
+      art.hurt(9, 0); art.hurt(0, 6); art.impact(foe.x, foe.y, "fire"); art.burst(foe.x, foe.y, 60, 0xb6c7a0, "quake")
+      art.enemyStrike({ kind: "circle", x: foe.x, y: foe.y, radius: 60 })
+      art.update()
+      const lit = foe.tintFill, numbers = art.numbers.length, texts = art.numbers.map(n => n.label.text).sort()
+      for (let i = 0; i < 12; i++) { s.elapsed += 50; art.update() }
+      const restored = [foe.isTinted, foe.tintTopLeft, foe.tintFill], angle = foe.angle
+      const preserved = JSON.stringify({ ...s.snapshot(), elapsed: 5000 }) === before && s.rng.state() === rng
+      const bodyAfter = bodies()
+      // A real lethal hit goes through the rule path once and leaves a death beat and a hopping crystal.
+      const kills = s.kills
+      s.combat.deal(foe, 9999, "player")
+      const killed = s.kills - kills
+      const drop = s.drops.getChildren()[0], hidden = drop.alpha
+      const ghosts = art.ghosts.length
+      for (let i = 0; i < 12; i++) { s.elapsed += 50; art.update() }
+      // Budgets hold when a whole pack is hit in one frame.
+      for (let i = 0; i < 80; i++) {
+        const e = s.makeEnemy({ id: s.next(), kind: "slime", x: s.player.x + 60 + i, y: s.player.y + 40, hp: 5 })
+        s.combat.deal(e, 9999, i % 2 ? "player" : "companion")
+      }
+      art.update()
+      return { lit, numbers, texts, tint, restored, angle, preserved, bodyBefore, bodyAfter, killed, hidden,
+        shown: drop.alpha, ghosts, peak: [art.numbers.length, art.ghosts.length, art.particles.length, art.bursts.length],
+        paused: s.physics.world.isPaused, stop: art.stopLeft }
+    })
+    assert.equal(result.lit, true); assert.equal(result.numbers, 4)
+    assert.deepEqual(result.texts, ["-9", "12", "30", "6"])
+    assert.deepEqual(result.restored, result.tint); assert.equal(result.angle, 0)
+    assert.equal(result.preserved, true); assert.deepEqual(result.bodyAfter, result.bodyBefore)
+    assert.equal(result.killed, 1); assert.equal(result.hidden, 0); assert.equal(result.shown, 1); assert.ok(result.ghosts >= 2)
+    assert.ok(result.peak[0] <= 40 && result.peak[1] <= 24 && result.peak[2] <= 180 && result.peak[3] <= 24)
+    // Feedback requested while paused never starts a hit-stop.
+    assert.equal(result.paused, true); assert.equal(result.stop, 0)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("hit-stop holds the clock and physics briefly, releases on pause, and reduced effects disable it with screen shake", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    await h.state(c => { const s = c.scene; s.spawnAt = 1200000; s.enemies.clear(true, true) })
+    const held = await h.state(async c => {
+      const s = c.scene, start = s.elapsed
+      s.art.stop(400)
+      const frozen = s.physics.world.isPaused
+      // A second request inside the gate is ignored rather than extending the first.
+      s.art.stop(5000)
+      const capped = s.art.stopLeft <= 400
+      await new Promise(resolve => setTimeout(resolve, 150))
+      return { frozen, capped, moved: s.elapsed - start, left: s.art.stopLeft > 0 }
+    })
+    assert.equal(held.frozen, true); assert.equal(held.capped, true); assert.equal(held.moved, 0); assert.equal(held.left, true)
+    await poll(() => h.state(c => c.scene.art.stopLeft === 0 && !c.scene.physics.world.isPaused))
+    const elapsed = await h.state(c => c.scene.elapsed)
+    await poll(() => h.state((c, elapsed) => c.scene.elapsed > elapsed, elapsed))
+    // Pausing mid-stop hands control back to the pause state.
+    await new Promise(resolve => setTimeout(resolve, 450))
+    const released = await h.state(c => {
+      const s = c.scene
+      s.art.stop(400); s.setPaused(true)
+      const paused = [s.art.stopLeft, s.physics.world.isPaused]
+      s.setPaused(false)
+      return { paused, resumed: [s.art.stopLeft, s.physics.world.isPaused] }
+    })
+    assert.deepEqual(released.paused, [0, true]); assert.deepEqual(released.resumed, [0, false])
+    await new Promise(resolve => setTimeout(resolve, 450))
+    await h.frame.getByRole("button", { name: "简化特效", exact: true }).click()
+    const reduced = await h.state(c => {
+      const s = c.scene
+      s.art.stop(400); s.art.shake(.02, 300); s.art.hurt(20, 0)
+      return { stop: s.art.stopLeft, frozen: s.physics.world.isPaused, shaking: s.cameras.main.shakeEffect.isRunning,
+        particles: s.art.particles.length, numbers: s.art.numbers.length }
+    })
+    assert.deepEqual(reduced, { stop: 0, frozen: false, shaking: false, particles: 0, numbers: 1 })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("larger projectile artwork keeps the same centred collision circle", async () => {
+  const h = await harness()
+  try {
+    await startFree(h, "fire", "ice")
+    const bolts = await h.state(c => {
+      const s = c.scene
+      s.setPaused(true); s.bullets.clear(true, true)
+      return ["base", "awakened"].map(form => {
+        const bolt = s.makeBullet({ id: s.next(), x: 400, y: 300, vx: 100, vy: 0, life: 900, damage: 5, owner: "player",
+          skill: "fire", pierce: 0, hit_ids: [], form })
+        bolt.body.updateFromGameObject()
+        return { key: bolt.texture.key, width: bolt.width, radius: bolt.body.halfWidth,
+          off: Math.hypot(bolt.body.center.x - 400, bolt.body.center.y - 300) }
+      })
+    })
+    assert.equal(bolts[0].key, "bolt-fire"); assert.equal(bolts[0].width, 48); assert.equal(bolts[0].radius, 7)
+    assert.equal(bolts[1].key, "bolt-awakened")
+    // The circle stays centred on the sprite to within a tenth of a pixel.
+    assert.ok(bolts[0].off < .1 && bolts[1].off < .1)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("all eight raster enemies play cut-out frames on the unchanged world-space collision circle", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const result = await h.state(c => {
+      const s = c.scene
+      s.setPaused(true); s.elapsed = 4000; s.enemies.clear(true, true)
+      const rows = [["slime", .62], ["wisp", .62], ["brute", .85], ["charger", .85], ["caster", .62], ["sentinel", 1.12], ["oracle", 1.12], ["boss", 1.4]].map(([kind, scale], i) => {
+        const e = s.makeEnemy({ id: s.next(), kind, x: s.player.x - 300 + i * 90, y: s.player.y + 150, hp: 500 })
+        e.body.updateFromGameObject()
+        // Vector enemies: a radius-19 circle at offset (13, 29) in a 64x72 frame, scaled with the sprite.
+        const off = Math.hypot(e.body.x - (e.x - 19 * scale), e.body.y - (e.y - 7 * scale))
+        return { kind, key: e.texture.key, scale: e.scaleX, tinted: e.isTinted, off, width: e.body.width, want: 38 * scale, enemy: e }
+      })
+      s.art.update()
+      const first = rows.map(r => r.enemy.frame.name)
+      s.elapsed += 290; s.art.update()
+      const moved = rows.map(r => r.enemy.frame.name)
+      s.art.strike(rows[0].enemy, 30, "player", false); s.art.update()
+      const flinch = rows[0].enemy.frame.name
+      s.elapsed += 400; s.art.update()
+      const recovered = rows[0].enemy.frame.name
+      s.combat.deal(rows[2].enemy, 9999, "player"); s.elapsed += 300; s.art.update()
+      const death = s.art.ghosts.find(g => g.death)?.image.frame.name
+      return { rows: rows.map(({ enemy, ...rest }) => rest), first, moved, flinch, recovered, death }
+    })
+    assert.deepEqual(result.rows.map(r => r.key), ["slime", "wisp", "brute", "charger", "caster", "sentinel", "oracle", "boss"].map(kind => `foe-${kind}`))
+    assert.ok(result.rows.every(r => r.scale === 1 && r.tinted === false))
+    for (const row of result.rows) { assert.ok(row.off < .01, row.kind); assert.ok(Math.abs(row.width - row.want) < .01, row.kind) }
+    for (const i of result.rows.keys()) { assert.ok(result.first[i] < 8 && result.moved[i] < 8); assert.notEqual(result.first[i], result.moved[i]) }
+    assert.ok(result.flinch >= 8 && result.flinch < 11); assert.ok(result.recovered < 8)
+    assert.ok(result.death >= 11 && result.death < 16)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("the raster player traveller keeps the world-space body and animates on its own sheet with the feet below the position", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const result = await h.state(c => {
+      const s = c.scene, p = s.player
+      s.setPaused(true); s.elapsed = 3000
+      p.body.updateFromGameObject()
+      const body = [p.body.width, p.body.height, +(p.body.x - p.x).toFixed(3), +(p.body.y - p.y).toFixed(3)]
+      const frames = []
+      for (const [vx, vy] of [[0, 0], [90, 0], [-90, 0], [0, -90], [0, 90]]) { p.body.velocity.set(vx, vy); s.art.update(); frames.push(p.frame.name) }
+      p.body.velocity.set(0, 0)
+      s.art.cast("player", "fire", 0); s.art.update()
+      return { body, frames, cast: p.frame.name, width: p.frame.width, scale: p.scaleX, kind: s.meta.player_class, key: p.texture.key, origin: p.displayOriginY,
+        avatar: document.getElementById("player-avatar").getAttribute("src") }
+    })
+    assert.deepEqual(result.body, [19.6, 21, -9.8, -1.4])
+    assert.equal(result.width, 160); assert.equal(result.scale, 1)
+    assert.deepEqual([result.key, result.origin], ["player-traveller", 112])
+    const k = result.kind
+    assert.match(result.frames[0], new RegExp(`^${k}-down-idle-\\d$`))
+    assert.match(result.frames[1], new RegExp(`^${k}-right-walk-\\d$`)); assert.match(result.frames[2], new RegExp(`^${k}-left-walk-\\d$`))
+    assert.match(result.frames[3], new RegExp(`^${k}-up-walk-\\d$`)); assert.match(result.frames[4], new RegExp(`^${k}-down-walk-\\d$`))
+    assert.match(result.cast, new RegExp(`^${k}-right-cast-\\d$`))
+    assert.equal(result.avatar, `art/player-traveller-${k}.png`)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+// Rule 8: nine nodes with a choice of doors between them.
+async function passScreens(h) {
+  for (let i = 0; i < 16; i++) {
+    await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending && c.scene.paused))
+    const kind = await h.state(c => c.scene.outcome !== "playing" ? "done" : c.scene.choices.length ? "study"
+      : c.scene.encounters.state.pending ? "coop" : c.scene.journey.fighting ? "fight" : "doors")
+    if (kind === "study") await h.frame.locator("[data-upgrade]").first().click()
+    else if (kind === "coop") await h.frame.locator("[data-cooperation]").first().click()
+    else return kind
+  }
+  throw new Error("screens did not settle")
+}
+async function finishNode(h) {
+  await h.state(c => {
+    const s = c.scene, j = s.journey.state
+    s.hurtUntil = 1200000
+    if (j.goal === "hold") s.elapsed = j.started_at + j.need
+    else if (j.goal === "clear") s.kills += j.need
+    else s.combat.deal(s.enemies.getChildren().find(e => e.getData("kind") === s.journey.node.foe), 1e6, "player")
+  })
+  return passScreens(h)
+}
+async function pickDoor(h, selector = "[data-door]") {
+  await h.frame.locator(selector).first().click()
+  await h.frame.locator("#screen").waitFor({ state: "hidden" })
+  await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending && !c.scene.paused))
+}
+
+test("rule8 default launch clears a node, sweeps the field, pays the door reward and enters the next arena", async () => {
+  const h = await harness({ displayRules: 11 })
+  try {
+    await startFree(h)
+    const opening = await h.state(c => ({ rules: c.scene.meta.rules, arena: c.scene.terrain.arena, journey: c.scene.journey.state,
+      clock: document.getElementById("clock").textContent, objective: document.getElementById("objective").textContent,
+      bounds: [c.scene.physics.world.bounds.x, c.scene.physics.world.bounds.y, c.scene.physics.world.bounds.width, c.scene.physics.world.bounds.height] }))
+    assert.equal(opening.rules, 11)
+    assert.equal(opening.arena, "glade")
+    assert.deepEqual(opening.bounds, [250, 150, 1300, 900])
+    assert.deepEqual(opening.journey, { node: 0, phase: "fight", goal: "hold", reward: "study", hard: false, need: 90000,
+      started_at: 0, kills_at: 0, doors: [], hard_cleared: 0 })
+    assert.match(opening.clock, /第 1 \/ 9 段/)
+    assert.match(opening.objective, /林缘 · 坚守 · 还剩 1:30/)
+    // Spawns come out of the treeline and stay inside the fence.
+    await h.state(c => { c.scene.hurtUntil = 1200000; for (const build of Object.values(c.scene.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000 })
+    await poll(() => h.state(c => c.scene.enemies.countActive() >= 3))
+    assert.ok(await h.state(c => c.scene.enemies.getChildren().every(e => e.x >= 250 && e.x <= 1550 && e.y >= 150 && e.y <= 1050
+      && ["slime", "wisp"].includes(e.getData("kind")))))
+    const before = await h.state(c => {
+      const s = c.scene
+      s.makeDrop({ id: s.next(), x: 700, y: 500, amount: 9 }); s.makeDrop({ id: s.next(), x: 1100, y: 700, amount: 5 })
+      return { level: s.level, xp: s.xp, kills: s.kills, enemies: s.enemies.countActive() }
+    })
+    assert.equal(await finishNode(h), "doors")
+    const cleared = await h.state(c => {
+      const s = c.scene
+      return { level: s.level, kills: s.kills, enemies: s.enemies.countActive(), drops: s.drops.countActive(),
+        journey: s.journey.state, saved: c.api.view.run?.id === s.meta.id, title: document.querySelector("#screen h2").textContent,
+        doors: [...document.querySelectorAll("[data-door]")].map(node => [node.dataset.goal, node.dataset.hard || "", node.textContent]) }
+    })
+    assert.ok(cleared.level > before.level, "the study reward grants a level at once")
+    assert.equal(cleared.kills, before.kills, "dispersed enemies are not counted as kills")
+    assert.deepEqual([cleared.enemies, cleared.drops], [0, 0])
+    assert.equal(cleared.title, "选择去路")
+    assert.equal(cleared.journey.phase, "doors")
+    assert.deepEqual(cleared.doors.map(door => door[0]).sort(), ["clear", "hold"])
+    assert.ok(cleared.doors.every(door => door[1] === "" && /研习|休整|灵感/.test(door[2])))
+    assert.notEqual(cleared.journey.doors[0].reward, cleared.journey.doors[1].reward)
+    // The door checkpoint is on disk: a reload resumes on the same doors, not in the middle of a fight.
+    await h.page.reload()
+    h.page.once("dialog", dialog => dialog.accept())
+    await h.frame.getByRole("button", { name: "接管此旅程", exact: true }).click()
+    await h.frame.locator("[data-door]").first().waitFor()
+    assert.deepEqual(await h.state(c => c.scene.journey.state.doors), cleared.journey.doors)
+    await pickDoor(h, '[data-goal="clear"]')
+    const next = await h.state(c => {
+      const s = c.scene
+      return { journey: s.journey.state, arena: s.terrain.arena, player: [s.player.x, s.player.y], elapsed: s.elapsed,
+        bullets: s.bullets.countActive(), zones: s.combat.zones.length, objective: document.getElementById("objective").textContent,
+        walls: s.terrain.geometry.props.filter(prop => prop.kind === "wall").length, solids: s.terrain.solids.getLength(),
+        rects: s.terrain.geometry.rects.length }
+    })
+    assert.equal(next.arena, "lanes")
+    assert.deepEqual([next.journey.node, next.journey.phase, next.journey.goal, next.journey.need], [1, "fight", "clear", 60])
+    assert.equal(next.journey.kills_at, cleared.kills)
+    assert.ok(Math.abs(next.player[0] - 900) < 30 && Math.abs(next.player[1] - 600) < 30)
+    assert.match(next.objective, /林缘 · 清剿 · \d+ \/ 60/)
+    assert.equal(next.walls, 12)
+    assert.equal(next.solids, next.rects)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule8 full journey: gatekeepers, cooperation, hard doors and the boss settle node coins exactly", async () => {
+  const h = await harness({ displayRules: 11 })
+  try {
+    await startFree(h)
+    const seen = []
+    let hard = 0
+    for (let node = 0; node < 8; node++) {
+      assert.equal(await finishNode(h), "doors")
+      const offer = await h.state(c => ({ node: c.scene.journey.state.node, doors: c.scene.journey.state.doors,
+        hp: c.scene.hp, max: c.scene.maxHp(), resolved: c.scene.encounters.state.resolved.length,
+        overflow: document.getElementById("screen").scrollWidth > document.getElementById("screen").clientWidth }))
+      assert.equal(offer.node, node)
+      assert.equal(offer.overflow, false)
+      assert.equal(offer.doors.length, [1, 4, 7].includes(node) ? 1 : node >= 2 ? 3 : 2)
+      assert.equal(offer.resolved, node >= 5 ? 2 : node >= 2 ? 1 : 0)
+      seen.push(offer.doors.map(door => door.goal).join("/"))
+      const risky = offer.doors.some(door => door.hard)
+      if (risky) hard++
+      await pickDoor(h, risky ? "[data-hard]" : "[data-door]")
+      const entered = await h.state(c => {
+        const s = c.scene, foe = s.journey.node.foe
+        return { node: s.journey.state.node, hard: s.journey.state.hard, arena: s.terrain.arena, expected: s.journey.node.arena,
+          foe: foe ? s.enemies.getChildren().filter(e => e.getData("kind") === foe).length : -1, boss: s.bossSpawned,
+          status: document.getElementById("encounter-status").hidden }
+      })
+      assert.equal(entered.node, node + 1)
+      assert.equal(entered.hard, risky)
+      assert.equal(entered.arena, entered.expected)
+      assert.equal(entered.foe, [2, 5, 8].includes(node + 1) ? 1 : -1)
+      assert.equal(entered.boss, node + 1 === 8)
+    }
+    assert.deepEqual(seen.filter(text => !text.includes("/")), ["elite", "elite", "boss"])
+    assert.equal(hard, 4)
+    await poll(() => h.state(c => !document.getElementById("encounter-status").hidden))
+    assert.match(await h.frame.locator("#objective").textContent(), /荆棘深处 · 首领 · 击败林地守望者/)
+    assert.equal(await finishNode(h), "done")
+    await h.frame.getByRole("button", { name: "返回营地", exact: true }).waitFor()
+    const result = await h.state(c => ({ run: c.api.view.run, balance: c.api.view.economy.balance,
+      text: document.getElementById("screen-body").textContent }))
+    assert.equal(result.run.snapshot.outcome, "cleared")
+    assert.ok(result.run.snapshot.elapsed < 18 * 60000, "the clear no longer waits for the eighteenth minute")
+    assert.deepEqual(result.run.settlement, { formula: 2, nodes: 9, hard: 4, journey: 156, clear: 80, total: 236 })
+    assert.equal(result.balance, 236)
+    assert.match(result.text, /冒险金币 \+236/)
+    assert.match(result.text, /路程 9 段（险路 4）：156 · 通关：80/)
+    assert.match(result.text, /9 \/ 9 段/)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule8 doors fit a phone, a lost door acknowledgement cannot enter twice, and rule7 journeys keep the open forest", async () => {
+  const h = await harness({ viewport: { width: 390, height: 844 }, displayRules: 11 })
+  try {
+    await startFree(h)
+    assert.equal(await finishNode(h), "doors")
+    const layout = await h.state(() => {
+      const screen = document.getElementById("screen")
+      return { overflow: screen.scrollWidth > screen.clientWidth,
+        cards: [...document.querySelectorAll("[data-door]")].map(node => { const r = node.getBoundingClientRect(); return [r.left >= 0, r.right <= innerWidth, r.height] }) }
+    })
+    assert.equal(layout.overflow, false)
+    assert.ok(layout.cards.length === 2 && layout.cards.every(card => card[0] && card[1] && card[2] >= 44))
+    await h.page.screenshot({ path: join(artifacts, "journey-doors-390.png") })
+    // Drop the acknowledgement of the save that follows the pick.
+    await h.state(c => {
+      const call = c.api.call.bind(c.api)
+      c.api.call = async args => { const result = await call(args); if (args.operation === "checkpoint") { c.api.call = call; throw new Error("lost") } return result }
+    })
+    await h.frame.locator("[data-door]").first().click()
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).waitFor()
+    assert.equal(await h.state(c => c.scene.journey.state.node), 1)
+    await h.frame.getByRole("button", { name: "确认上次操作", exact: true }).click()
+    await poll(() => h.state(c => !c.busy && !c.api.pending))
+    assert.deepEqual(await h.state(c => [c.scene.journey.state.node, c.scene.journey.state.phase, document.querySelectorAll("[data-door]").length]), [1, "fight", 0])
+    // An older journey loaded into the same scene gets the full forest back.
+    const classic = await h.state(c => {
+      const s = c.scene
+      s.loadRun({ ...s.meta, rules: 7, snapshot: null })
+      return { arena: s.terrain.arena, journey: s.journey, bounds: [s.physics.world.bounds.x, s.physics.world.bounds.width],
+        props: s.terrain.geometry.props.length, clock: document.getElementById("clock").textContent }
+    })
+    assert.deepEqual([classic.arena, classic.journey, classic.bounds, classic.props], ["", null, [24, 1752], 70])
+    assert.match(classic.clock, /\/ 20:00/)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule9 kills charge the fire finishing move; its cut-in spends nothing until it lands and a pause cancels it", async () => {
+  const h = await harness({ displayRules: 9 })
+  try {
+    await startFree(h)
+    const opening = await h.state(c => {
+      const s = c.scene
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      const foes = [0, 1, 2].map(i => s.makeEnemy({ id: s.next(), kind: i ? "slime" : "sentinel", x: s.player.x + 60 + i * 20, y: s.player.y - 200, hp: 10 }))
+      for (const foe of foes) s.combat.deal(foe, 99, "player")
+      s.updateHud()
+      return { school: s.ultimate.school, energy: s.ultimate.energy, early: s.ultimate.cast(), hidden: document.getElementById("ultimate").hidden,
+        state: document.getElementById("ultimate").dataset.state, boss: s.encounters.maxHp("boss"), sentinel: s.encounters.maxHp("sentinel") }
+    })
+    assert.deepEqual(opening, { school: "fire", energy: 17, early: false, hidden: false, state: "charging", boss: 5120, sentinel: 650 })
+    const cast = await h.state(c => {
+      const s = c.scene
+      s.combat.facing = { x: 1, y: 0 }; s.ultimate.energy = 100
+      const near = [0, 1, 2, 3].map(i => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 150 + i * 40, y: s.player.y + (i - 2) * 50, hp: 150 }))
+      const far = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 150, y: s.player.y + 300, hp: 150 })
+      window.__ult = { far: far.getData("id"), kills: s.kills }
+      const ok = s.ultimate.cast()
+      return { ok, again: s.ultimate.cast(), energy: s.ultimate.energy, saved: s.snapshot().ultimate, elapsed: s.elapsed,
+        cutin: document.getElementById("cutin").hidden, alive: s.enemies.countActive() }
+    })
+    assert.deepEqual([cast.ok, cast.again, cast.energy, cast.saved, cast.cutin, cast.alive], [true, false, 100, { energy: 100 }, false, 5])
+    // One round trip for the frozen check and the pause: the cut-in lasts under a second of wall-clock time.
+    await new Promise(resolve => setTimeout(resolve, 120))
+    const held = await h.state(c => {
+      const elapsed = c.scene.elapsed
+      c.pause()
+      return { elapsed, after: [c.scene.ultimate.pending, c.scene.ultimate.energy, document.getElementById("cutin").hidden, c.scene.enemies.countActive()] }
+    })
+    assert.equal(held.elapsed, cast.elapsed, "the fight is frozen during the cut-in")
+    assert.deepEqual(held.after, [0, 100, true, 5])
+    await h.frame.getByRole("button", { name: "继续", exact: true }).click()
+    await poll(() => h.state(c => !c.scene.paused))
+    await h.page.keyboard.press("r")
+    await poll(() => h.state(c => c.scene.ultimate.energy < 100))
+    const landed = await h.state(c => {
+      const s = c.scene
+      return { energy: s.ultimate.energy, kills: s.kills - window.__ult.kills, alive: s.enemies.getChildren().map(e => e.getData("id")),
+        far: window.__ult.far, safe: s.hurtUntil >= s.elapsed, fx: Boolean(s.ultimate.fx), cutin: document.getElementById("cutin").hidden,
+        hp: s.enemies.getChildren()[0]?.getData("hp") }
+    })
+    assert.deepEqual([landed.energy, landed.kills, landed.alive, landed.safe, landed.fx, landed.cutin, landed.hp], [4, 4, [landed.far], true, true, true, 150])
+    await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending))
+    await h.state(c => c.save())
+    assert.deepEqual(await h.state(c => c.api.view.run === null ? null : c.scene.snapshot().ultimate), { energy: 4 })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule10 fire depth: mastery bursts, the flame bird, burning, chain blasts and twin rings all act and save", async () => {
+  const h = await harness({ displayRules: 10 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, combat = s.combat, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      const made = (id, level) => ({ id, level, focus: "power", branch: id === "fire" ? "volley" : "burst", evolution: "pure", ready_at: 1200000, react_at: 0 })
+      combat.builds.player.skills = [made("fire", 5), made("flame", 5)]
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      out.before = combat.tier("player")
+      Object.assign(combat.builds.player.mastery, { fire: 3, flame: 3 })
+      combat.burn(); s.updateHud()
+      out.tier = combat.tier("player"); out.chip = document.querySelector("#ultimate .ult-res").textContent
+      out.labels = combat.labels().player
+      const foe = (dx, dy, hp = 5000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const hp = e => e.getData("hp")
+      const [a, b, far] = [foe(200, 0), foe(260, 30), foe(200, -300)]
+      // First volley after mastery III is one flame bird; the next is an ordinary volley.
+      combat.birdAt.player = 0
+      const fire = combat.skill("player", "fire")
+      combat.shoot(s.player, "player", fire)
+      const bird = s.bullets.getChildren().at(-1)
+      out.bird = { count: s.bullets.countActive(), form: bird.getData("form"), pierce: bird.getData("pierce"), texture: bird.texture.key,
+        damage: bird.getData("damage"), blend: bird.blendMode === Phaser.BlendModes.ADD, radius: bird.body.halfWidth * 2 }
+      combat.shoot(s.player, "player", fire)
+      const volley = s.bullets.getChildren().slice(1)
+      out.volley = { count: volley.length, forms: [...new Set(volley.map(v => v.getData("form")))], damage: volley[0].getData("damage") }
+      for (const v of volley) v.destroy()
+      // A direct hit bursts onto the neighbour and sets both alight; a distant enemy is untouched.
+      bird.setPosition(a.x, a.y); combat.hit(bird, a)
+      out.hit = { a: 5000 - hp(a), b: 5000 - hp(b), far: 5000 - hp(far), burning: [a, b, far].map(e => combat.burns.has(e.getData("id"))), alive: bird.active }
+      const tick = combat.burns.get(a.getData("id")).damage, at = hp(a)
+      s.elapsed += 600; combat.burn()
+      out.burn = { tick, lost: at - hp(a) }
+      // Tier II: a burning enemy that dies explodes and lights its neighbour.
+      const weak = foe(-200, 0, 1), near = foe(-240, 20), safe = foe(-200, 300)
+      combat.ignite(weak, "player", 100); combat.deal(weak, 5, "player")
+      out.queued = combat.blasts.length
+      s.elapsed += 200; combat.burn()
+      out.chain = { near: 5000 - hp(near), safe: 5000 - hp(safe), lit: combat.burns.has(near.getData("id")), left: combat.blasts.length }
+      // Flame mastery: the ring lands with a burst and a second ring forms underfoot.
+      combat.skill("player", "flame").ready_at = 0
+      const zonesBefore = combat.zones.length, nearHp = hp(a)
+      out.cast = combat.castManual(0)
+      const rings = combat.zones.slice(zonesBefore)
+      out.rings = { count: rings.length, kinds: rings.map(z => z.kind), atPlayer: rings.some(z => Math.hypot(z.x - s.player.x, z.y - s.player.y) < 1),
+        burst: nearHp - hp(a), tick: rings[0].damage }
+      rings[0].tick_at = s.elapsed; combat.update(0)
+      out.tickGap = rings[0].tick_at - s.elapsed
+      out.snapshot = { mastery: s.snapshot().builds.player.mastery, forms: s.snapshot().bullets.map(x => x.form) }
+      return out
+    })
+    assert.deepEqual([r.before, r.tier, r.chip], [2, 3, "共鸣Ⅲ"])
+    assert.match(r.labels, /火丸 · 精通Ⅲ 5级 \/ 焰环 · 精通Ⅲ 5级/)
+    assert.deepEqual([r.bird.count, r.bird.form, r.bird.pierce, r.bird.texture, r.bird.blend], [1, "bird", 5, "fx-fire-bird", true])
+    assert.equal(r.bird.radius, 72, "a 36px source circle, about 16px once the picture is scaled to 0.44")
+    assert.ok(r.volley.count >= 3 && r.volley.forms.join() === "awakened")
+    assert.ok(Math.abs(r.bird.damage - r.volley.damage * 3) < 1e-6, "the bird carries three times one bolt")
+    assert.ok(Math.abs(r.hit.a - r.bird.damage) < 1e-6 && Math.abs(r.hit.b - r.bird.damage * .6) < 1e-6 && r.hit.far === 0)
+    assert.deepEqual(r.hit.burning, [true, true, false])
+    assert.equal(r.hit.alive, true, "the bird keeps flying after its first hit")
+    assert.ok(Math.abs(r.burn.tick - r.bird.damage * .15) < 1e-6 && Math.abs(r.burn.lost - r.burn.tick) < 1e-6)
+    assert.equal(r.queued, 1)
+    assert.ok(Math.abs(r.chain.near - 60) < 1e-6 && r.chain.safe === 0 && r.chain.lit && r.chain.left === 0)
+    assert.equal(r.cast, true)
+    assert.deepEqual([r.rings.count, r.rings.kinds.join(), r.rings.atPlayer], [2, "flame,flame", true])
+    assert.ok(Math.abs(r.rings.burst - r.rings.tick * 2.5) < 1e-6)
+    assert.equal(r.tickGap, 300)
+    assert.deepEqual(r.snapshot, { mastery: { fire: 3, flame: 3, meteor: 0 }, forms: ["bird"] })
+    // The server accepts the mastered build and the flying bird, and a rule 9 journey still has neither.
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.builds.player.mastery.fire, stored.snapshot.bullets[0].form], [10, 3, "bird"])
+    const old = await h.state(c => {
+      const s = c.scene
+      s.loadRun({ ...s.meta, rules: 9, snapshot: null })
+      return { mastery: s.combat.builds.player.mastery ?? null, tier: s.combat.tier("player"), hidden: document.getElementById("ultimate").hidden }
+    })
+    assert.deepEqual(old, { mastery: null, tier: 0, hidden: true })
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule11 fire line: blade, spray, delayed burst and lava with its pillar link all act, slow earlier forms and save", async () => {
+  const h = await harness({ displayRules: 11 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, combat = s.combat, line = combat.line, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      combat.builds.player.skills = [{ id: "fire", level: 5, focus: "power", branch: "volley", evolution: "pure", ready_at: 1200000, react_at: 0 }]
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const foe = (dx, dy, hp = 5000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const lost = e => 5000 - e.getData("hp"), lit = e => combat.burns.has(e.getData("id"))
+      const wipe = () => { s.enemies.clear(true, true); combat.burns.clear(); line.clear() }
+      out.rules = [s.meta.rules, combat.builds.player.arts.length, s.encounters.maxHp("boss"), s.encounters.maxHp("sentinel"), s.journey.hpScale()]
+      // Middle rank, close: a fan in front, nothing behind.
+      combat.builds.player.arts = [{ id: "blade", level: 1 }]
+      let front = foe(100, 20), side = foe(80, -40), behind = foe(-100, 0), far = foe(200, 0)
+      line.update()
+      out.blade = { hits: [front, side, behind, far].map(lost), lit: [front, side, behind, far].map(lit), wait: line.at.player.blade - s.elapsed, arcs: line.slashes.length }
+      // Middle rank, sustained: a narrow cone, many small hits.
+      wipe(); combat.builds.player.arts = [{ id: "spray", level: 1 }]
+      front = foe(200, 20); side = foe(0, 222)
+      line.update(); const once = lost(front)
+      s.elapsed += 200; line.update()
+      out.spray = { once, twice: lost(front), side: lost(side), lit: lit(front), wait: line.at.player.spray - s.elapsed }
+      // Middle rank, heavy: the circle warns first, then everything inside is hit and lit.
+      wipe(); combat.builds.player.arts = [{ id: "burst", level: 1 }]
+      const pack = [foe(300, 0), foe(330, 30), foe(300, 50)]; far = foe(-300, 0)
+      line.update()
+      out.burst = { pending: line.pending.length, early: pack.map(lost), wait: line.at.player.burst - s.elapsed }
+      s.elapsed += 600; line.update()
+      out.burst.after = pack.map(lost); out.burst.far = lost(far); out.burst.left = line.pending.length; out.burst.lit = pack.every(lit)
+      // Upper rank: lava slows and burns; a fire bolt landing in it raises a pillar on the neighbours.
+      wipe(); combat.builds.player.arts = [{ id: "burst", level: 5 }, { id: "magma", level: 1 }]
+      line.at.player.burst = 1200000
+      const [a, b] = [foe(250, 0), foe(290, 20)]; far = foe(-300, 0)
+      a.setVelocity(100, 0)
+      line.update()
+      const pool = line.pools[0]
+      out.magma = { pools: line.pools.length, near: Math.hypot(pool.x - a.x, pool.y - a.y) < 60, tick: lost(a), speed: a.body.velocity.x, far: lost(far),
+        wait: line.at.player.magma - s.elapsed }
+      const fire = combat.skill("player", "fire"); fire.ready_at = 0
+      combat.shoot(s.player, "player", fire)
+      const bolt = s.bullets.getChildren()[0], before = lost(b), carried = bolt.getData("damage")
+      bolt.setPosition(a.x, a.y); combat.hit(bolt, a)
+      out.pillar = { neighbour: lost(b) - before, bolt: carried, cooled: pool.erupt_at - s.elapsed }
+      const again = s.bullets.getChildren().find(x => x.active && x !== bolt), mark = lost(b)
+      again.setPosition(a.x, a.y); combat.hit(again, a)
+      out.pillar.second = lost(b) - mark
+      // The level cap is fifty now, and the snapshot carries the forms.
+      wipe(); s.bullets.clear(true, true)
+      s.level = 40; s.xp = s.xpNeeded(); combat.checkLevel()
+      out.level = [s.level, s.choices.length > 0]
+      s.choices = []; combat.studyOwner = ""
+      out.arts = s.snapshot().builds.player.arts
+      return out
+    })
+    assert.deepEqual(r.rules, [11, 0, 8320, 1170, 1.15])
+    assert.ok(r.blade.hits[0] > 0 && r.blade.hits[0] === r.blade.hits[1] && r.blade.hits[2] === 0 && r.blade.hits[3] === 0)
+    assert.deepEqual([r.blade.lit, r.blade.wait, r.blade.arcs], [[true, true, false, false], 1400, 1])
+    assert.ok(r.spray.once > 0 && Math.abs(r.spray.twice - r.spray.once * 2) < 1e-9 && r.spray.side === 0 && r.spray.lit)
+    assert.ok(r.blade.hits[0] > r.spray.once * 4, "the blade hits far harder than one tick of spray")
+    assert.equal(r.spray.wait, 200)
+    assert.deepEqual([r.burst.pending, r.burst.early, r.burst.far, r.burst.left, r.burst.lit, r.burst.wait], [1, [0, 0, 0], 0, 0, true, 3200])
+    assert.ok(r.burst.after.every(amount => amount === r.burst.after[0] && amount > r.blade.hits[0] * 2.5))
+    assert.deepEqual([r.magma.pools, r.magma.near, r.magma.far, r.magma.wait], [1, true, 0, 6000])
+    assert.ok(r.magma.tick > 0 && Math.abs(r.magma.speed - 55) < 1e-6)
+    assert.ok(Math.abs(r.pillar.neighbour - (r.pillar.bolt * 1.5 + r.magma.tick * 2)) < 1e-6, JSON.stringify([r.pillar, r.magma]))
+    assert.deepEqual([r.pillar.cooled, r.pillar.second], [800, 0])
+    assert.deepEqual(r.level, [41, true])
+    assert.deepEqual(r.arts, [{ id: "burst", level: 5 }, { id: "magma", level: 1 }])
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.level, stored.snapshot.builds.player.arts.length], [11, 41, 2])
+    const old = await h.state(c => {
+      const s = c.scene
+      s.loadRun({ ...s.meta, rules: 10, snapshot: null })
+      return [s.combat.line, s.combat.builds.player.arts ?? null, s.encounters.maxHp("boss")]
+    })
+    assert.deepEqual(old, [null, null, 5120])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule11 upper and saint forms: hellfire rolls, grows on burning enemies and bursts; the flash ignites the field and every fire answers", async () => {
+  const h = await harness({ displayRules: 11 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, combat = s.combat, line = combat.line, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      combat.builds.player.skills = [{ id: "fire", level: 5, focus: "power", branch: "volley", evolution: "pure", ready_at: 1200000, react_at: 0 }]
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const foe = (dx, dy, hp = 50000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const lost = e => 50000 - e.getData("hp")
+      const run = ms => { for (let t = 0; t < ms && s.outcome === "playing"; t += 100) { s.elapsed += 100; line.update() } }
+      // Hellfire: aimed at the pack, it burns whatever it rolls over on the way.
+      combat.builds.player.arts = [{ id: "burst", level: 5 }, { id: "hellfire", level: 1 }]
+      line.at.player.burst = 1200000
+      const onPath = foe(150, 0), pack = [foe(420, 0), foe(450, 25), foe(430, -30)], aside = foe(150, 260)
+      for (const enemy of [onPath, ...pack]) combat.ignite(enemy, "player", 100)
+      line.update()
+      const orb = line.orbs[0]
+      out.orb = { count: line.orbs.length, speed: Math.hypot(orb.vx, orb.vy), heading: Math.abs(orb.vy) < 15, wait: line.at.player.hellfire - s.elapsed, base: orb.damage }
+      run(1400)
+      out.roll = { path: lost(onPath) > orb.damage * 2, grow: orb.grow, aside: lost(aside), x: orb.x - s.player.x }
+      const before = pack.map(lost)
+      run(2400)
+      out.end = { gone: line.orbs.length === 0, pack: pack.map((enemy, i) => lost(enemy) > before[i]), aside: lost(aside) }
+      // Flash: a half-second gathering, then everything in range burns and every fire on the field erupts.
+      s.enemies.clear(true, true); combat.burns.clear(); line.clear()
+      combat.builds.player.arts = [{ id: "burst", level: 5 }, { id: "magma", level: 5 }, { id: "flash", level: 1 }]
+      Object.assign(line.at.player, { burst: 1200000, magma: 1200000 })
+      const plain = foe(-300, 0), lit = foe(0, -320), inLava = foe(380, 0), away = foe(0, 420)
+      away.setPosition(s.player.x + 20, s.player.y + 430)
+      combat.ignite(lit, "player", 100)
+      line.pools.push({ x: inLava.x, y: inLava.y, radius: 110, born: s.elapsed, until: s.elapsed + 60000, tick_at: 1200000, erupt_at: 0, owner: "player", damage: 1 })
+      const range = Math.hypot(away.x - s.player.x, away.y - s.player.y)
+      line.update()
+      out.gather = { flashes: line.flashes.length, early: [plain, lit, inLava].map(lost), wait: line.at.player.flash - s.elapsed }
+      const flash = line.flashes[0]
+      s.elapsed += 500; line.update()
+      out.flash = { damage: flash.damage, plain: lost(plain), lit: lost(lit), lava: lost(inLava), erupted: flash.erupted,
+        allLit: [plain, lit, inLava].every(e => combat.burns.has(e.getData("id"))), done: flash.done === s.elapsed, range }
+      s.elapsed += 800; line.update()
+      out.cleared = line.flashes.length
+      out.none = (() => { s.enemies.clear(true, true); line.at.player.flash = 0; line.update(); return line.flashes.length })()
+      return out
+    })
+    assert.deepEqual([r.orb.count, Math.round(r.orb.speed), r.orb.heading, r.orb.wait], [1, 150, true, 5000])
+    assert.ok(r.roll.path && r.roll.grow > 0 && r.roll.aside === 0 && r.roll.x > 150, JSON.stringify(r.roll))
+    assert.deepEqual(r.end, { gone: true, pack: [true, true, true], aside: 0 })
+    assert.deepEqual([r.gather.flashes, r.gather.early, r.gather.wait], [1, [0, 0, 0], 14000])
+    assert.ok(Math.abs(r.flash.plain - r.flash.damage) < 1e-6, "an unlit enemy takes the flash alone")
+    assert.ok(Math.abs(r.flash.lit - (r.flash.damage + 15 * 8)) < 1e-6, "a burning enemy also takes eight burn ticks at once")
+    assert.ok(Math.abs(r.flash.lava - r.flash.damage * 2.6) < 1e-6, "the lava under an enemy erupts for 1.6 flashes more")
+    assert.deepEqual([r.flash.erupted, r.flash.allLit, r.flash.done, r.cleared, r.none], [1, true, true, 0, 0])
+    assert.ok(r.flash.range < 760)
+    const stored = await h.state(async c => {
+      c.scene.combat.builds.player.arts = [{ id: "blade", level: 5 }, { id: "hellfire", level: 5 }, { id: "flash", level: 5 }]
+      c.scene.setPaused(true); await c.save(); return (await c.api.read()).run.snapshot.builds.player.arts
+    })
+    assert.deepEqual(stored.map(art => art.id), ["blade", "hellfire", "flash"])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule12 elites: affixes change speed, contact damage and death, are drawn from the saved RNG only after the first node, and save", async () => {
+  const h = await harness({ displayRules: 12 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      out.rules = s.meta.rules
+      const at = (dx, dy) => ({ x: s.player.x + dx, y: s.player.y + dy })
+      const plain = s.makeEnemy({ id: s.next(), kind: "slime", hp: 100, affix: "", ...at(300, 0) })
+      const swift = s.makeEnemy({ id: s.next(), kind: "slime", hp: 100, affix: "swift", ...at(-300, 0) })
+      const armored = s.makeEnemy({ id: s.next(), kind: "brute", hp: 100, affix: "armored", ...at(0, 300) })
+      out.look = { scale: [plain.scaleX, swift.scaleX], tinted: [plain.isTinted, swift.isTinted], tint: swift.tintTopLeft, body: [plain.body.radius, swift.body.radius] }
+      out.saved = s.snapshot().enemies.map(e => e.affix)
+      s.hurtUntil = 0; const hp = s.hp
+      s.hurt(armored); out.contact = hp - s.hp
+      s.hurtUntil = 1200000; s.hp = s.maxHp()
+      // A split elite leaves three small slimes and a triple crystal.
+      const split = s.makeEnemy({ id: s.next(), kind: "brute", hp: 10, affix: "split", ...at(200, 200) })
+      const before = s.enemies.countActive(), kills = s.kills
+      s.combat.deal(split, 99, "player")
+      const fresh = s.enemies.getChildren().slice(-3)
+      out.split = { count: s.enemies.countActive() - before, kinds: fresh.map(e => e.getData("kind") + ":" + e.getData("affix")), kills: s.kills - kills,
+        near: fresh.every(e => Math.hypot(e.x - split.x, e.y - split.y) < 80), drop: s.drops.getChildren().at(-1).getData("amount") }
+      // The elite roll: never in the first node, and only for ordinary kinds.
+      const frac = s.rng.frac.bind(s.rng), between = s.rng.between.bind(s.rng)
+      const draws = values => { let i = 0; s.rng.frac = () => values[i++ % values.length]; s.rng.between = (low, high) => Math.min(high, Math.max(low, 1)) }
+      draws([.9, .01]); s.encounters.spawnRegular()
+      out.first = s.enemies.getChildren().at(-1).getData("affix")
+      s.journey.state.node = 1
+      draws([.9, .01]); s.encounters.spawnRegular()
+      const elite = s.enemies.getChildren().at(-1)
+      draws([.9, .5]); s.encounters.spawnRegular()
+      const normal = s.enemies.getChildren().at(-1)
+      out.roll = { affix: elite.getData("affix"), kind: elite.getData("kind"), ratio: elite.getData("hp") / normal.getData("hp"), normal: normal.getData("affix") }
+      s.journey.state.node = 0
+      s.rng.frac = frac; s.rng.between = between
+      return out
+    })
+    assert.equal(r.rules, 12)
+    assert.ok(Math.abs(r.look.scale[1] / r.look.scale[0] - 1.28) < 1e-9)
+    assert.deepEqual([r.look.tinted, r.look.tint], [[false, true], 0xf4d874])
+    assert.deepEqual(r.saved, ["", "swift", "armored"])
+    assert.equal(r.contact, 27, "an armored brute hits half again as hard")
+    assert.deepEqual(r.split, { count: 2, kinds: ["slime:", "slime:", "slime:"], kills: 1, near: true, drop: 36 })
+    assert.equal(r.first, "", "no elites in the first node")
+    assert.deepEqual([r.roll.affix, r.roll.kind, r.roll.normal], ["armored", "slime", ""])
+    assert.ok(Math.abs(r.roll.ratio - 4) < 1e-9)
+    // Speed is applied in the real movement step.
+    await h.state(c => c.play())
+    await poll(() => h.state(c => {
+      const speed = id => { const e = c.scene.enemies.getChildren().find(x => x.getData("affix") === id && x.getData("kind") === "slime"); return Math.hypot(e.body.velocity.x, e.body.velocity.y) }
+      return speed("") > 10 && Math.abs(speed("swift") / speed("") - 1.6) < .05
+    }))
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.equal(stored.rules, 12)
+    assert.ok(stored.snapshot.enemies.every(e => typeof e.affix === "string") && stored.snapshot.enemies.some(e => e.affix === "swift"))
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule12 gatekeepers: the sentinel cracks the ground around you, phases bring reinforcements, and the boss has a third phase", async () => {
+  const h = await harness({ displayRules: 12 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, enc = s.encounters, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const build of Object.values(s.combat.builds)) for (const skill of build.skills) skill.ready_at = 1200000
+      const circles = () => enc.threats.filter(t => t.kind === "circle").map(t => ({ r: t.radius, d: Math.round(Math.hypot(t.x - s.player.x, t.y - s.player.y)) }))
+      const count = kind => s.enemies.getChildren().filter(e => e.getData("kind") === kind).length
+      // Sentinel: two charges, then a cross of circles that leaves the spot under the player safe.
+      const sentinel = enc.summon("sentinel"), ai = enc.foes.get(sentinel.getData("id"))
+      ai.step = 0; enc.prepare(sentinel, ai)
+      out.charge = enc.threats.map(t => t.kind)
+      enc.threats = []; ai.step = 2; enc.prepare(sentinel, ai)
+      out.cross = circles()
+      enc.threats = []; ai.state = "recover"; ai.ready_at = s.elapsed + 3000
+      sentinel.setData("hp", enc.maxHp("sentinel") * .49)
+      enc.update()
+      out.angry = { phase: ai.phase, brutes: count("brute") }
+      enc.update()
+      out.once = count("brute")
+      // Boss: 66% and 33% thresholds, each with its own help; the third phase alternates a ring and a big centre circle.
+      s.enemies.clear(true, true); enc.foes.clear(); enc.threats = []
+      const boss = enc.summon("boss"), mind = enc.foes.get(boss.getData("id"))
+      mind.state = "recover"; mind.ready_at = s.elapsed + 3000
+      enc.update(); out.p1 = mind.phase
+      boss.setData("hp", enc.maxHp("boss") * .6); enc.update()
+      out.p2 = { phase: mind.phase, adds: s.enemies.countActive() - 1 }
+      mind.step = 1; enc.prepare(boss, mind); out.row = circles(); enc.threats = []; mind.state = "recover"; mind.ready_at = s.elapsed + 3000
+      boss.setData("hp", enc.maxHp("boss") * .3); enc.update()
+      out.p3 = { phase: mind.phase, adds: s.enemies.countActive() - 1, casters: count("caster") }
+      mind.step = 3; enc.prepare(boss, mind); out.ring = circles(); out.windup = enc.threats[0].trigger_at - s.elapsed
+      enc.threats = []; mind.step = 1; enc.prepare(boss, mind); out.centre = circles()
+      enc.hudAt = -Infinity; enc.updateHud(); out.status = document.querySelector("#encounter-status .encounter-name").textContent
+      return out
+    })
+    assert.deepEqual(r.charge, ["line"])
+    assert.deepEqual(r.cross, [{ r: 52, d: 100 }, { r: 52, d: 100 }, { r: 52, d: 100 }, { r: 52, d: 100 }])
+    assert.deepEqual([r.angry, r.once], [{ phase: 2, brutes: 3 }, 3])
+    assert.deepEqual([r.p1, r.p2], [1, { phase: 2, adds: 4 }])
+    assert.deepEqual(r.row.map(c => c.r), [105, 105, 105])
+    assert.deepEqual(r.p3, { phase: 3, adds: 9, casters: 2 })
+    assert.deepEqual(r.ring, Array(6).fill({ r: 66, d: 150 }))
+    assert.equal(r.windup, 900)
+    assert.deepEqual(r.centre, [{ r: 120, d: 0 }])
+    assert.match(r.status, /林地守望者 · 第三阶段/)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule12 offers a hard door as early as the second node", async () => {
+  const h = await harness({ displayRules: 12 })
+  try {
+    await startFree(h)
+    assert.equal(await finishNode(h), "doors")
+    const doors = await h.state(c => c.scene.journey.state.doors.map(door => [door.goal, door.hard, door.need]))
+    assert.equal(doors.length, 3)
+    assert.deepEqual(doors.map(door => door[1]), [false, false, true])
+    await pickDoor(h, "[data-hard]")
+    assert.deepEqual(await h.state(c => [c.scene.journey.state.node, c.scene.journey.state.hard]), [1, true])
+    await poll(() => h.state(c => !c.saving && !c.busy && !c.api.pending))
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule13 flame chain: one key casts ring, wall, field and pillar in order, links to the ground fires, spends only on a target and saves", async () => {
+  const h = await harness({ displayRules: 13 })
+  try {
+    await startFree(h)
+    const r = await h.state(async c => {
+      const { castStats, CASTS } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat, chain = combat.flameLine, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const build = combat.builds.player
+      build.skills = [{ id: "fire", level: 1, focus: "", branch: "", evolution: "", ready_at: 1200000, react_at: 0 },
+        { id: "flame", level: 5, focus: "power", branch: "burst", evolution: "pure", ready_at: 0, react_at: 0 }]
+      out.rules = [s.meta.rules, build.casts.length, Boolean(chain)]
+      build.casts = [{ id: "wall", level: 5 }, { id: "domain", level: 5 }, { id: "pillar", level: 1 }]
+      const foe = (dx, dy, hp = 50000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const lost = e => 50000 - e.getData("hp")
+      const pack = [foe(320, 0), foe(350, 30), foe(320, 50)], far = foe(-520, 0)
+      for (const e of s.enemies.getChildren()) e.setVelocity(0)
+      out.cast = combat.castManual(0)
+      const flame = build.skills[1]
+      out.cooldown = [flame.ready_at - s.elapsed, Math.round(castStats(build, "pillar").cooldown)]
+      out.queue = chain.queue.map(step => [step.id, step.at - s.elapsed, step.scale])
+      out.ring = combat.zones.filter(zone => zone.kind === "flame").length
+      out.again = combat.castManual(0)
+      const step = ms => { s.elapsed += ms; for (const e of s.enemies.getChildren()) e.setVelocity(0); chain.update() }
+      step(300); out.wall = [chain.walls.length, chain.field === null]
+      step(300); out.field = [Boolean(chain.field), chain.boost(), combat.damage("player", 100)]
+      combat.addZone("flame", "player", { x: s.player.x, y: s.player.y + 260 }, 90, 1, 6000)
+      step(300); out.seal = chain.pending.filter(blast => !blast.small).length
+      const before = pack.map(lost)
+      step(500)
+      out.erupted = { big: chain.pillars.filter(p => p.big).length, hit: pack.map((e, i) => lost(e) - before[i]), small: chain.pending.filter(b => b.small).length,
+        linked: chain.pending.filter(b => b.small).length - 6 }
+      for (let i = 0; i < 12; i++) step(100)
+      out.far = lost(far); out.left = chain.pending.length
+      out.snapshot = s.snapshot().builds.player.casts
+      // Nothing in reach: no cooldown is spent and the chain does not start.
+      s.enemies.clear(true, true); chain.clear(); flame.ready_at = 0
+      out.empty = [combat.castManual(0), flame.ready_at, chain.queue.length]
+      step(9000); out.expired = [chain.walls.length, chain.field, chain.boost()]
+      out.lower = CASTS.lower
+      return out
+    })
+    assert.deepEqual(r.rules, [13, 0, true])
+    assert.equal(r.cast, true); assert.equal(r.again, false)
+    assert.equal(r.cooldown[0], r.cooldown[1])
+    assert.deepEqual(r.queue, [["wall", 300, r.lower], ["domain", 600, r.lower], ["pillar", 900, 1]])
+    assert.equal(r.ring, 1)
+    assert.deepEqual(r.wall, [1, true])
+    assert.deepEqual(r.field, [true, 1.25, 125])
+    assert.equal(r.seal, 1)
+    assert.equal(r.erupted.big, 1)
+    assert.ok(r.erupted.hit.every(amount => amount > 300), JSON.stringify(r.erupted))
+    assert.equal(r.erupted.linked, 1, "a flame zone away from the pillar answers with one; fires under the pillar do not repeat it")
+    assert.deepEqual([r.far, r.left], [0, 0])
+    assert.deepEqual(r.snapshot, [{ id: "wall", level: 5 }, { id: "domain", level: 5 }, { id: "pillar", level: 1 }])
+    assert.deepEqual(r.empty, [false, 0, 0])
+    assert.deepEqual(r.expired, [0, null, 1])
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.builds.player.casts.length, stored.snapshot.builds.companion.casts], [13, 3, []])
+    const old = await h.state(c => {
+      const s = c.scene
+      s.loadRun({ ...s.meta, rules: 12, snapshot: null })
+      return [s.combat.flameLine, s.combat.builds.player.casts ?? null]
+    })
+    assert.deepEqual(old, [null, null])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule14 stops: a stop door after the first fight, shards, the merchant, an encounter, the camp, the charm and boons all act and save", async () => {
+  const h = await harness({ displayRules: 14 })
+  try {
+    await startFree(h)
+    const settle = () => h.state(c => new Promise(resolve => { const wait = () => !c.busy && !c.api.pending ? resolve(true) : setTimeout(wait, 50); wait() }))
+    const first = await h.state(c => {
+      const s = c.scene, j = s.journey
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      s.elapsed = j.state.started_at + 91000; j.update(); s.xp = 0; s.choices = []; s.combat.studyOwner = ""
+      j.openDoors(true)
+      return { rules: s.meta.rules, shards: j.state.shards, doors: j.state.doors.map(door => door.goal), stop: j.state.doors.find(door => door.goal === "stop") }
+    })
+    assert.equal(first.rules, 14)
+    assert.equal(first.shards, 3)
+    assert.deepEqual(first.doors.filter(goal => goal === "stop").length, 1)
+    assert.ok(["camp", "shop", "event"].includes(first.stop.reward))
+    // The merchant: take the door, buy one ware, leave; the stop door is gone and the rest remain.
+    await settle()
+    await h.state(c => { const j = c.scene.journey.state; j.shards = 20; j.doors.find(door => door.goal === "stop").reward = "shop"
+      c.scene.journey.pick(j.doors.findIndex(door => door.goal === "stop")) })
+    await settle()
+    const shop = await h.state(c => { const j = c.scene.journey.state; return { phase: j.phase, offer: j.stop.offer, doors: j.doors.length, title: document.getElementById("screen-title")?.textContent || document.querySelector("#screen h1, #screen h2")?.textContent } })
+    assert.equal(shop.phase, "stop"); assert.equal(shop.offer.length, 3); assert.equal(shop.doors, first.doors.length - 1)
+    const bought = await h.state((c, id) => { c.scene.journey.buy(id); return { shards: c.scene.journey.state.shards, bought: c.scene.journey.state.stop.bought } }, shop.offer[0])
+    await settle()
+    const stored = await h.state(async c => (await c.api.read()).run.snapshot.journey)
+    assert.deepEqual([stored.phase, stored.stop.bought, stored.shards], ["stop", [shop.offer[0]], bought.shards])
+    assert.ok(bought.shards < 20)
+    await h.state(c => c.scene.journey.resolve([], "行商挥手道别。")); await settle()
+    const back = await h.state(c => ({ phase: c.scene.journey.state.phase, stop: c.scene.journey.state.stop, goals: c.scene.journey.state.doors.map(d => d.goal) }))
+    assert.deepEqual([back.phase, back.stop, back.goals.includes("stop")], ["doors", null, false])
+    // Effects: the camp's vigor raises max health, the charm turns a lethal blow, boons shape the next fight.
+    const fx = await h.state(c => {
+      const s = c.scene, j = s.journey, out = {}
+      const max = s.maxHp(); j.apply([["vigor", 15]]); out.vigor = [s.maxHp() - max, j.state.vigor]
+      j.apply([["hurt", .99]]); out.hurt = s.hp
+      j.apply([["heal", 1]]); out.heal = s.hp === s.maxHp()
+      j.apply([["boon", "power"]]); out.boostDoors = j.boost()
+      j.apply([["charm", 1]])
+      return out
+    })
+    assert.deepEqual(fx.vigor, [15, 15]); assert.equal(fx.hurt, 1); assert.equal(fx.heal, true); assert.equal(fx.boostDoors, 1, "the boon waits for the next fight")
+    await h.state(c => c.scene.journey.pick(c.scene.journey.state.doors.findIndex(door => door.goal !== "stop" && !door.hard))); await settle()
+    const fight = await h.state(c => {
+      const s = c.scene, j = s.journey, out = {}
+      s.hurtUntil = 0; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      out.boost = [j.boost(), s.combat.damage("player", 100)]
+      const foe = s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + 10, y: s.player.y, hp: 500 })
+      s.hp = 1; s.takeDamage(50, foe)
+      out.spared = [s.hp, s.outcome, j.state.charm]
+      j.state.boon = "bounty"; const before = j.state.shards
+      s.enemies.clear(true, true); s.hurtUntil = 1200000
+      s.elapsed = j.state.started_at + 200000; s.kills = j.state.kills_at + 200; j.update()
+      out.bounty = [j.state.shards - before, j.state.boon, j.state.phase]
+      out.snapshot = Object.keys(s.snapshot().journey).sort()
+      return out
+    })
+    assert.deepEqual(fight.boost, [1.2, 120])
+    assert.deepEqual(fight.spared, [1, "playing", false])
+    assert.deepEqual(fight.bounty, [6, "", "doors"])
+    assert.deepEqual(fight.snapshot, ["boon", "charm", "doors", "goal", "hard", "hard_cleared", "kills_at", "need", "node", "phase", "reward", "shards", "started_at", "stop", "vigor"])
+    const old = await h.state(c => { const s = c.scene; s.loadRun({ ...s.meta, rules: 13, snapshot: null }); return Object.hasOwn(s.journey.state, "shards") })
+    assert.equal(old, false)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule15 sword line: flash, counter ring, phantoms and intent, the wave, falling blades, the saint cut and the drawn finisher all act and save", async () => {
+  const h = await harness({ displayRules: 15 })
+  try {
+    await startFree(h, "slash")
+    const r = await h.state(c => {
+      const s = c.scene, combat = s.combat, line = combat.swordLine, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const build = combat.builds.player
+      build.skills = [{ id: "slash", level: 5, focus: "power", branch: "cleave", evolution: "pure", ready_at: 1200000, react_at: 0 }]
+      out.rules = [s.meta.rules, build.swords.length, Boolean(line), s.ultimate.school]
+      const foe = (dx, dy, hp = 50000) => s.makeEnemy({ id: s.next(), kind: "brute", x: s.player.x + dx, y: s.player.y + dy, hp })
+      const lost = e => 50000 - e.getData("hp")
+      const wipe = () => { s.enemies.clear(true, true); line.clear() }
+      const still = () => { for (const e of s.enemies.getChildren()) e.setVelocity(0) }
+      // Swift school: a thin line toward the nearest enemy, every enemy on it hit once with one stack.
+      build.swords = [{ id: "flash", level: 1 }]
+      let near = foe(120, 0), far = foe(260, 4), side = foe(120, 90)
+      still(); line.update()
+      out.flash = { hits: [near, far, side].map(lost), stacks: [near, far, side].map(e => line.stacks(e)), wait: line.at.player.flash - s.elapsed }
+      // Still-water school: a guarding ring, then a counter ring three times as strong when struck.
+      wipe(); build.swords = [{ id: "ripple", level: 1 }]
+      near = foe(60, 0); far = foe(200, 0); still()
+      line.update(); const ring = lost(near)
+      s.hurtUntil = 0; const hurt = s.hp; s.takeDamage(5, near)
+      out.ripple = { ring, far: lost(far), counter: lost(near) - ring, shield: s.hurtUntil - s.elapsed, hp: hurt - s.hp }
+      s.hurtUntil = 1200000
+      // North-star school: three phantoms on the three nearest, three stacks each.
+      wipe(); build.swords = [{ id: "phantom", level: 1 }]
+      const pack = [foe(80, 0), foe(100, 40), foe(130, -30), foe(250, 0)]; still()
+      line.update()
+      out.phantom = { stacks: pack.map(e => line.stacks(e)), hit: pack.map(e => lost(e) > 0) }
+      // Resonance I: slash and the line give two points; an enemy carrying intent takes 15% more.
+      out.tier = line.tier("player")
+      const marked = pack[0], fresh = foe(-80, 0)
+      out.edge = [line.edge(marked, "player", 100), line.edge(fresh, "player", 100)].map(Math.round)
+      // Upper rank: the wave grows on stacked enemies; falling blades double near deep intent.
+      wipe(); build.swords = [{ id: "phantom", level: 5 }, { id: "wave", level: 1 }]; line.at.player.phantom = 1200000
+      const lane = [foe(150, 0), foe(300, 0)]; still(); line.mark(lane[0], 3)
+      line.update()
+      for (let i = 0; i < 8; i++) { s.elapsed += 100; still(); line.update() }
+      out.wave = { hits: lane.map(lost), bonus: line.waves[0]?.bonus ?? "gone", stacks: line.stacks(lane[1]) }
+      wipe(); build.swords = [{ id: "phantom", level: 5 }, { id: "rain", level: 1 }]; line.at.player.phantom = 1200000
+      const deep = foe(0, -120), plain = foe(120, 0); still(); line.mark(deep, 5)
+      line.update(); s.elapsed += 600; still(); line.update()
+      out.rain = { deep: lost(deep), plain: lost(plain), wait: line.at.player.rain - s.elapsed + 600 }
+      // Saint rank: after half a second, everything in view is cut and every stack spent.
+      wipe(); build.swords = [{ id: "phantom", level: 5 }, { id: "wave", level: 5 }, { id: "sever", level: 1 }]
+      line.at.player.phantom = line.at.player.wave = 1200000
+      const heavy = foe(200, 0), light = foe(-200, 0); still(); line.mark(heavy, 10)
+      line.update(); out.gather = [line.severs.length, lost(heavy)]
+      s.elapsed += 500; still(); line.update()
+      out.sever = { heavy: lost(heavy), light: lost(light), left: line.stacks(heavy) }
+      // The finisher belongs to the sword now and spends intent too.
+      wipe(); const target = foe(100, 0); still(); line.mark(target, 4)
+      s.ultimate.energy = 100; s.ultimate.draw()
+      out.drawn = { hit: lost(target), left: line.stacks(target), energy: s.ultimate.energy, spent: s.ultimate.drawn.spent }
+      out.saved = s.snapshot().builds.player.swords
+      return out
+    })
+    assert.deepEqual(r.rules, [15, 0, true, "sword"])
+    assert.ok(r.flash.hits[0] > 0 && r.flash.hits[0] === r.flash.hits[1] && r.flash.hits[2] === 0, JSON.stringify(r.flash))
+    assert.deepEqual([r.flash.stacks, r.flash.wait], [[1, 1, 0], 900])
+    assert.ok(r.ripple.ring > 0 && r.ripple.far === 0)
+    assert.ok(Math.abs(r.ripple.counter - r.ripple.ring * 3 * 1.15) < 1e-6, JSON.stringify(r.ripple))
+    assert.ok(r.ripple.shield >= 400)
+    assert.deepEqual(r.phantom.stacks, [3, 3, 3, 0]); assert.deepEqual(r.phantom.hit, [true, true, true, false])
+    assert.equal(r.tier, 1)
+    assert.deepEqual(r.edge, [115, 100])
+    assert.ok(Math.abs(r.wave.hits[1] - r.wave.hits[0] / 1.15) < 1e-6, JSON.stringify(r.wave)); assert.equal(r.wave.bonus, .1)
+    assert.ok(r.rain.deep > r.rain.plain * 1.5 && r.rain.plain > 0, JSON.stringify(r.rain))
+    assert.deepEqual(r.gather, [1, 0])
+    assert.ok(r.sever.heavy > r.sever.light * 3.5, JSON.stringify(r.sever)); assert.equal(r.sever.left, 0)
+    assert.ok(r.drawn.hit > 0); assert.deepEqual([r.drawn.left, r.drawn.energy, r.drawn.spent], [0, 0, 4])
+    assert.deepEqual(r.saved, [{ id: "phantom", level: 5 }, { id: "wave", level: 5 }, { id: "sever", level: 1 }])
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.builds.player.swords.length, stored.snapshot.builds.companion.swords], [15, 3, []])
+    const old = await h.state(c => { const s = c.scene; s.loadRun({ ...s.meta, rules: 14, snapshot: null }); return [s.combat.swordLine, s.combat.builds.player.swords ?? null] })
+    assert.deepEqual(old, [null, null])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("painted arenas: each area and the sanctuary wear their own pictures without changing collision, and missing pictures fall back", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const r = await h.state(async c => {
+      const { arenaLayout } = await import("./terrain-rules.mjs")
+      const { skinAt } = await import("./journey-rules.mjs")
+      const s = c.scene, out = { skins: [0, 1, 2, 3, 4, 5, 6, 7, 8].map(skinAt) }
+      out.first = [s.terrain.skin, s.terrain.visuals.every(v => v.image.texture.key.startsWith("map-edge-"))]
+      s.terrain.load("lanes", "deep")
+      out.deep = { keys: [...new Set(s.terrain.visuals.map(v => v.image.texture.key))].sort(),
+        rects: JSON.stringify(s.terrain.geometry.rects) === JSON.stringify(arenaLayout("lanes").filter(p => !p.decor).map(p => p.footprint)),
+        floor: s.children.getByName("forest-ground").texture.key }
+      s.terrain.load("glade", "nowhere")
+      out.fallback = s.children.getByName("forest-ground").texture.key
+      return out
+    })
+    assert.deepEqual(r.skins, ["edge", "edge", "edge", "ruin", "ruin", "ruin", "deep", "deep", "boss"])
+    assert.deepEqual(r.first, ["edge", true])
+    assert.deepEqual(r.deep.keys, ["map-deep-column", "map-deep-rock", "map-deep-tree", "map-deep-wall"])
+    assert.equal(r.deep.rects, true)
+    assert.equal(r.deep.floor, "map-floor-v1-lanes-deep")
+    assert.equal(r.fallback, "forest-ground-v3-glade")
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule16 terrain: ruin pillars wear down and break on enemies and save; deep thorns slow and mist hurts", async () => {
+  const h = await harness({ displayRules: 16 })
+  try {
+    await startFree(h)
+    const r = await h.state(c => {
+      const s = c.scene, j = s.journey, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      out.rules = [s.meta.rules, JSON.stringify(s.snapshot().terrain)]
+      j.state.node = 3; s.terrain.load("lanes", "ruin"); s.terrain.reset(true); s.hazards.reset()
+      const col = s.terrain.geometry.props.find(p => p.id === "column-0"), solids = s.terrain.geometry.rects.length
+      const near = s.makeEnemy({ id: s.next(), kind: "slime", hp: 500, affix: "", x: col.x + 30, y: col.y + 40 })
+      const far = s.makeEnemy({ id: s.next(), kind: "slime", hp: 500, affix: "", x: col.x + 400, y: col.y + 40 })
+      for (const e of s.enemies.getChildren()) e.setVelocity(0)
+      s.hazards.strike("column-0", 100)
+      out.worn = [s.hazards.wear["column-0"], s.hazards.broken.length, s.terrain.geometry.rects.length === solids]
+      s.combat.splash({ x: col.x, y: col.y - 10 }, 40, 80, "player")
+      out.broken = { list: [...s.hazards.broken], fewer: solids - s.terrain.geometry.rects.length, near: 500 - near.getData("hp"), far: 500 - far.getData("hp"),
+        free: s.terrain.geometry.free({ x: col.x, y: col.y - 11 }, { rx: 8, ry: 6 }) }
+      out.saved = s.snapshot().terrain
+      // Thorns: everything but gatekeepers moves at 55%; mist hurts the player (never below 1) and normal enemies.
+      s.enemies.clear(true, true)
+      j.state.node = 6; s.terrain.load("glade", "deep"); s.terrain.reset(true); s.hazards.reset()
+      out.reset = s.snapshot().terrain
+      const slowed = s.makeEnemy({ id: s.next(), kind: "slime", hp: 500, affix: "", x: 520, y: 640 }); slowed.setVelocity(100, 0)
+      const misty = s.makeEnemy({ id: s.next(), kind: "slime", hp: 500, affix: "", x: 1370, y: 880 })
+      s.player.setPosition(430, 330); s.hp = 1.5
+      s.hazards.tickAt = 0; s.hazards.update()
+      out.deep = { vx: Math.round(slowed.body.velocity.x), hp: s.hp, misty: 500 - misty.getData("hp") }
+      out.edge = (() => { s.terrain.load("glade", "edge"); s.hazards.reset(); return s.hazards.patches })()
+      return out
+    })
+    assert.deepEqual(r.rules, [16, JSON.stringify({ broken: [], wear: {} })])
+    assert.deepEqual(r.worn, [100, 0, true])
+    assert.deepEqual(r.broken.list, ["column-0"]); assert.equal(r.broken.fewer, 1)
+    assert.ok(r.broken.near > 80 && r.broken.far === 0, JSON.stringify(r.broken)); assert.equal(r.broken.free, true)
+    assert.deepEqual(r.saved, { broken: ["column-0"], wear: {} })
+    assert.deepEqual(r.reset, { broken: [], wear: {} })
+    assert.deepEqual(r.deep, { vx: 55, hp: 1, misty: 10 })
+    assert.equal(r.edge, null)
+    const stored = await h.state(async c => {
+      const s = c.scene; s.journey.state.node = 0; s.terrain.load("glade", "edge"); s.hazards.reset()
+      s.setPaused(true); await c.save(); return (await c.api.read()).run
+    })
+    assert.deepEqual([stored.rules, stored.snapshot.terrain], [16, { broken: [], wear: {} }])
+    const old = await h.state(c => { const s = c.scene; s.loadRun({ ...s.meta, rules: 15, snapshot: null }); return [s.hazards, Object.hasOwn(s.snapshot(), "terrain")] })
+    assert.deepEqual(old, [null, false])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule17 exits: a cleared node lights exits instead of opening the door panel, walking in enters, pause still lists them, stops return to roaming, and the sanctuary roots close in", async () => {
+  const h = await harness({ displayRules: 17 })
+  try {
+    await startFree(h)
+    const settle = () => h.state(c => new Promise(resolve => { const wait = () => !c.busy && !c.api.pending && !c.saving ? resolve(true) : setTimeout(wait, 50); wait() }))
+    const first = await h.state(c => {
+      const s = c.scene, j = s.journey
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      s.elapsed = j.state.started_at + 91000; j.update(); s.xp = 0; s.choices = []; s.combat.studyOwner = ""
+      return { rules: s.meta.rules, phase: j.state.phase, roaming: j.roaming, paused: s.paused, opened: j.openDoors(), exits: j.exits.length - 1, doors: j.state.doors.map(d => d.goal) }
+    })
+    assert.equal(first.rules, 17)
+    assert.deepEqual([first.phase, first.roaming, first.paused, first.opened], ["doors", true, false, false])
+    assert.equal(first.exits, first.doors.length)
+    await settle()
+    // Pause shows the same doors with a way back to the field.
+    await h.state(c => c.pause())
+    assert.equal(await h.frame.locator('[data-door]').count(), first.doors.length)
+    await h.frame.getByRole("button", { name: /回到场地/ }).click()
+    assert.equal(await h.state(c => [c.scene.paused, c.scene.journey.roaming].join()), "false,true")
+    // A stop exit opens its panel; leaving it brings the exits back without the stop.
+    await h.state(c => { const j = c.scene.journey; let i = j.state.doors.findIndex(d => d.goal === "stop")
+      if (i < 0) { j.state.doors.push({ goal: "stop", reward: "camp", hard: false, need: 0 }); j.drawExits(); i = j.state.doors.length - 1 }
+      const p = j.exitPoints()[i]; c.scene.player.setPosition(p.x, p.y); j.update() })
+    await settle()
+    assert.equal(await h.state(c => [c.scene.journey.state.phase, c.scene.paused].join()), "stop,true")
+    await h.state(c => c.scene.journey.resolve([], "test")); await settle()
+    const back = await h.state(c => { const j = c.scene.journey; return { phase: j.state.phase, roaming: j.roaming, paused: c.scene.paused, stop: j.state.doors.some(d => d.goal === "stop"), exits: j.exits.length - 1 } })
+    assert.deepEqual(back, { phase: "doors", roaming: true, paused: false, stop: false, exits: first.doors.filter(g => g !== "stop").length })
+    // Walking into the first exit enters the next node.
+    await h.state(c => { const j = c.scene.journey, p = j.exitPoints()[0]; c.scene.player.setPosition(p.x, p.y); j.update() })
+    await settle()
+    const entered = await h.state(c => ({ node: c.scene.journey.state.node, phase: c.scene.journey.state.phase, exits: c.scene.journey.exits.length, paused: c.scene.paused }))
+    assert.deepEqual(entered, { node: 1, phase: "fight", exits: 0, paused: false })
+    // The sanctuary: in the boss's third phase, standing outside the platform hurts (never below 1).
+    const roots = await h.state(c => {
+      const s = c.scene, j = s.journey
+      s.enemies.clear(true, true); j.state.node = 8; s.terrain.load("glade", "boss")
+      const boss = s.encounters.summon("boss"); boss.setPosition(900, 500)
+      s.encounters.foes.get(boss.getData("id")).phase = 3
+      s.player.setPosition(900, 600); s.hp = 50; s.hazards.rootAt = 0; s.hazards.update(); const inside = s.hp
+      s.player.setPosition(300, 600); s.hazards.rootAt = 0; s.hazards.update()
+      return [inside, s.hp, s.hazards.phase]
+    })
+    assert.deepEqual(roots, [50, 47, 3])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("cartoon enemies: wind-up follows the encounter AI, the strike pose plays on release and on contact, they face the player, and the body never changes", async () => {
+  const h = await harness()
+  try {
+    await startFree(h)
+    const r = await h.state(async c => {
+      const { FOE_SHEETS } = await import("./foe-art.mjs")
+      const s = c.scene, art = s.art, out = {}
+      s.hurtUntil = 1200000; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      out.sheets = Object.values(FOE_SHEETS).map(sheet => s.textures.get(sheet.key).frameTotal - 1)
+      const brute = s.encounters.summon("sentinel"); brute.setPosition(s.player.x + 160, s.player.y)
+      const body = [brute.body.radius, brute.body.offset.x, brute.body.offset.y]
+      const ai = s.encounters.foes.get(brute.getData("id"))
+      const frame = () => { art.foesFrame(s.elapsed); return Number(brute.frame.name) }
+      ai.state = "move"; out.idle = frame()
+      ai.state = "windup"; out.windup = frame()
+      ai.state = "recover"; out.strike = frame()
+      s.elapsed += 400; out.after = frame()
+      out.face = brute.flipX
+      brute.setPosition(s.player.x - 160, s.player.y); frame(); out.faceBack = brute.flipX
+      const slime = s.makeEnemy({ id: s.next(), kind: "slime", hp: 50, affix: "", x: s.player.x + 20, y: s.player.y })
+      art.foesFrame(s.elapsed); const calm = Number(slime.frame.name)
+      art.lunge(slime); art.foesFrame(s.elapsed)
+      out.contact = [calm, Number(slime.frame.name)]
+      out.body = JSON.stringify(body) === JSON.stringify([brute.body.radius, brute.body.offset.x, brute.body.offset.y])
+      return out
+    })
+    assert.deepEqual(r.sheets, [16, 16, 16, 16, 16, 16, 16, 16])
+    assert.ok(r.idle < 6, JSON.stringify(r)); assert.ok(r.windup === 6 || r.windup === 7); assert.ok(r.strike === 8 || r.strike === 9); assert.ok(r.after < 6)
+    assert.deepEqual([r.face, r.faceBack], [true, false])
+    assert.ok(r.contact[0] < 6 && (r.contact[1] === 8 || r.contact[1] === 9), JSON.stringify(r.contact))
+    assert.equal(r.body, true)
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})
+
+test("rule18 dash chain: dash, chain cuts, the returning crescent, the star, echoes and the sword domain all strike, stack intent and save", async () => {
+  const h = await harness()
+  try {
+    await startFree(h, "slash")
+    const r = await h.state(async c => {
+      const { strikeStats } = await import("./skills.mjs")
+      const s = c.scene, combat = s.combat, line = combat.dashLine, out = {}
+      s.hurtUntil = 0; s.spawnAt = 1200000; s.enemies.clear(true, true)
+      for (const skill of combat.builds.companion.skills) skill.ready_at = 1200000
+      const build = combat.builds.player
+      build.skills = [{ id: "slash", level: 1, focus: "", branch: "", evolution: "", ready_at: 1200000, react_at: 0 },
+        { id: "dash", level: 5, focus: "power", branch: "line", evolution: "pure", ready_at: 0, react_at: 0 }]
+      out.rules = [s.meta.rules, build.strikes.length, Boolean(line)]
+      build.strikes = [{ id: "chain", level: 5 }, { id: "echo", level: 5 }, { id: "domain", level: 1 }]
+      s.player.setPosition(700, 600); combat.facing = { x: 1, y: 0 }
+      const foes = [[820, 600], [900, 640], [960, 560], [1040, 620], [1100, 580]].map(([x, y]) => s.makeEnemy({ id: s.next(), kind: "brute", x, y, hp: 50000 }))
+      const lost = e => 50000 - e.getData("hp"), still = () => { for (const e of s.enemies.getChildren()) e.setVelocity(0) }
+      still()
+      const dash = build.skills[1]
+      out.cast = combat.castManual(0)
+      out.cooldown = [dash.ready_at - s.elapsed, strikeStats(build, "domain").cooldown]
+      out.queue = line.queue.map(step => [step.id, step.at - s.elapsed, step.scale])
+      const after = foes.map(lost)
+      for (let i = 0; i < 30; i++) { s.elapsed += 100; still(); line.update() }
+      out.hits = foes.map((e, i) => lost(e) - after[i])
+      out.intent = foes.map(e => combat.swordLine.stacks(e))
+      out.invulnerable = s.hurtUntil > 0
+      out.domain = line.domain
+      out.saved = s.snapshot().builds.player.strikes
+      return out
+    })
+    assert.deepEqual(r.rules, [18, 0, true])
+    assert.equal(r.cast, true)
+    assert.equal(r.cooldown[0], r.cooldown[1])
+    assert.deepEqual(r.queue.map(q => q[0]), ["chain", "echo", "domain"])
+    assert.deepEqual(r.queue.map(q => q[2]), [.6, .6, 1])
+    assert.ok(r.hits.every(amount => amount > 0), JSON.stringify(r.hits))
+    assert.ok(r.intent.some(stacks => stacks >= 3), JSON.stringify(r.intent))
+    assert.equal(r.domain, null)
+    assert.deepEqual(r.saved, [{ id: "chain", level: 5 }, { id: "echo", level: 5 }, { id: "domain", level: 1 }])
+    const stored = await h.state(async c => { c.scene.setPaused(true); await c.save(); return (await c.api.read()).run })
+    assert.deepEqual([stored.rules, stored.snapshot.builds.player.strikes.length, stored.snapshot.builds.companion.strikes], [18, 3, []])
+    const old = await h.state(c => { const s = c.scene; s.loadRun({ ...s.meta, rules: 17, snapshot: null }); return [s.combat.dashLine, s.combat.builds.player.strikes ?? null] })
+    assert.deepEqual(old, [null, null])
+    assert.deepEqual(h.errors, [])
+  } finally { await h.close() }
+})

@@ -1,0 +1,5 @@
+[plugin_runtime]
+enabled = true
+# The relationship only works while the plugin runs. Market installs still
+# start with auto-start off until the user approves it in Plugin Center.
+auto_start = true

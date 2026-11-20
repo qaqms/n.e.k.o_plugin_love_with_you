@@ -1,0 +1,10 @@
+[
+  {"id":"guardian","class":"guardian","name":"突击剑","player":["slash","dash"],"companion":["guard","armor"],"player_style":"扇形清敌，突进穿过敌阵；依赖贴近与撤离。","companion_style":"近身守护与岩甲，适合陪同前排。"},
+  {"id":"mage","class":"mage","name":"火风术","player":["fire","flame"],"companion":["wind","pull"],"player_style":"远程火丸与持续火区，擅长处理聚集敌群。","companion_style":"贯穿风刃与引风聚敌，配合地面法术。"},
+  {"id":"frost","class":"mage","name":"凝霜术","player":["ice","frost"],"companion":["ice","heal"],"player_style":"减速、冻结与霜爆，单次爆发较低，适合配合剑技碎冰。","companion_style":"先为敌人凝霜，玩家负伤时治疗。"},
+  {"id":"thunder","class":"mage","name":"雷陨术","player":["spark","meteor"],"companion":["spark","beacon"],"player_style":"雷链穿梭密集敌群，陨击预判落点；敌人分散时效率下降。","companion_style":"跳跃雷链与固定灵灯，擅长守住一片区域。"},
+  {"id":"earth","class":"mage","name":"岩震术","player":["stone","quake"],"companion":["stone","armor"],"player_style":"慢速重弹与近身震地，击退清出走位空间。","companion_style":"岩弹阻敌与覆甲，补充前排生存。"},
+  {"id":"blade","class":"guardian","name":"游刃剑","player":["orbit","whirl"],"companion":["orbit","beacon"],"player_style":"控制敌人与刃环的距离，剑舞期间穿行；回旋刃内圈有盲区。","companion_style":"刃环拦截与灵灯守备，依赖接敌距离。"},
+  {"id":"trapper","class":"mage","name":"伏印术","player":["rune","meteor"],"companion":["rune","pull"],"player_style":"边退边布印，诱敌经过伏印，再用延迟陨击封路。","companion_style":"布印与引风牵引，协助把敌人留在危险区。"},
+  {"id":"lancer","class":"guardian","name":"贯锋剑","player":["thrust","dash"],"companion":["thrust","heal"],"player_style":"窄线刺击与突进，擅长排队敌人或单体；侧面覆盖弱。","companion_style":"贯刺补伤与负伤治疗，配合前排拉扯。"}
+]

@@ -1,0 +1,31 @@
+{
+  "areas": [
+    {"id":"edge","name":"林缘","hp":1,"rate":1,"clear":60},
+    {"id":"ruin","name":"苔石遗迹","hp":1,"rate":1,"clear":100},
+    {"id":"deep","name":"荆棘深处","hp":0.55,"rate":1.45,"clear":170}
+  ],
+  "nodes": [
+    {"area":"edge","type":"fight","arena":"glade","pace":0},
+    {"area":"edge","type":"fight","arena":"lanes","pace":110000},
+    {"area":"edge","type":"elite","arena":"glade","pace":200000,"foe":"sentinel"},
+    {"area":"ruin","type":"fight","arena":"lanes","pace":330000},
+    {"area":"ruin","type":"fight","arena":"glade","pace":450000},
+    {"area":"ruin","type":"elite","arena":"lanes","pace":540000,"foe":"oracle"},
+    {"area":"deep","type":"fight","arena":"glade","pace":640000},
+    {"area":"deep","type":"fight","arena":"lanes","pace":780000},
+    {"area":"deep","type":"boss","arena":"glade","pace":900000,"foe":"boss"}
+  ],
+  "goals": {
+    "hold": {"name":"坚守","icon":"Shield","text":"守住 90 秒","need":90000,"rate":1},
+    "clear": {"name":"清剿","icon":"Swords","text":"击败指定数量，越快越早结束","cap":120000,"rate":1.35},
+    "elite": {"name":"守关","icon":"Flame","text":"击败拦路的强敌","rate":0.6},
+    "boss": {"name":"首领","icon":"Zap","text":"林地守望者在圣所等候","rate":0.8}
+  },
+  "rewards": {
+    "study": {"name":"研习","icon":"BookOpen","text":"立即获得一次研习"},
+    "mend": {"name":"休整","icon":"Heart","text":"恢复 30% 生命"},
+    "insight": {"name":"灵感","icon":"RotateCw","text":"研习重选次数 +1"}
+  },
+  "hard": {"from":3,"hp":1.3,"rate":1.25},
+  "coins": {"fight":14,"hard":7,"elite":22,"clear":80}
+}

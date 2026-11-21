@@ -253,10 +253,11 @@ export function buildHouse(scene, kit) {
   const desk = group(upper, 3, lifted, -2.2)
   box(desk, wood, 0, .74, 0, 1.6, .05, .7, .015)
   for (const x of [-.74, .74]) box(desk, darkWood, x, .36, 0, .06, .72, .62, .01)
-  const chair = group(upper, 3, lifted, -1.55, PI)
+  // Desk chair: the backrest faces away from the desk, four legs.
+  const chair = group(upper, 3, lifted, -1.55)
   box(chair, fabric(0xcf9f6f), 0, .47, 0, .46, .08, .44, .03)
   box(chair, fabric(0xcf9f6f), 0, .8, .2, .46, .52, .07, .03)
-  cylinder(chair, darkWood, 0, .23, 0, .03, .03, .44, 10)
+  for (const [x, z] of [[-.19, -.18], [.19, -.18], [-.19, .18], [.19, .18]]) cylinder(chair, darkWood, x, .22, z, .022, .02, .44, 10)
   const furnishing = furnishHouse(scene, kit, { ground, upper, lifted })
   // Upstairs pieces do not cast into the shadow map: they would darken the open rooms below.
   upper.traverse(object => { object.castShadow = false })

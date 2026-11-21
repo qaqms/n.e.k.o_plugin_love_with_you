@@ -3,8 +3,9 @@ import { EffectComposer, GTAOPass, OutputPass, RenderPass, RoomEnvironment, Shad
   from "./engine/three-post.mjs?v=0.9.25"
 import { icon } from "./cottage-icons.mjs?v=0.9.26"
 import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
-import { buildRoom } from "./cottage-scene.mjs?v=0.9.26"
-import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.26"
+import { buildRoom } from "./cottage-scene.mjs?v=0.9.28"
+import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.28"
+import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
 import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
 import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.27"
 import { createPicturePages } from "./cottage-picture.mjs?v=0.9.21"
@@ -253,6 +254,11 @@ export function startCottage() {
   fill.position.set(4, 2.7, -3)
   scene.add(fill)
   const room = buildRoom(scene)
+  // The living-room mug sits on the coffee table; the study mug comes with the upstairs furnishing.
+  const ambient = createAmbient(scene, {
+    steam: [{ at: new T.Vector3(-.2, .7, .38), upper: false }, ...room.house.steam.map(at => ({ at, upper: true }))],
+  })
+  let ambientTimer = 0
 
   const preferences = loadPreferences()
   const reduced = matchMedia("(prefers-reduced-motion: reduce)")
@@ -707,6 +713,18 @@ export function startCottage() {
     room.lampPool.intensity = lamp * (2 + 2.5 * night)
     room.shade.emissiveIntensity = lamp * (.42 + .3 * night)
     room.bulb.color.copy(dimBulb).lerp(litBulb, lamp)
+    // The other rooms light up on their own after dark; upstairs lamps go out while that storey is lifted away.
+    for (const item of room.house.lamps) {
+      const on = night * (item.storey ? 1 - upperLift : 1)
+      item.light.intensity = item.strength * on
+      item.shade.emissiveIntensity = .85 * on
+    }
+    // Ambient motion stays off on low quality (also what the software-rendered tests use) and with reduced motion.
+    const ambientActive = ambient.update(dt, {
+      enabled: quality !== "low" && !reduced.matches && !document.hidden,
+      night, sun: Math.min(1, light("sun")) * curtains, lift: 4.2 * upperLift ** 2, upperShown: upperLift < .995,
+    })
+    if (roomView.dataset.ambient !== String(ambientActive)) roomView.dataset.ambient = String(ambientActive)
     mood("backdrop", backdrop)
     const shownPeriod = periods[Math.round(time)]
     if (roomView.dataset.period !== shownPeriod) roomView.dataset.period = shownPeriod
@@ -762,6 +780,8 @@ export function startCottage() {
       applyQuality(quality === "high" ? "medium" : "low")
     }
     if (animating) invalidate()
+    // Ambient motion alone runs at about 30 frames a second instead of the display rate.
+    else if (ambientActive) ambientTimer ||= setTimeout(() => { ambientTimer = 0; invalidate() }, 33)
     else lastFrame = 0
   }
 

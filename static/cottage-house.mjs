@@ -2,6 +2,7 @@
 // Rooms, walls and openings come from cottage-layout.mjs; the living room's own walls stay in cottage-scene.mjs.
 import * as T from "./engine/three.module.min.js"
 import { ROOMS, STAIRS, STOREYS, WALLS, room as roomById, wallPieces } from "./cottage-layout.mjs?v=0.9.26"
+import { furnishHouse } from "./cottage-furnish.mjs?v=0.9.28"
 
 const PI = Math.PI
 // The upper floor slab sits on the living room's wall caps, so everything upstairs is drawn this much higher.
@@ -256,6 +257,7 @@ export function buildHouse(scene, kit) {
   box(chair, fabric(0xcf9f6f), 0, .47, 0, .46, .08, .44, .03)
   box(chair, fabric(0xcf9f6f), 0, .8, .2, .46, .52, .07, .03)
   cylinder(chair, darkWood, 0, .23, 0, .03, .03, .44, 10)
+  const furnishing = furnishHouse(scene, kit, { ground, upper, lifted })
   // Upstairs pieces do not cast into the shadow map: they would darken the open rooms below.
   upper.traverse(object => { object.castShadow = false })
   overhead.traverse(object => { object.castShadow = false })
@@ -268,5 +270,5 @@ export function buildHouse(scene, kit) {
     volume.updateMatrixWorld()
     return { id: item.id, object: volume }
   })
-  return { storeys: storeyGroups, overhead, fadeWalls, rooms }
+  return { storeys: storeyGroups, overhead, fadeWalls, rooms, ...furnishing }
 }

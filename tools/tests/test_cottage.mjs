@@ -652,6 +652,21 @@ test("the same picture continues moving as the caption appears and reverses from
   } finally { await page.close() }
 })
 
+test("ambient motion runs only above low quality and stops for reduced motion", async () => {
+  const { page, frame, errors } = await roomPage({ width: 1000, height: 700 }, false, false, "no-preference")
+  try {
+    const room = frame.locator("#room")
+    await frame.locator('#room[data-ambient="false"]').waitFor()
+    assert.equal(await room.getAttribute("data-quality"), "low", "the software renderer starts on low, without ambient motion")
+    await frame.locator("#mood").click()
+    await frame.locator("#mood-menu").getByRole("button", { name: "中", exact: true }).click()
+    await frame.locator('#room[data-ambient="true"]').waitFor()
+    await page.emulateMedia({ reducedMotion: "reduce" })
+    await frame.locator('#room[data-ambient="false"]').waitFor()
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
 test("the room menu moves through the house, items open from any room, and the quality choice is kept", async () => {
   const { page, frame, nav, errors } = await roomPage({ width: 1200, height: 800 }, false, true)
   try {
@@ -680,6 +695,7 @@ test("the room menu moves through the house, items open from any room, and the q
     await frame.locator("#mood").click()
     await frame.locator("#mood-menu").getByRole("button", { name: "中", exact: true }).click()
     assert.equal(await room.getAttribute("data-quality"), "medium")
+    assert.equal(await room.getAttribute("data-ambient"), "false", "reduced motion keeps ambient motion off")
     await nav.getByRole("button", { name: "关系概览" }).click()
     await nav.getByRole("button", { name: "我们的小屋" }).click()
     await frame.locator('#room[data-quality="medium"]').waitFor()

@@ -482,7 +482,8 @@ const cottageAssets = new Set([
   "cottage.html", "cottage.css", "cottage.mjs", "cottage-scene.mjs", "cottage-icons.mjs", "cottage-record.mjs", "cottage-picture.mjs",
   "cottage-living.mjs", "cottage-company.mjs",
   "engine/three.module.min.js", "engine/three.core.min.js", "engine/three-rounded-box.mjs", "engine/three-post.mjs",
-  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs",
+  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs", "cottage-yui.mjs", "engine/three-gltf.mjs", "models/yui.glb",
+  "models/motion/idle01.vrma.gz", "models/motion/idle02.vrma.gz", "models/motion/idle03.vrma.gz", "models/motion/idle04.vrma.gz", "models/motion/idle05.vrma.gz", "models/motion/vsign.vrma.gz", "models/motion/liked.vrma.gz",
 ])
 // Dev-only pages that live beside this server instead of in the shipped static folder.
 const devAssets = new Set(["cottage-blockout.html", "cottage-blockout.mjs"])
@@ -507,7 +508,10 @@ export async function startPreview(port = 0, sourcePath = join(pluginRoot, "ui/p
         res.writeHead(200, { "Content-Type": "text/plain" }).end(`data:image/webp;base64,${image.toString("base64")}`)
       } else if (cottageAssets.has(asset)) {
         const type = asset.endsWith(".html") ? "text/html" : asset.endsWith(".css") ? "text/css" : "text/javascript"
-        res.writeHead(200, { "Content-Type": `${type}; charset=utf-8` }).end(readFileSync(join(pluginRoot, "static", asset)))
+        const body = readFileSync(join(pluginRoot, "static", asset))
+        if (asset.endsWith(".gz")) res.writeHead(200, { "Content-Type": "application/octet-stream" }).end(body)
+        else if (asset.endsWith(".glb")) res.writeHead(200, { "Content-Type": "model/gltf-binary" }).end(body)
+        else res.writeHead(200, { "Content-Type": `${type}; charset=utf-8` }).end(body)
       } else {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(document(sourcePath, requestUrl.search))
       }

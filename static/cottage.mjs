@@ -6,6 +6,7 @@ import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
 import { buildRoom } from "./cottage-scene.mjs?v=0.9.28"
 import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.28"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
+import { loadYui } from "./cottage-yui.mjs?v=0.9.31"
 import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
 import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.27"
 import { createPicturePages } from "./cottage-picture.mjs?v=0.9.21"
@@ -259,6 +260,20 @@ export function startCottage() {
     steam: [{ at: new T.Vector3(-.2, .7, .38), upper: false }, ...room.house.steam.map(at => ({ at, upper: true }))],
   })
   let ambientTimer = 0
+  // Yui loads after the room is up; the cottage works the same without her if the model cannot load.
+  let yui = null
+  const yuiFocus = new T.Vector3()
+  loadYui(scene, "./models").then(loaded => {
+    yui = loaded
+    hitObjects.push(loaded.hitArea)
+    hitLookup.set(loaded.hitArea, "yui")
+    roomView.dataset.yui = "ready"
+    loaded.motion.then(count => { roomView.dataset.yuiMotion = String(count) })
+    invalidate()
+  }).catch(error => {
+    roomView.dataset.yui = "missing"
+    console.warn("cottage: Yui model unavailable", error)
+  })
 
   const preferences = loadPreferences()
   const reduced = matchMedia("(prefers-reduced-motion: reduce)")
@@ -720,8 +735,16 @@ export function startCottage() {
       item.shade.emissiveIntensity = .85 * on
     }
     // Ambient motion stays off on low quality (also what the software-rendered tests use) and with reduced motion.
+    const motionAllowed = quality !== "low" && !reduced.matches && !document.hidden
+    // Yui's self-lit share follows the room: full by day, dimmer at night, brighter again with the lamp on.
+    // She watches the visitor (the camera), and whatever keepsake is being opened.
+    const opened = closeup && focus > .2 ? room.hits.find(item => item.id === closeup)?.object : null
+    const yuiMoving = yui ? yui.update(dt, {
+      moving: motionAllowed, glow: Math.min(1, .3 + .7 * light("env") + .3 * lamp * night), viewer: camera.position,
+      focus: opened ? opened.getWorldPosition(yuiFocus) : null, hovered: canvas.dataset.target === "yui",
+    }) : false
     const ambientActive = ambient.update(dt, {
-      enabled: quality !== "low" && !reduced.matches && !document.hidden,
+      enabled: motionAllowed,
       night, sun: Math.min(1, light("sun")) * curtains, lift: 4.2 * upperLift ** 2, upperShown: upperLift < .995,
     })
     if (roomView.dataset.ambient !== String(ambientActive)) roomView.dataset.ambient = String(ambientActive)
@@ -781,7 +804,7 @@ export function startCottage() {
     }
     if (animating) invalidate()
     // Ambient motion alone runs at about 30 frames a second instead of the display rate.
-    else if (ambientActive) ambientTimer ||= setTimeout(() => { ambientTimer = 0; invalidate() }, 33)
+    else if (ambientActive || yuiMoving) ambientTimer ||= setTimeout(() => { ambientTimer = 0; invalidate() }, 33)
     else lastFrame = 0
   }
 
@@ -996,7 +1019,10 @@ export function startCottage() {
 
   function activate(id) {
     closeMenus()
-    if (id.startsWith("room:")) goTo(id.slice(5))
+    if (id === "yui") {
+      yui?.react()
+      invalidate()
+    } else if (id.startsWith("room:")) goTo(id.slice(5))
     else if (id === "lamp" || id === "curtains") toggle(id)
     else if (id === "occasion") calendar.writeToday()
     else if ((linked || id === "seat") && Object.hasOwn(closeups, id)) {
@@ -1051,7 +1077,7 @@ export function startCottage() {
   }
 
   function showHover(id, event) {
-    const label = !id ? "" : id.startsWith("room:") ? viewNames[id.slice(5)] : elements[id]?.title || ""
+    const label = !id ? "" : id === "yui" ? "Yui" : id.startsWith("room:") ? viewNames[id.slice(5)] : elements[id]?.title || ""
     hoverLabel.hidden = !label
     if (!label) return
     hoverLabel.textContent = label

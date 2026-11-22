@@ -667,6 +667,29 @@ test("ambient motion runs only above low quality and stops for reduced motion", 
   } finally { await page.close() }
 })
 
+test("Yui loads with her motion clips, answers hover with her name and a click without leaving the room", async () => {
+  const { page, frame, errors } = await roomPage({ width: 1000, height: 700 }, false, false, "no-preference")
+  try {
+    const room = frame.locator("#room")
+    await frame.locator('#room[data-yui="ready"]').waitFor({ timeout: 30000 })
+    await frame.locator("#room[data-yui-motion]").waitFor({ timeout: 30000 })
+    assert.equal(await room.getAttribute("data-yui-motion"), "7", "five idles and two gestures load")
+    const canvas = frame.locator("canvas")
+    const box = await canvas.boundingBox()
+    let spot = null
+    for (let y = .3; y < .95 && !spot; y += .03) for (let x = .2; x < .8 && !spot; x += .02) {
+      await page.mouse.move(box.x + box.width * x, box.y + box.height * y)
+      if (await canvas.getAttribute("data-target") === "yui") spot = [box.x + box.width * x, box.y + box.height * y]
+    }
+    assert.ok(spot, "Yui can be pointed at in the living room")
+    assert.equal(await frame.locator("#hover-label").innerText(), "Yui")
+    await page.mouse.click(...spot)
+    await page.waitForTimeout(300)
+    assert.equal(await room.getAttribute("data-room"), "living", "clicking her does not move the camera to another room")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
 test("the room menu moves through the house, items open from any room, and the quality choice is kept", async () => {
   const { page, frame, nav, errors } = await roomPage({ width: 1200, height: 800 }, false, true)
   try {

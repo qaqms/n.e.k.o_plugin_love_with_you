@@ -2200,6 +2200,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
             title: eventLabel(event), date: event.date, countdown: countdown(event.days_until), today: event.days_until === 0,
           }))}
           activeCharacter={state.current_character || ""} online={Boolean(state.host_online)} api={api}
+          bond={scope && { stage: scope.stage_index, idle: scope.idle_days || 0, gained: scope.gained_today, lost: scope.lost_today }}
           busy={busy} stale={refreshError} run={run} refresh={refreshPanel} /> : null}
       </main>
       {/* Keep this slot mounted so the host preserves page nodes and focus. */}

@@ -18,6 +18,8 @@ const GESTURES = ["vsign", "liked"]
 // Things in the living room she glances at (world positions).
 const INTEREST = [[-1.3, 1.9, -2.6], [-.2, .7, .38], [1.25, 1, -2.1], [-1.1, .8, -1.4], [1.4, .9, 1.1], [-2.5, .4, 1.9]]
   .map(([x, y, z]) => new T.Vector3(x, y, z))
+// The front door, seen through the kitchen doorway: where she watches for you after a few days apart.
+const DOOR = new T.Vector3(7, 1.45, 1.9)
 
 // VRM humanoid bone -> Yui's MMD bone. VRM's upperChest folds into 上半身2.
 const RIG = { hips: "グルーブ", spine: "上半身", chest: "上半身2", neck: "首", head: "頭" }
@@ -74,7 +76,7 @@ async function readClip(loader, url) {
 
 export async function loadYui(scene, base) {
   const loader = new GLTFLoader()
-  const gltf = await loader.loadAsync(`${base}/yui.glb?v=0.9.31`)
+  const gltf = await loader.loadAsync(`${base}/yui.glb?v=0.9.33`)
   const model = gltf.scene
   const size = new T.Box3().setFromObject(model).getSize(new T.Vector3())
   const root = new T.Group()
@@ -180,7 +182,7 @@ export async function loadYui(scene, base) {
   // Motion clips load in the background; until they do (or if they cannot), a procedural idle stands in.
   const clips = {}
   const motion = Promise.all([...IDLE_CLIPS, ...GESTURES].map(name =>
-    readClip(loader, `${base}/motion/${name}.vrma.gz?v=0.9.31`).then(clip => { clips[name] = clip })
+    readClip(loader, `${base}/motion/${name}.vrma.gz?v=0.9.33`).then(clip => { clips[name] = clip })
       .catch(error => console.warn("cottage: Yui motion unavailable", name, error)))).then(() => {
     motionReady = true
     return Object.keys(clips).length
@@ -197,7 +199,7 @@ export async function loadYui(scene, base) {
   let lastGesture = null
   // gaze
   const gaze = { mode: "you", until: 3 + Math.random() * 3, target: new T.Vector3(), headYaw: 0, headPitch: 0,
-    eyeYaw: 0, eyePitch: 0, jumpYaw: 0, jumpPitch: 0, nextJump: .8, contact: 0, lastYaw: 0 }
+    eyeYaw: 0, eyePitch: 0, jumpYaw: 0, jumpPitch: 0, nextJump: .8, contact: 0, lastYaw: 0, twist: .12 }
   // face
   const face = { blink: 0, nextBlink: 2, doubleBlink: false, smile: 0, happy: 0, raise: 0, worried: 0, wide: 0,
     raisePulse: 0, widePulse: 0 }
@@ -206,6 +208,13 @@ export async function loadYui(scene, base) {
   let hoverTime = 0
   let shyFor = 0
   let reactFor = 0
+  // Mood from the relationship (see setMood). warmth 0..1 follows the relationship stage.
+  const mood = { warmth: .5, low: false, occasion: false }
+  let moodSeen = false
+  let settled = false
+  let waiting = 0
+  let celebrate = 0
+  motion.then(() => { settled = true })
 
   const playIdle = () => {
     const available = IDLE_CLIPS.filter(name => clips[name] && name !== current?.name)
@@ -289,17 +298,21 @@ export async function loadYui(scene, base) {
     groove.object.position.copy(offset.add(grooveRest).applyMatrix4(grooveSpace))
   }
 
-  const toLocal = point => model.worldToLocal(point.clone())
+  const localPoint = new T.Vector3()
+  const toLocal = point => model.worldToLocal(localPoint.copy(point))
   function chooseGaze(dt, viewer, focus, hovered) {
     gaze.until -= dt
     const previousMode = gaze.mode
-    if (focus) gaze.mode = "item"
+    if (waiting > 0) gaze.mode = "door"
+    else if (focus) gaze.mode = "item"
     else if (shyFor > 0) gaze.mode = "shy"
     else if (hovered || reactFor > 0) gaze.mode = "you"
-    else if (gaze.mode === "item" || gaze.mode === "shy") { gaze.mode = "you"; gaze.until = 2 + Math.random() * 3 }
+    else if (gaze.mode === "item" || gaze.mode === "shy" || gaze.mode === "door") { gaze.mode = "you"; gaze.until = 2 + Math.random() * 3 }
     else if (gaze.until < 0) {
+      // The closer the relationship, the longer she holds your gaze and the shorter she looks away.
       gaze.mode = gaze.mode === "you" ? "away" : "you"
-      gaze.until = gaze.mode === "you" ? 3 + Math.random() * 5 : 1.4 + Math.random() * 2.4
+      gaze.until = gaze.mode === "you" ? 2.5 + 3 * mood.warmth + Math.random() * 4
+        : 1 + 1.6 * (1 - mood.warmth) + Math.random() * 2
       if (gaze.mode === "away") {
         gaze.target.copy(pick(INTEREST))
         if (Math.random() < .4) face.raisePulse = 1
@@ -307,6 +320,7 @@ export async function loadYui(scene, base) {
     }
     if (gaze.mode === "you" || gaze.mode === "shy") gaze.target.copy(viewer)
     else if (gaze.mode === "item") gaze.target.copy(focus)
+    else if (gaze.mode === "door") gaze.target.copy(DOOR)
     return gaze.mode !== previousMode
   }
 
@@ -343,7 +357,9 @@ export async function loadYui(scene, base) {
     hair.speed = turnSpeed * Math.sign(headYaw - gaze.headYaw)
     gaze.contact = gaze.mode === "you" && Math.abs(yaw - gaze.headYaw - gaze.eyeYaw) < .12
       ? gaze.contact + dt : 0
-    addDelta("上半身", 0, gaze.headYaw * .12, 0)
+    // Watching the door she turns from the waist as well.
+    gaze.twist = damp(gaze.twist, gaze.mode === "door" ? .32 : .12, 3, dt)
+    addDelta("上半身", 0, gaze.headYaw * gaze.twist, 0)
     addDelta("首", -gaze.headPitch * .35, gaze.headYaw * .35, 0)
     addDelta("頭", -gaze.headPitch * .65, gaze.headYaw * .53, -gaze.headYaw * .06)
     for (const eye of ["左目", "右目"]) addDelta(eye, -gaze.eyePitch, gaze.eyeYaw, 0)
@@ -364,16 +380,18 @@ export async function loadYui(scene, base) {
       closed = Math.sin(face.blink * Math.PI)
       if (face.blink === 0 && face.doubleBlink) { face.doubleBlink = false; face.blink = 1 }
     }
-    const contact = clamp((gaze.contact - .6) / .8, 0, 1)
+    // Closer relationships smile back sooner and more; a day that went badly damps it.
+    const contact = clamp((gaze.contact - (1.1 - .6 * mood.warmth)) / .8, 0, 1)
+    const warm = (.16 + .3 * mood.warmth + (mood.occasion ? .1 : 0)) * (mood.low ? .6 : 1)
     const liked = current?.name === "liked" ? 1 : 0
-    const smile = Math.max(contact * .32, shyFor > 0 ? .55 : 0, reactFor > 0 ? .75 : 0, liked * .8)
-    const happy = Math.max(contact * .15, shyFor > 0 ? .35 : 0, reactFor > 0 ? .5 : 0, liked * .6)
+    const smile = Math.max(contact * warm, mood.occasion ? .14 : 0, shyFor > 0 ? .55 : 0, reactFor > 0 ? .75 : 0, liked * .8)
+    const happy = Math.max(contact * warm * .5, shyFor > 0 ? .35 : 0, reactFor > 0 ? .5 : 0, liked * .6)
     face.raisePulse = Math.max(0, face.raisePulse - dt)
     face.widePulse = Math.max(0, face.widePulse - dt * 1.6)
     face.smile = damp(face.smile, smile, 5, dt)
     face.happy = damp(face.happy, happy, 5, dt)
     face.raise = damp(face.raise, Math.sin(Math.min(1, face.raisePulse) * Math.PI) * .4, 8, dt)
-    face.worried = damp(face.worried, shyFor > 0 ? .4 : 0, 5, dt)
+    face.worried = damp(face.worried, shyFor > 0 ? .4 : waiting > 0 ? .14 : mood.low ? .14 : 0, 5, dt)
     face.wide = damp(face.wide, face.widePulse * .4, 10, dt)
     shape("Mouth_Smile", face.smile)
     shape("Eye_HappyLift", face.happy * (1 - closed))
@@ -388,7 +406,7 @@ export async function loadYui(scene, base) {
     ears.nextFlick -= dt
     if (ears.nextFlick < 0) { ears.flick = 1; ears.nextFlick = 3 + Math.random() * 7 }
     ears.flick = Math.max(0, ears.flick - dt * 4)
-    ears.back = damp(ears.back, shyFor > 0 ? 1 : 0, 6, dt)
+    ears.back = damp(ears.back, shyFor > 0 ? 1 : waiting > 0 || mood.low ? .3 : 0, 6, dt)
     ears.perk = damp(ears.perk, reactFor > 0 || gaze.contact > 1 ? 1 : 0, 6, dt)
     const flick = Math.sin(ears.flick * Math.PI) * .3
     const lean = ears.perk * .12 - ears.back * .45
@@ -436,6 +454,19 @@ export async function loadYui(scene, base) {
     shyFor = Math.max(0, shyFor - dt)
     reactFor = Math.max(0, reactFor - dt)
     if (hoverTime > 2.4 && shyFor === 0 && reactFor === 0) { shyFor = 2.6; hoverTime = -4 }
+    // Opening moments wait until the motion clips have loaded (or failed), so the gesture can play.
+    if (settled && waiting > 0) {
+      waiting -= dt
+      if (waiting <= 0 || hovered) {
+        // She notices the visitor: eyes widen, she turns and answers with a happy gesture.
+        waiting = 0
+        reactFor = 2.2
+        face.widePulse = face.raisePulse = 1
+        startBlink()
+        playGesture("liked")
+      }
+    }
+    if (settled && celebrate > 0 && (celebrate -= dt) <= 0) playGesture("vsign")
     body(dt)
     const changed = chooseGaze(dt, viewer, focus, hovered)
     look(dt, changed)
@@ -454,11 +485,25 @@ export async function loadYui(scene, base) {
     face.raisePulse = 1
     startBlink()
     const ready = GESTURES.filter(name => clips[name])
-    if (!ready.length || gesture) return
-    gesture = pick(ready.filter(name => name !== lastGesture).concat(ready.length === 1 ? ready : []))
-    lastGesture = gesture
-    startClip(gesture, .45)
+    if (ready.length) playGesture(pick(ready.filter(name => name !== lastGesture).concat(ready.length === 1 ? ready : [])))
   }
 
-  return { root, hitArea, motion, update, react }
+  function playGesture(name) {
+    if (!clips[name] || gesture) return
+    gesture = lastGesture = name
+    startClip(name, .45)
+  }
+
+  // Mood from the relationship, read from the panel's data; it only changes how she looks and moves.
+  // { warmth 0..1, low (lost more than gained today), occasion (an anniversary today), missed (2+ days away) }
+  // The opening moment (watching the door, or the anniversary gesture) plays once per visit.
+  function setMood({ warmth = .5, low = false, occasion = false, missed = false }) {
+    Object.assign(mood, { warmth: clamp(warmth, 0, 1), low, occasion })
+    if (moodSeen) return
+    moodSeen = true
+    if (missed) waiting = 3.4
+    else if (occasion) celebrate = 1.6
+  }
+
+  return { root, hitArea, motion, update, react, setMood }
 }

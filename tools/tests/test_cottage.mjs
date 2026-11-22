@@ -31,6 +31,8 @@ async function roomPage(viewport, isMobile = false, demo = false, reducedMotion 
   const frame = page.frameLocator('iframe[title="我们的小屋"]')
   await frame.locator("canvas").waitFor()
   await frame.getByRole("button", { name: "台灯" }).waitFor()
+  // Yui's model arrives a moment after the room; pixel comparisons must not race it.
+  await frame.locator("#room[data-yui]").waitFor({ timeout: 30000 })
   return { page, frame, nav, errors }
 }
 
@@ -688,6 +690,22 @@ test("Yui loads with her motion clips, answers hover with her name and a click w
     assert.equal(await room.getAttribute("data-room"), "living", "clicking her does not move the camera to another room")
     assert.deepEqual(errors, [])
   } finally { await page.close() }
+})
+
+test("Yui's mood follows the relationship stage, time apart and a bad day", async () => {
+  for (const [bond, expected] of [["", "warmth:0.75"], ["missed", "warmth:0.75 missed"], ["low", "warmth:0.75 low"]]) {
+    const page = await browser.newPage({ viewport: { width: 1000, height: 700 } })
+    try {
+      const errors = []
+      page.on("pageerror", error => errors.push(error.message))
+      await page.goto(`${url}/?locale=zh-CN${bond && `&bond=${bond}`}`)
+      await page.locator(".lwy-nav").getByRole("button", { name: "我们的小屋" }).click()
+      const frame = page.frameLocator('iframe[title="我们的小屋"]')
+      await frame.locator("#room[data-yui-mood]").waitFor()
+      assert.equal(await frame.locator("#room").getAttribute("data-yui-mood"), expected, bond || "default")
+      assert.deepEqual(errors, [])
+    } finally { await page.close() }
+  }
 })
 
 test("the room menu moves through the house, items open from any room, and the quality choice is kept", async () => {

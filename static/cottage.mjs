@@ -6,7 +6,7 @@ import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
 import { buildRoom } from "./cottage-scene.mjs?v=0.9.28"
 import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.28"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
-import { loadYui } from "./cottage-yui.mjs?v=0.9.31"
+import { loadYui } from "./cottage-yui.mjs?v=0.9.33"
 import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
 import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.27"
 import { createPicturePages } from "./cottage-picture.mjs?v=0.9.21"
@@ -259,16 +259,40 @@ export function startCottage() {
   const ambient = createAmbient(scene, {
     steam: [{ at: new T.Vector3(-.2, .7, .38), upper: false }, ...room.house.steam.map(at => ({ at, upper: true }))],
   })
-  let ambientTimer = 0
+  let paceUntil = 0
+  // Whether Yui is inside the camera's view (she keeps moving off screen, at the slower ambient pace).
+  const yuiView = new T.Frustum()
+  const yuiBounds = new T.Sphere()
+  const yuiMatrix = new T.Matrix4()
+  const yuiOnScreen = () => {
+    // Upstairs views look down through the upper floor, which hides her.
+    if (views[currentView].upper && upperLift < .5) return false
+    yuiView.setFromProjectionMatrix(yuiMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse))
+    yuiBounds.center.copy(yui.root.position).y += .8
+    yuiBounds.radius = .9
+    return yuiView.intersectsSphere(yuiBounds)
+  }
   // Yui loads after the room is up; the cottage works the same without her if the model cannot load.
   let yui = null
+  let yuiMood = null
   const yuiFocus = new T.Vector3()
+  // Yui's mood follows the relationship shown in the panel; it only changes how she looks and moves.
+  const moodFrom = ({ bond, calendar }) => {
+    const number = value => Number.isFinite(value) ? value : 0
+    return {
+      warmth: bond ? Math.min(4, Math.max(0, number(bond.stage))) / 4 : .5,
+      low: Boolean(bond) && number(bond.lost) > number(bond.gained),
+      occasion: Array.isArray(calendar) && calendar.some(item => item?.today),
+      missed: Boolean(bond) && number(bond.idle) >= 2,
+    }
+  }
   loadYui(scene, "./models").then(loaded => {
     yui = loaded
     hitObjects.push(loaded.hitArea)
     hitLookup.set(loaded.hitArea, "yui")
     roomView.dataset.yui = "ready"
     loaded.motion.then(count => { roomView.dataset.yuiMotion = String(count) })
+    if (yuiMood) loaded.setMood(yuiMood)
     invalidate()
   }).catch(error => {
     roomView.dataset.yui = "missing"
@@ -630,6 +654,12 @@ export function startCottage() {
 
   function render(timestamp) {
     frame = 0
+    // Paced motion waits for its next slot on the display's own frame clock, so frames stay evenly spaced.
+    if (paceUntil && timestamp < paceUntil) {
+      frame = requestAnimationFrame(render)
+      return
+    }
+    paceUntil = 0
     if (lost || !viewportWidth || !viewportHeight) return
     const dt = lastFrame ? Math.min(.048, (timestamp - lastFrame) / 1000) : .016
     lastFrame = timestamp
@@ -796,16 +826,21 @@ export function startCottage() {
     else renderer.render(scene, camera)
     const animating = azimuth !== targetAzimuth || elevation !== targetElevation || lamp !== Number(preferences.lamp) ||
       curtains !== Number(preferences.curtains) || time !== wantedTime || focusMotion || spinning || viewMotion || houseMoving
-    // When "auto" quality cannot keep up during motion, step down one tier.
-    slowFrames = animating && dt > .045 ? slowFrames + 1 : 0
-    if (slowFrames > 24 && quality !== "low" && !qualities.includes(requestedQuality) && preferences.quality === "auto") {
+    // When "auto" quality cannot keep up during motion, step down one tier. Yui alone never forces "low",
+    // which would stop her moving.
+    const yuiShown = yuiMoving && yuiOnScreen()
+    slowFrames = (animating || yuiShown) && dt > .045 ? slowFrames + 1 : 0
+    if (slowFrames > 24 && quality !== "low" && (animating || quality === "high") &&
+      !qualities.includes(requestedQuality) && preferences.quality === "auto") {
       slowFrames = 0
       applyQuality(quality === "high" ? "medium" : "low")
     }
     if (animating) invalidate()
-    // Ambient motion alone runs at about 30 frames a second instead of the display rate.
-    else if (ambientActive || yuiMoving) ambientTimer ||= setTimeout(() => { ambientTimer = 0; invalidate() }, 33)
-    else lastFrame = 0
+    // Yui in view moves at up to 60 frames a second; ambient motion alone at 30. Both stay on the display's clock.
+    else if (ambientActive || yuiMoving) {
+      paceUntil = timestamp + (yuiShown ? 1000 / 60 : 1000 / 30) - 4
+      frame = requestAnimationFrame(render)
+    } else lastFrame = 0
   }
 
   // Upstairs lifts away like a dollhouse lid for ground-floor rooms; side walls in front of the view fade out.
@@ -907,6 +942,7 @@ export function startCottage() {
   }
 
   function invalidate() {
+    paceUntil = 0
     if (!frame && !lost) frame = requestAnimationFrame(render)
   }
 
@@ -996,6 +1032,10 @@ export function startCottage() {
         calendar.update(payload)
         projector.update(payload.watch)
         room.notebook.card.visible = payload.calendar.some(item => item.today)
+        yuiMood = moodFrom(payload)
+        roomView.dataset.yuiMood = Object.entries(yuiMood)
+          .map(([key, value]) => key === "warmth" ? `warmth:${value}` : value ? key : "").filter(Boolean).join(" ")
+        yui?.setMood(yuiMood)
         showOccasion = room.notebook.card.visible && payload.canWrite
         invalidate()
       }

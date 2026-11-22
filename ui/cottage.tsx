@@ -12,6 +12,7 @@ export function Cottage(props: {
   shop?: ShopState; busy: boolean; stale: boolean; run: RunAction; refresh: () => Promise<void>
   today: string; calendar: Array<{ title: string; date: string; countdown: string; today: boolean }>
   activeCharacter: string; online: boolean; api: PluginSurfaceProps["api"]
+  bond?: { stage: number; idle: number; gained: number; lost: number }
 }) {
   const { t, data } = props
   const frame = useRef<HTMLIFrameElement | null>(null)
@@ -46,7 +47,7 @@ export function Cottage(props: {
   const watch = trackedWatch(data, props.current)
   const companyData = JSON.stringify({
     today: props.today, calendar: props.calendar, canWrite: roles.some(role => role.name === props.current),
-    character: props.current, company: props.online ? props.activeCharacter : "",
+    character: props.current, company: props.online ? props.activeCharacter : "", bond: props.bond || null,
     watch: watch && {
       title: watch.title || t("xp.watchUntitled"), progress: watchProgress(watch, t), url: watch.url,
       action: t(watch.completed ? "xp.watchReplay" : "xp.watchContinue"),
@@ -167,6 +168,6 @@ export function Cottage(props: {
 
   return <div className="lwy-game">
     <iframe ref={frame} title={t("nav.cottage")}
-      src={`/plugin/love_with_you/ui/cottage.html?version=0.9.31&linked=1&locale=${encodeURIComponent(props.locale)}`} />
+      src={`/plugin/love_with_you/ui/cottage.html?version=0.9.33&linked=1&locale=${encodeURIComponent(props.locale)}`} />
   </div>
 }

@@ -3755,6 +3755,7 @@ function Cottage(props
 
 
 
+
 ) {
   const { t, data } = props
   const frame = useRef(null)
@@ -3789,7 +3790,7 @@ function Cottage(props
   const watch = trackedWatch(data, props.current)
   const companyData = JSON.stringify({
     today: props.today, calendar: props.calendar, canWrite: roles.some(role => role.name === props.current),
-    character: props.current, company: props.online ? props.activeCharacter : "",
+    character: props.current, company: props.online ? props.activeCharacter : "", bond: props.bond || null,
     watch: watch && {
       title: watch.title || t("xp.watchUntitled"), progress: watchProgress(watch, t), url: watch.url,
       action: t(watch.completed ? "xp.watchReplay" : "xp.watchContinue"),
@@ -3910,7 +3911,7 @@ function Cottage(props
 
   return h('div', { className: "lwy-game",}
     , h('iframe', { ref: frame, title: t("nav.cottage"),
-      src: `/plugin/love_with_you/ui/cottage.html?version=0.9.31&linked=1&locale=${encodeURIComponent(props.locale)}`,} )
+      src: `/plugin/love_with_you/ui/cottage.html?version=0.9.33&linked=1&locale=${encodeURIComponent(props.locale)}`,} )
   )
 }
 
@@ -8107,6 +8108,7 @@ const __Panel = function LoveWithYouPanel(props) {
             title: eventLabel(event), date: event.date, countdown: countdown(event.days_until), today: event.days_until === 0,
           })),
           activeCharacter: state.current_character || "", online: Boolean(state.host_online), api: api,
+          bond: scope && { stage: scope.stage_index, idle: scope.idle_days || 0, gained: scope.gained_today, lost: scope.lost_today },
           busy: busy, stale: refreshError, run: run, refresh: refreshPanel,} ) : null
       )
       /* Keep this slot mounted so the host preserves page nodes and focus. */

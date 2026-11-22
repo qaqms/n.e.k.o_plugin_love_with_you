@@ -116,6 +116,9 @@ try { savedAppearance = sessionStorage.getItem("lwy:preview-appearance"); } catc
 if (savedAppearance) state.appearance = JSON.parse(savedAppearance);
 if (query.get("empty")) state.scopes = [];
 if (query.get("art") === "off") state.portraits.settings.mode = "off";
+// Yui's mood in the cottage: ?bond=missed (three days apart) or ?bond=low (a day that went badly).
+if (query.get("bond") === "missed") state.scopes[0].idle_days = 3;
+if (query.get("bond") === "low") state.scopes[0].lost_today = 6;
 if (query.get("moments") === "1") state.experiences = {
   enabled:true,revision:1,characters:{[state.current_character]:{
     revision:1,

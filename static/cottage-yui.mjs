@@ -24,9 +24,14 @@ const GESTURES = ["vsign", "liked"]
 // Sleep is mostly the quiet loop, now and then the one where she turns over.
 const POSES = { walk: ["walk"], sit: ["sit"], type: ["type"], tablet: ["tablet"], sleep: ["sleep", "sleep-turn"] }
 const ONCE = ["yawn", "stretch"]
+// Played in parts by cottage-yui-life.mjs (perform): sitting up in bed and standing, or the same backwards.
+const ACTS = ["getup"]
+// The sleeping clips lie across her own frame (head to her right); turned a quarter round they lie along it, the way
+// the getting-up clip starts, so one can follow the other in bed without her body swinging round.
+const CLIP_TURN = { sleep: -Math.PI / 2, "sleep-turn": -Math.PI / 2 }
 // Poses with her feet on the floor, which keep the ankles at their resting height (see `ground`).
 const GROUNDED = new Set(["stand", "walk", "tablet"])
-const CLIPS = [...IDLE_CLIPS, ...GESTURES, ...new Set(Object.values(POSES).flat()), ...ONCE]
+const CLIPS = [...IDLE_CLIPS, ...GESTURES, ...new Set(Object.values(POSES).flat()), ...ONCE, ...ACTS]
 // Things in the living room she glances at (world positions).
 const INTEREST = [[-1.3, 1.9, -2.6], [-.2, .7, .38], [1.25, 1, -2.1], [-1.1, .8, -1.4], [1.4, .9, 1.1], [-2.5, .4, 1.9]]
   .map(([x, y, z]) => new T.Vector3(x, y, z))
@@ -232,6 +237,24 @@ export async function loadYui(scene, base) {
   const ankleRest = Math.min(...ankles.map(ankle => ankle.getWorldPosition(new T.Vector3()).y)) - root.position.y
   const anklePoint = new T.Vector3()
   let ground = 0
+  // Lying or sitting on a bed, the clips (made on a hard floor) sink her limbs into the mattress: `raise` lifts her
+  // until her lowest part rests on it (at once when she would sink, slowly back down).
+  // Body parts as capsules between two bones (radius in metres), for that and for the duvet over her.
+  // `cap`: how far it may lift a duvet over her (her legs tent it; sitting up, her back and arms do not lift it to
+  // her shoulders; her head stays out).
+  const CAPSULES = [["左足", "左ひざ", .1, .36], ["左ひざ", "左足首", .07, .36], ["右足", "右ひざ", .1, .36],
+    ["右ひざ", "右足首", .07, .36], ["左足首", "左つま先", .065, .36], ["右足首", "右つま先", .065, .36],
+    ["左足", "右足", .17, .3], ["下半身", "上半身2", .16, .26], ["上半身2", "首", .15, .22],
+    ["左腕", "左ひじ", .07, .2], ["左ひじ", "左手首", .06, .2], ["右腕", "右ひじ", .07, .2], ["右ひじ", "右手首", .06, .2],
+    ["頭", "頭", .1, 0],
+    // The skirt's hem (moved by its springs): under the duvet only, not something she rests on.
+    ...[0, 1, 2, 3, 4, 5, 6, 7].map(i => [`スカート_${i}_1`, `スカート_${i}_3`, .05, .3, false]),
+    // So is her tail.
+    ...TAIL.slice(1).map((name, i) => [TAIL[i], name, .035, .25, false])]
+  const capsules = CAPSULES.map(([from, to, radius, cap, rests = true]) => ({ from: bones.get(from)?.object || named(from),
+    to: bones.get(to)?.object || named(to), radius, cap, rests, a: new T.Vector3(), b: new T.Vector3() }))
+    .filter(item => item.from && item.to)
+  let raise = 0
 
   // Hit area for clicks and hover: a simple column around her.
   const hitArea = new T.Mesh(new T.CylinderGeometry(.24, .24, PLACE.height * .96, 10), new T.MeshBasicMaterial())
@@ -272,7 +295,7 @@ export async function loadYui(scene, base) {
   // Skirt (eight chains of three around the waist) and ponytails (four joints each) swing on springs.
   // Capsules around the thighs and shins keep the skirt outside the legs; the body and shoulders hold the hair.
   // Distances are in room metres (Yui is 1.55 m tall).
-  const named = name => model.getObjectByName(name)
+  function named(name) { return model.getObjectByName(name) }
   // The skirt's chains go round the waist in order, so they are solved as a ring.
   // Each panel also swings with the thigh beside it: fully for panels over the leg, partly toward the front
   // (a leg stepping forward pushes the front of the skirt), not at all at the back.
@@ -308,7 +331,10 @@ export async function loadYui(scene, base) {
   // Motion clips load in the background; until they do (or if they cannot), a procedural idle stands in.
   const clips = {}
   const motion = Promise.all(CLIPS.map(name =>
-    readClip(loader, `${base}/motion/${name}.vrma.gz?v=0.9.40`).then(clip => { clips[name] = clip })
+    readClip(loader, `${base}/motion/${name}.vrma.gz?v=0.9.41`).then(clip => {
+      if (CLIP_TURN[name]) clip.turn = new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 1, 0), CLIP_TURN[name])
+      clips[name] = clip
+    })
       .catch(error => console.warn("cottage: Yui motion unavailable", name, error)))).then(() => {
     motionReady = true
     return Object.keys(clips).length
@@ -328,11 +354,15 @@ export async function loadYui(scene, base) {
   let pose = "stand"
   let queue = []
   let once = null
+  // A sequence of clip parts (perform): { parts, index }.
+  let act = null
   // Busy with something (cottage-yui-life.mjs): where her attention is, and whether she is asleep.
   let task = null
   let asleep = false
   let stillKey = ""
   let shownFade = 1
+  // The springs start again at rest after a jump into a pose (set in body, done once the pose is applied).
+  let resetSprings = false
   // gaze
   const gaze = { mode: "you", until: 3 + Math.random() * 3, target: new T.Vector3(), headYaw: 0, headPitch: 0,
     eyeYaw: 0, eyePitch: 0, jumpYaw: 0, jumpPitch: 0, nextJump: .8, contact: 0, twist: .12 }
@@ -349,6 +379,9 @@ export async function loadYui(scene, base) {
   let settled = false
   let waiting = 0
   let celebrate = 0
+  // Woken up: 0..1, how cross she still is (from cottage-yui-life.mjs), and the face shown for it.
+  let grumpy = 0
+  let grumpyShown = 0
   // Touch: which zone, the reaction tier, which side of her (+1 her left), whether the hand is still on her,
   // and how far the reaction has come in (0..1).
   // Its timing follows the wall clock, so a slow frame rate neither stretches the wait nor shortens a held touch.
@@ -359,7 +392,7 @@ export async function loadYui(scene, base) {
   // How long each reaction keeps playing after the hand leaves.
   const AFTER = { dodge: 1.1, awkward: 1.2, accept: 1.4, enjoy: 1.6, lean: 1.8 }
   let touchShown = false
-  motion.then(() => { settled = true })
+  motion.then(() => { settled = true; showRoot() })
 
   const playIdle = (fadeSeconds = 1.4) => {
     const available = IDLE_CLIPS.filter(name => clips[name] && name !== current?.name)
@@ -385,14 +418,42 @@ export async function loadYui(scene, base) {
     startClip(name, fadeSeconds)
     return true
   }
+  // Plays clip parts one after another, each fading in over `fade` seconds:
+  // [{ clip, from = 0, to = its end, speed = 1, fade = .4 }]. False (and nothing changes) if a clip is missing.
+  // While it plays, a new pose waits; at the end the pose's own clip follows.
+  function perform(parts) {
+    if (!parts.length || !parts.every(part => clips[part.clip])) return false
+    gesture = once = null
+    queue = []
+    act = { parts, index: -1 }
+    nextPart()
+    return true
+  }
+  function nextPart() {
+    act.index++
+    const part = act.parts[act.index]
+    if (!part) {
+      act = null
+      if (current) Object.assign(current, { part: null, rate: 1 })
+      if (!playBase(.5) && current) current.time %= current.clip.duration
+      return
+    }
+    const duration = clips[part.clip].duration
+    const from = clamp(part.from ?? 0, 0, duration)
+    const to = clamp(part.to ?? duration, 0, duration)
+    startClip(part.clip, part.fade ?? .4)
+    Object.assign(current, { time: from, end: to, rate: (to >= from ? 1 : -1) * (part.speed || 1), part, grounded: false })
+  }
+
   function startClip(name, fadeSeconds) {
     // From the procedural pose, or in the middle of another fade: fade from the pose she is in right now
-    // (the last frame's body layer) instead of snapping.
-    const fromPose = (!current || (previous && fade < 1)) && bodyPose.size > 0
+    // (the last frame's body layer) instead of snapping. A fade of 0 starts the clip as it is.
+    const fromPose = fadeSeconds > 0 && (!current || (previous && fade < 1)) && bodyPose.size > 0
     previous = fromPose ? null : current
     // Whether the clip has her feet on the floor (the floor correction holds for it).
-    current = { name, clip: clips[name], time: 0, fadeSeconds, grounded: GROUNDED.has(pose) }
-    fade = previous ? 0 : 1
+    current = { name, clip: clips[name], time: 0, fadeSeconds: Math.max(fadeSeconds, .01), grounded: GROUNDED.has(pose) }
+    fade = previous && fadeSeconds > 0 ? 0 : 1
+    if (!(fadeSeconds > 0)) { previous = null; startBlend = 0 }
     if (fromPose) {
       for (const [name, pose] of bodyPose) (startPose.get(name) || startPose.set(name, new T.Quaternion()).get(name)).copy(pose)
       startOffset.copy(bodyOffset)
@@ -433,6 +494,10 @@ export async function loadYui(scene, base) {
       hipsInto.x = clamp(hipsInto.x, -.08, .08)
       hipsInto.z = clamp(hipsInto.z, -.08, .08)
     }
+    if (clip.turn) {
+      into.get("hips")?.premultiply(clip.turn)
+      hipsInto.applyQuaternion(clip.turn)
+    }
   }
 
   const setDelta = (name, x, y, z) => bones.get(name)?.delta.setFromEuler(euler.set(x, y, z, "YXZ"))
@@ -444,7 +509,13 @@ export async function loadYui(scene, base) {
   // Body layer: captured clips when ready, else a light procedural idle (arms lowered from the A-pose).
   function body(dt) {
     for (const entry of bones.values()) entry.delta.identity()
-    if (motionReady && !current && !playBase()) motionReady = false
+    // The first clip once they have loaded: a pose she is already in (asleep, seated) starts as it is, without
+    // fading from the procedural standing pose (which never showed: she stays hidden until then, see showRoot).
+    if (motionReady && !current) {
+      const instant = pose !== "stand"
+      if (!playBase(instant ? 0 : 1.2)) motionReady = false
+      else if (instant) { previous = null; fade = 1; startBlend = 0; resetSprings = true }
+    }
     if (!current) {
       const breath = Math.sin(clock * 1.7)
       setDelta("上半身", breath * .012, Math.sin(clock * .23) * .03, 0)
@@ -455,14 +526,23 @@ export async function loadYui(scene, base) {
       keepBody()
       return
     }
-    current.time += dt
-    if (current.time >= current.clip.duration) {
-      if (gesture && current.name === gesture) gesture = null
-      if (once && current.name === once) once = null
-      if (!playBase()) current.time %= current.clip.duration
+    if (current.part) {
+      // A part of a performance: from one moment of its clip to another, backwards when it ends before it starts.
+      current.time += dt * current.rate
+      if (current.rate > 0 ? current.time >= current.end : current.time <= current.end) {
+        current.time = current.end
+        nextPart()
+      }
+    } else {
+      current.time += dt
+      if (current.time >= current.clip.duration) {
+        if (gesture && current.name === gesture) gesture = null
+        if (once && current.name === once) once = null
+        if (!playBase()) current.time %= current.clip.duration
+      }
     }
     fade = Math.min(1, fade + dt / current.fadeSeconds)
-    if (previous) previous.time = Math.min(previous.time + dt, previous.clip.duration)
+    if (previous) previous.time = clamp(previous.time + dt * (previous.rate || 1), 0, previous.clip.duration)
     sample(current, values, offset)
     if (previous && fade < 1) {
       sample(previous, previousValues, otherOffset)
@@ -481,7 +561,7 @@ export async function loadYui(scene, base) {
       if (fix) scratch.premultiply(other.copy(fix[0]).invert()).multiply(fix[1])
       entry.delta.copy(scratch)
     }
-    offset.y += ground
+    offset.y += ground + raise
     groove.object.position.copy(offset.add(grooveRest).applyMatrix4(grooveSpace))
     if (startBlend > 0) {
       startBlend = Math.max(0, startBlend - dt / current.fadeSeconds)
@@ -585,8 +665,10 @@ export async function loadYui(scene, base) {
     const warm = (.16 + .3 * mood.warmth + (mood.occasion ? .1 : 0)) * (mood.low ? .6 : 1)
     const liked = current?.name === "liked" ? 1 : 0
     if (asleep) closed = 1
+    grumpyShown = damp(grumpyShown, grumpy, 4, dt)
+    // Cross at being woken: no smile yet, brows down, a pout.
     let smile = Math.max(contact * warm, mood.occasion ? .14 : 0, shyFor > 0 ? .55 : 0, reactFor > 0 ? .75 : 0, liked * .8,
-      asleep ? .12 : 0)
+      asleep ? .12 : 0) * (1 - grumpyShown)
     let happy = Math.max(contact * warm * .5, shyFor > 0 ? .35 : 0, reactFor > 0 ? .5 : 0, liked * .6)
     // A touch reaction takes over the face as it comes in.
     const touched = touch.zone ? TOUCH_FACE[touch.tier] : null
@@ -604,9 +686,10 @@ export async function loadYui(scene, base) {
     face.worried = damp(face.worried, Math.max(shyFor > 0 ? .4 : waiting > 0 ? .14 : mood.low ? .14 : 0,
       touched ? touched.worried * weight : 0), 5, dt)
     face.wide = damp(face.wide, Math.max(face.widePulse * .4, touched ? touched.wide * weight : 0), 10, dt)
-    shape("Brow_Lower", touched ? touched.lower * weight : 0)
+    shape("Brow_Lower", Math.max(touched ? touched.lower * weight : 0, grumpyShown * .6))
     // A poked cheek puffs a little unless she welcomes it.
-    shape("Mouth_U", touch.zone === "cheek" && ["dodge", "awkward"].includes(touch.tier) ? .45 * weight : 0)
+    shape("Mouth_U", Math.max(touch.zone === "cheek" && ["dodge", "awkward"].includes(touch.tier) ? .45 * weight : 0,
+      grumpyShown * .35))
     // A pinched cheek pulls her mouth wide.
     shape("Mouth_I", touch.zone === "cheek" ? Math.abs(touch.follow) * .55 * weight : 0)
     shape("Mouth_Smile", face.smile)
@@ -622,7 +705,7 @@ export async function loadYui(scene, base) {
     ears.nextFlick -= dt
     if (ears.nextFlick < 0) { ears.flick = 1; ears.nextFlick = 3 + Math.random() * 7 }
     ears.flick = Math.max(0, ears.flick - dt * 4)
-    ears.back = damp(ears.back, Math.max(shyFor > 0 ? 1 : waiting > 0 || mood.low ? .3 : 0, touchEars()), 6, dt)
+    ears.back = damp(ears.back, Math.max(shyFor > 0 ? 1 : waiting > 0 || mood.low ? .3 : 0, touchEars(), grumpyShown * .85), 6, dt)
     ears.perk = damp(ears.perk, reactFor > 0 || gaze.contact > 1 ? 1 : 0, 6, dt)
     const flick = Math.sin(ears.flick * Math.PI) * .3
     const lean = ears.perk * .12 - ears.back * .45
@@ -633,8 +716,9 @@ export async function loadYui(scene, base) {
     // The tail sways slowly when calm and quicker when she is pleased.
     const lively = Math.max(face.smile, face.happy)
     // The phase is accumulated, so a change of speed never makes the tail jump to another point of its swing.
-    tailPhase += dt * (asleep ? .35 : 1 + lively * 1.4)
-    TAIL.forEach((name, i) => addDelta(name, 0, Math.sin(tailPhase - i * .55) * (.14 + lively * .14),
+    // Cross, it lashes.
+    tailPhase += dt * (asleep && grumpyShown < .3 ? .35 : 1 + lively * 1.4 + grumpyShown * 3)
+    TAIL.forEach((name, i) => addDelta(name, 0, Math.sin(tailPhase - i * .55) * (.14 + lively * .14 + grumpyShown * .12),
       Math.sin(tailPhase * .7 - i * .4) * .05))
   }
 
@@ -746,19 +830,23 @@ export async function loadYui(scene, base) {
   }
 
   // context: { moving, glow, viewer (camera position), focus (world point or null), hovered,
-  //   task (where her attention is while busy, or null), asleep }
-  function update(dt, { moving, glow = 1, viewer, focus = null, hovered = false, task: busyWith = null, asleep: sleeping = false }) {
+  //   task (where her attention is while busy, or null), asleep, grumpy (0..1),
+  //   support (the height of the bed or seat under her, or null) }
+  function update(dt, { moving, glow = 1, viewer, focus = null, hovered = false, task: busyWith = null, asleep: sleeping = false,
+    grumpy: cross = 0, support = null }) {
     for (const [material, base] of glowing) material.emissiveIntensity = base * glow
     task = busyWith
     asleep = sleeping
+    grumpy = cross
     if (!moving) {
       const key = `${pose}:${asleep}:${motionReady}`
       if (!still || key !== stillKey) {
         stillKey = key
-        current = previous = gesture = once = null
+        current = previous = gesture = once = act = null
         queue = []
         startBlend = 0
         ground = 0
+        raise = 0
         for (const entry of bones.values()) entry.delta.identity()
         const held = (POSES[pose] || []).find(name => clips[name])
         if (held) {
@@ -776,6 +864,7 @@ export async function loadYui(scene, base) {
         }
         apply()
         root.updateMatrixWorld(true)
+        if (support !== null) rest(support, 0, true)
         springs.reset()
         for (const name of shapes.keys()) shape(name, 0)
         if (asleep) { shape("Blink_L", 1); shape("Blink_R", 1) }
@@ -846,8 +935,38 @@ export async function loadYui(scene, base) {
       // Seated or lying, the pose's own hips carry her; the last correction eases away.
       ground = current ? damp(ground, 0, 4, dt) : 0
     }
-    springs.update(dt)
+    if (support !== null) rest(support, dt, false)
+    else raise = damp(raise, 0, 4, dt)
+    if (resetSprings) { resetSprings = false; springs.reset() }
+    else springs.update(dt)
     return true
+  }
+
+  // Keeps her lowest part on a surface at height `surface` (a soft mattress gives a little), within the same frame.
+  function rest(surface, dt, now) {
+    let lowest = Infinity
+    for (const item of capsules) {
+      if (!item.rests) continue
+      lowest = Math.min(lowest, item.from.getWorldPosition(item.a).y - item.radius * .6,
+        item.to.getWorldPosition(item.b).y - item.radius * .6)
+    }
+    const below = (surface - .02 - lowest) / model.scale.y
+    // Up at once; down slowly, so a moment's lift does not leave her bobbing.
+    const change = below > 0 || now ? below : Math.max(below, damp(0, below, 1.5, dt))
+    if (Math.abs(change) < 1e-5 || raise + change < 0 && raise <= 0) return
+    const step = Math.max(change, -raise)
+    raise += step
+    groove.object.position.add(anklePoint.set(0, step, 0).applyMatrix3(grooveLinear))
+    root.updateMatrixWorld(true)
+  }
+
+  // Where her body is (world capsules, refreshed on each call), for the duvet over her in bed.
+  function body3d() {
+    for (const item of capsules) {
+      item.from.getWorldPosition(item.a)
+      item.to.getWorldPosition(item.b)
+    }
+    return capsules
   }
 
   // A click: she turns to the visitor, brightens and answers with a gesture.
@@ -863,7 +982,7 @@ export async function loadYui(scene, base) {
   }
 
   function playGesture(name) {
-    if (!clips[name] || gesture || pose !== "stand" || once) return
+    if (!clips[name] || gesture || pose !== "stand" || once || act) return
     gesture = lastGesture = name
     startClip(name, .45)
   }
@@ -884,20 +1003,27 @@ export async function loadYui(scene, base) {
     if (name !== "stand" && !POSES[name]) throw new Error(`Yui has no pose ${name}`)
     if (name === pose) return
     pose = name
-    // The hit column lies down with her in bed (her body runs along the model's x there) and is shorter seated.
+    // The hit column lies down with her in bed (her body runs along her own z there) and is shorter seated.
     const lying = name === "sleep"
-    hitArea.rotation.z = lying ? Math.PI / 2 : 0
+    hitArea.rotation.x = lying ? Math.PI / 2 : 0
     hitArea.position.y = lying ? .15 : PLACE.height * (["sit", "type"].includes(name) ? .4 : .48)
     hitArea.scale.y = ["sit", "type"].includes(name) ? .8 : 1
     gesture = once = null
     queue = []
-    if (motionReady || Object.keys(clips).length) playBase(seconds)
+    showRoot()
+    if (!act && (motionReady || Object.keys(clips).length)) playBase(seconds)
   }
 
   // One-shot clips (yawn, stretch) over standing, one after another.
   function playOnce(names) {
     queue = names.filter(name => ONCE.includes(name))
-    if (GROUNDED.has(pose) && !once && pose !== "walk") playBase()
+    if (GROUNDED.has(pose) && !once && !act && pose !== "walk") playBase()
+  }
+
+  // Seen unless faded out, and, in a pose other than standing, not before the clips have loaded (or failed):
+  // until then she would stand where she sits or lies, and then sink into the pose.
+  function showRoot() {
+    root.visible = shownFade > .01 && (settled || pose === "stand")
   }
 
   // Out of sight and back (getting into bed, the stairs): 0 hidden .. 1 shown.
@@ -906,7 +1032,7 @@ export async function loadYui(scene, base) {
     const value = clamp(amount, 0, 1)
     if (value === shownFade) return
     shownFade = value
-    root.visible = value > .01
+    showRoot()
     for (const material of fadeMaterials) {
       const see = value < 1 || material.userData.see
       if (material.transparent !== see) {
@@ -921,9 +1047,12 @@ export async function loadYui(scene, base) {
 
   return {
     root, hitArea, zones, motion, update, react, setMood, touchStart, touchEnd, touchFollow, setPose, playOnce, setFade,
+    perform, capsules: body3d,
     touching: () => Boolean(touch.zone), cheer: () => playGesture("liked"),
     get pose() { return pose },
     get playing() { return once || queue.length > 0 },
+    // The performance under way: which part, and the moment of its clip (null when none).
+    get acting() { return act && current?.part ? { index: act.index, time: current.time, part: current.part } : null },
     get shown() { return shownFade },
     // After a jump to another place: the skirt and hair start at rest there.
     settle() { springs.reset() },

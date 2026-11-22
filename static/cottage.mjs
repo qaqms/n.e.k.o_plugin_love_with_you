@@ -3,12 +3,12 @@ import { EffectComposer, GTAOPass, OutputPass, RenderPass, RoomEnvironment, Shad
   from "./engine/three-post.mjs?v=0.9.25"
 import { icon } from "./cottage-icons.mjs?v=0.9.26"
 import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
-import { buildRoom } from "./cottage-scene.mjs?v=0.9.28"
-import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.28"
+import { buildRoom } from "./cottage-scene.mjs?v=0.9.41"
+import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.41"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
-import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.40"
-import { createLife } from "./cottage-yui-life.mjs?v=0.9.40"
-import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.40"
+import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.41"
+import { createLife } from "./cottage-yui-life.mjs?v=0.9.41"
+import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.41"
 import { createYuiCard } from "./cottage-yui-card.mjs?v=0.9.40"
 import { HAND_POSE, createHand } from "./cottage-hand.mjs?v=0.9.38"
 import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
@@ -328,7 +328,8 @@ export function startCottage() {
     hitObjects.push(loaded.hitArea)
     hitLookup.set(loaded.hitArea, "yui")
     roomView.dataset.yui = "ready"
-    loaded.motion.then(count => { roomView.dataset.yuiMotion = String(count) })
+    // Once the clips are in she shows (in a pose other than standing she stays hidden until then).
+    loaded.motion.then(count => { roomView.dataset.yuiMotion = String(count); invalidate() })
     if (yuiMood) loaded.setMood(yuiMood)
     invalidate()
   }).catch(error => {
@@ -764,7 +765,8 @@ export function startCottage() {
     }
     fitCamera()
     houseMoving = updateHouse(dt)
-    if (arrived && pendingOpen) {
+    // The closeup of Yui waits until she is up (woken in bed, she first grumbles, turns over and gets out).
+    if (pendingOpen && (arrived || !viewMotion) && !(pendingOpen === "yui" && life && !life.settled)) {
       const id = pendingOpen
       pendingOpen = null
       openKeepsake(id)
@@ -871,8 +873,11 @@ export function startCottage() {
     const yuiMoving = yui ? yui.update(dt, {
       moving: motionAllowed, glow, viewer: camera.position,
       focus: opened ? opened.getWorldPosition(yuiFocus) : null, hovered: canvas.dataset.target === "yui",
-      task: life?.task() || null, asleep: Boolean(life?.asleep),
+      task: life?.task() || null, asleep: Boolean(life?.asleep), grumpy: life?.grumpy || 0, support: life?.support ?? null,
     }) || Boolean(lived?.changed) : false
+    // The duvet rises over her while she is under it (without motion it settles at once).
+    const duvetMoving = room.house.duvet.update(motionAllowed ? dt : 1,
+      yui && life && yui.root.visible ? yui.capsules() : null, life?.cover || 0)
     const ambientActive = ambient.update(dt, {
       enabled: motionAllowed,
       night, sun: Math.min(1, light("sun")) * curtains, lift: 4.2 * upperLift ** 2, upperShown: upperLift < .995,
@@ -943,7 +948,7 @@ export function startCottage() {
     }
     if (animating) invalidate()
     // Yui in view moves at up to 60 frames a second; ambient motion alone at 30. Both stay on the display's clock.
-    else if (ambientActive || yuiMoving) {
+    else if (ambientActive || yuiMoving || duvetMoving) {
       paceUntil = timestamp + (yuiShown ? 1000 / 60 : 1000 / 30) - 4
       frame = requestAnimationFrame(render)
     } else lastFrame = 0
@@ -1229,7 +1234,7 @@ export function startCottage() {
       if (life) yuiAngle = life.facing
       yui.react()
       const here = life?.room || "living"
-      if (here !== currentView || viewMotion) {
+      if (here !== currentView || viewMotion || (life && !life.settled)) {
         pendingOpen = "yui"
         if (here !== currentView) goTo(here)
       } else openKeepsake("yui")

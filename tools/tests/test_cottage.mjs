@@ -686,7 +686,7 @@ test("Yui loads with her motion clips, answers hover with her name, and a click 
     const room = frame.locator("#room")
     await frame.locator('#room[data-yui="ready"]').waitFor({ timeout: 30000 })
     await frame.locator("#room[data-yui-motion]").waitFor({ timeout: 30000 })
-    assert.equal(await room.getAttribute("data-yui-motion"), "15", "five idles, two gestures and her day's eight clips load")
+    assert.equal(await room.getAttribute("data-yui-motion"), "16", "five idles, two gestures, her day's eight clips and getting up load")
     const canvas = frame.locator("canvas")
     const box = await canvas.boundingBox()
     let spot = null
@@ -823,7 +823,7 @@ test("Yui's motion keeps her feet on the floor and blends clips without snapping
       route.fulfill({ contentType: "text/html; charset=utf-8", body: probe }))
     await page.goto(`${url}/plugin/love_with_you/ui/yui-probe.html`)
     const { clips, sink, snap, drift } = await page.waitForFunction(() => window.result, null, { timeout: 90000 }).then(handle => handle.jsonValue())
-    assert.equal(clips, 15)
+    assert.equal(clips, 16)
     assert.ok(sink < .005, `the lower ankle stays on the floor (moved ${sink.toFixed(3)} m)`)
     assert.ok(snap < .06, `the hips never turn more than a smooth step in one frame (${snap.toFixed(3)} rad)`)
     assert.ok(drift < .3, `her body stays on her spot (${drift.toFixed(3)} m away)`)

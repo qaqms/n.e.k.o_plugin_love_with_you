@@ -21,7 +21,13 @@ For her day in the house (0.9.40), from the host's motion library `static/vrm/mo
 | yawn.vrma.gz | motion/03_emote/困倦地抬手打哈欠.vrma.gz |
 | stretch.vrma.gz | motion/03_emote/开心地舒展身体.vrma.gz |
 
-The host's `static/vrm/motion/manifest.json` lists the seven `motion/` clips as Apache-2.0 with the origin `VSWQH`;
+For getting into and out of bed (0.9.41), played in parts forward or backward:
+
+| here | host file |
+| --- | --- |
+| getup.vrma.gz | motion/08_move/从低姿态撑起身体站好.vrma.gz |
+
+The host's `static/vrm/motion/manifest.json` lists the `motion/` clips (seven, and `getup` since 0.9.41) as Apache-2.0 with the origin `VSWQH`;
 `world-walk` is covered by the notice beside these files. Whether the `motion/` clips may ship with the plugin is to be
 confirmed by the project owner (the earlier confirmation was for the idle and gesture clips above).
 

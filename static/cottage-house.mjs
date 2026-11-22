@@ -3,6 +3,7 @@
 import * as T from "./engine/three.module.min.js"
 import { ROOMS, STAIRS, STOREYS, WALLS, room as roomById, wallPieces } from "./cottage-layout.mjs?v=0.9.26"
 import { furnishHouse } from "./cottage-furnish.mjs?v=0.9.28"
+import { createDuvet } from "./cottage-duvet.mjs?v=0.9.41"
 
 const PI = Math.PI
 // The upper floor slab sits on the living room's wall caps, so everything upstairs is drawn this much higher.
@@ -248,7 +249,9 @@ export function buildHouse(scene, kit) {
   box(bed, wood, 0, .17, 0, 1.9, .26, 2.2, .04)
   box(bed, darkWood, 0, .55, -1.06, 1.9, 1.05, .08, .03)
   box(bed, fabric(0xf4eee2), 0, .36, .02, 1.78, .18, 2.08, .07)
-  box(bed, fabric(0x9fb4c9), 0, .44, .35, 1.82, .1, 1.42, .05)
+  // The duvet is soft: it rises over Yui when she sleeps under it (cottage-duvet.mjs).
+  const duvet = createDuvet(bed, fabric(0x9fb4c9, { side: T.DoubleSide }), fabric(0xf4eee2),
+    { width: 1.82, from: -.16, to: 1.06, top: .49 })
   for (const x of [-.45, .45]) box(bed, fabric(0xf7f1e6), x, .5, -.78, .66, .14, .36, .07)
   const desk = group(upper, 3, lifted, -2.2)
   box(desk, wood, 0, .74, 0, 1.6, .05, .7, .015)
@@ -271,5 +274,5 @@ export function buildHouse(scene, kit) {
     volume.updateMatrixWorld()
     return { id: item.id, object: volume }
   })
-  return { storeys: storeyGroups, overhead, fadeWalls, rooms, ...furnishing }
+  return { storeys: storeyGroups, overhead, fadeWalls, rooms, duvet, ...furnishing }
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { EDGES, NODES, SCHEDULE, SPOTS, activityAt, cottageMinutes, periodOf, plan, roomOf, route }
+import { BED, EDGES, NODES, SCHEDULE, SPOTS, activityAt, cottageMinutes, periodOf, plan, roomOf, route }
   from "../../static/cottage-routine.mjs"
 import { FURNITURE, ROOMS, SLOTS, STAIRS, WALLS, bounds } from "../../static/cottage-layout.mjs"
 
@@ -105,4 +105,20 @@ test("she can get from every place to every other, using the stairs only between
   assert.deepEqual(route("rug", "rug"), [])
   assert.throws(() => route("rug", "attic"))
   for (const spot of Object.values(SPOTS)) assert.equal(roomOf(spot), spot.room)
+})
+
+test("getting into and out of bed stays on the mattress and lands clear of the furniture", () => {
+  const bed = FURNITURE.find(item => item.name === "床")
+  const [x, , z] = bounds(bed)
+  for (const point of [BED.back, BED.edge, SPOTS.bed]) {
+    assert.ok(point.x > x[0] && point.x < x[1] && point.z > z[0] && point.z < z[1], "on the bed")
+    assert.ok(point.y > BED.surface, "on top of the mattress")
+  }
+  // She stands up from the edge on the room side, on the floor, and walks from there to the bedside.
+  assert.ok(BED.floor.x > x[1] && BED.floor.y === NODES.bedside.y)
+  for (const box of OBSTACLES.filter(item => item.storey === 1)) {
+    assert.ok(!crossesBox(BED.floor, BED.floor, box), `stands in ${box.name}`)
+    assert.ok(!crossesBox(BED.floor, NODES.bedside, box), `walks through ${box.name}`)
+  }
+  assert.equal(roomOf(BED.floor), "bedroom")
 })

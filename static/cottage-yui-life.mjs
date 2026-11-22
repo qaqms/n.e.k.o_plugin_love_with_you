@@ -1,7 +1,8 @@
 // Yui's day in the house: follows the schedule in cottage-routine.mjs, walks between places, sits down and gets up,
-// goes out of sight for a moment on the stairs and getting into or out of bed, and stops for the visitor.
+// gets into and out of bed (woken by the visitor, crossly: she grumbles, tosses about, then sits up), goes out of sight
+// for a moment on the stairs, and stops for the visitor.
 // Presentation only: nothing here is saved or sent anywhere.
-import { NODES, SPOTS, activityAt, plan, roomOf } from "./cottage-routine.mjs?v=0.9.40"
+import { BED, NODES, SPOTS, activityAt, plan, roomOf } from "./cottage-routine.mjs?v=0.9.41"
 
 const WALK_SPEED = .6
 const TURN_RATE = 7
@@ -13,6 +14,24 @@ const STAIRS_STEP = .3
 const FRESH_MINUTES = 10
 // Where her eyes go while busy, in her own frame (x her left, y up, z ahead), from her root.
 const LOOK = { walk: [0, 1.25, 2.2], sit: [0, .95, 1.8], type: [0, .85, .5], tablet: [-.02, .92, .42] }
+
+// In and out of bed, from the clips (cottage-yui.mjs perform): turning over in her sleep, and the getting-up clip,
+// which starts lying on her back, sits up by SAT_UP, has swung round to the edge by OFF_BED and stands by STOOD.
+const ONTO_BACK = { clip: "sleep-turn", from: 6, to: 8 }
+const ONTO_SIDE = { clip: "sleep-turn", from: 8, to: 9.5 }
+const BACK_AGAIN = { clip: "sleep-turn", from: 11.5, to: 13 }
+const GETUP_END = 4.16
+const SAT_UP = 1
+const OFF_BED = 2.2
+const STOOD = 3
+// Woken by the visitor: how long she grumbles with her eyes shut before she tosses about, and how long she stays
+// cross once up.
+const GRUMBLE_SECONDS = 1.1
+const CROSS_SECONDS = 4
+const WAKE_CROSS = [{ ...ONTO_BACK, speed: 1.6, fade: .5 }, { ...ONTO_SIDE, speed: 1.4, fade: .35 },
+  { ...BACK_AGAIN, speed: 1.4, fade: .35 }, { clip: "getup", speed: 1.15, fade: .6 }]
+const WAKE = [{ ...ONTO_BACK, speed: 1.2, fade: .6 }, { clip: "getup", fade: .6 }]
+const INTO_BED = [{ clip: "getup", from: GETUP_END, to: 0, speed: 1.1, fade: .5 }, { ...ONTO_BACK, from: 8, to: 6, fade: .5 }]
 
 const damp = (value, target, rate, dt) => value + (target - value) * (1 - Math.exp(-rate * dt))
 const smooth = t => t * t * (3 - 2 * t)
@@ -33,6 +52,8 @@ export function createLife(yui, Vector3) {
   let facing = yaw
   let resumeAt = 0
   let fresh = false
+  // Out of bed crossly: 1 while it lasts, then easing off once she is up (seconds left).
+  let crossLeft = 0
   const look = new Vector3()
 
   const show = () => {
@@ -78,6 +99,7 @@ export function createLife(yui, Vector3) {
     if (next.kind === "walk" || next.kind === "arrive" || next.kind === "stairs") yui.setPose("walk", .35)
     else if (next.kind === "rise") yui.setPose("stand", .9)
     else if (next.kind === "sit") yui.setPose(spot.pose, SIT_SECONDS * .9)
+    else if (next.kind === "bed") yui.setPose("walk", .35)
   }
 
   function finish() {
@@ -144,8 +166,12 @@ export function createLife(yui, Vector3) {
       position.lerpVectors(step.from, to, t)
       if (kind === "sit") yaw = step.fromYaw + turnBy(step.fromYaw, to.turn) * Math.min(1, t * 1.6)
       if (t === 1) finish()
+    } else if (kind === "leave-bed" && !step.fading) {
+      leaveBed(dt)
+    } else if (kind === "bed" && !step.fading) {
+      intoBed(dt)
     } else {
-      // Stairs, bed: out of sight, across, back in sight.
+      // Stairs (and the bed when its clips are missing): out of sight, across, back in sight.
       if (step.phase === 0) {
         const t = Math.min(1, step.time / FADE_SECONDS)
         yui.setFade(1 - t)
@@ -181,6 +207,102 @@ export function createLife(yui, Vector3) {
     return true
   }
 
+  // Where she is on the bed while a getting-up clip plays at `time` (the same path backwards getting in).
+  function onBed(time, into = false) {
+    if (time < SAT_UP) {
+      // Getting up she moves over from where she slept; getting in she stays there to turn over.
+      if (into) position.copy(BED.back)
+      else position.lerpVectors(SPOTS.bed, BED.back, smooth(Math.min(1, time / .6)))
+      yaw = SPOTS.bed.turn
+    } else if (time < OFF_BED) {
+      const t = smooth((time - SAT_UP) / (OFF_BED - SAT_UP))
+      position.lerpVectors(BED.back, BED.edge, t)
+      yaw = SPOTS.bed.turn + Math.PI / 2 * t
+    } else {
+      const t = smooth(Math.min(1, (time - OFF_BED) / (STOOD - OFF_BED)))
+      position.lerpVectors(BED.edge, BED.floor, t)
+      // Off the edge she drops onto her feet, sooner than she moves out.
+      position.y = BED.edge.y + (BED.floor.y - BED.edge.y) * Math.min(1, t * 1.4)
+      yaw = SPOTS.bed.turn + Math.PI / 2
+    }
+  }
+
+  // Out of bed: grumbling first when the visitor woke her, turning over, sitting up, standing beside the bed; then
+  // (unless the visitor is waiting for her there) on to the bedside.
+  function leaveBed(dt) {
+    if (step.phase === 0) {
+      step.phase = step.cross ? "grumble" : "start"
+      if (step.cross) crossLeft = CROSS_SECONDS
+    }
+    if (step.phase === "grumble") {
+      if (step.time < GRUMBLE_SECONDS) return
+      step.phase = "start"
+    }
+    if (step.phase === "start") {
+      if (!yui.perform(step.cross ? WAKE_CROSS : WAKE)) {
+        // Without the clips: out of sight and back, as before.
+        Object.assign(step, { fading: true, phase: 0, time: 0 })
+        return
+      }
+      yui.setPose("stand")
+      step.phase = "acting"
+    }
+    if (step.phase === "acting") {
+      const acting = yui.acting
+      if (acting?.part.clip === "getup") onBed(acting.time)
+      else if (!acting) {
+        position.copy(BED.floor)
+        yaw = SPOTS.bed.turn + Math.PI / 2
+        step.phase = "walk"
+        step.from = position.clone()
+        if (attending) {
+          // She stays where she stood up; afterwards she first walks on to the bedside.
+          step = null
+          place = { node: "bedside", on: true }
+          return
+        }
+        yui.setPose("walk", .35)
+      }
+      if (step.cross) crossLeft = CROSS_SECONDS
+      return
+    }
+    if (walkTo(step.to, dt)) {
+      const next = steps[0]
+      finish()
+      if (!next || next.kind !== "walk") yui.setPose("stand", .4)
+    }
+  }
+
+  // Into bed: to the floor beside it, round with her back to it, sitting on the edge, lying back, turning over.
+  function intoBed(dt) {
+    if (step.phase === 0) {
+      if (step.from.distanceTo(BED.floor) > .02 && !walkTo(BED.floor, dt)) return
+      step.phase = "turn"
+      yui.setPose("stand", .4)
+    }
+    if (step.phase === "turn") {
+      if (!turnTo(SPOTS.bed.turn + Math.PI / 2, dt)) return
+      if (!yui.perform(INTO_BED)) {
+        Object.assign(step, { fading: true, phase: 0, time: 0 })
+        return
+      }
+      yui.setPose("sleep")
+      step.phase = "acting"
+    }
+    const acting = yui.acting
+    if (acting?.part.clip === "getup") onBed(acting.time, true)
+    else if (acting) {
+      // Turning over onto her front, from where she lay back to where she sleeps.
+      const t = smooth(Math.min(1, (8 - acting.time) / 2))
+      position.lerpVectors(BED.back, SPOTS.bed, t)
+      yaw = SPOTS.bed.turn
+    } else {
+      position.set(SPOTS.bed.x, SPOTS.bed.y, SPOTS.bed.z)
+      yaw = SPOTS.bed.turn
+      finish()
+    }
+  }
+
   // The visitor clicked her. Whatever she was in the middle of stops; seated or asleep she gets up first.
   function interrupt(viewer) {
     if (!place) return
@@ -199,7 +321,11 @@ export function createLife(yui, Vector3) {
   function getUp() {
     const spot = place.spot && SPOTS[place.spot]
     if (spot?.enter === "sit") begin({ kind: "rise", to: NODES[spot.node], node: spot.node })
-    else if (spot?.enter === "bed") begin({ kind: "leave-bed", to: NODES[spot.node], node: spot.node })
+    else if (spot?.enter === "bed") {
+      begin({ kind: "leave-bed", to: NODES[spot.node], node: spot.node })
+      // Woken in the night (not getting up anyway): cross about it.
+      step.cross = activity?.spot === "bed"
+    }
     else if (yui.pose !== "stand") yui.setPose("stand", .5)
   }
 
@@ -214,6 +340,7 @@ export function createLife(yui, Vector3) {
   // upperLift: how far the upper storey is lifted away, which carries her with it when she is upstairs.
   function update(dt, { minutes, moving, upperLift = 0, now = performance.now() }) {
     lift = upperLift
+    if (crossLeft > 0 && !(step?.kind === "leave-bed" && step.cross)) crossLeft = Math.max(0, crossLeft - dt)
     const wanted = activityAt(minutes)
     let changed = false
     if (!activity) {
@@ -277,7 +404,32 @@ export function createLife(yui, Vector3) {
 
   return {
     update, interrupt, resume, task,
-    get asleep() { return !attending && yui.pose === "sleep" },
+    // Asleep, or still with her eyes shut, grumbling and tossing about after being woken.
+    get asleep() {
+      if (step?.kind === "leave-bed" && !step.fading) {
+        return Boolean(step.cross) && (step.phase === "grumble" || step.phase === "start" || yui.acting?.part.clip === "sleep-turn")
+      }
+      if (step?.kind === "bed" && !step.fading) return step.phase === "acting" && yui.acting?.part.clip !== "getup"
+      return !attending && yui.pose === "sleep"
+    },
+    // How cross she is at being woken (0..1).
+    get grumpy() { return Math.min(1, crossLeft / 1.5) },
+    // The mattress under her while she lies or sits on the bed (her limbs rest on it), else null.
+    // (Not once she is off the edge, where she drops onto her feet.)
+    get support() {
+      const acting = yui.acting
+      const inBed = acting ? !(acting.part.clip === "getup" && acting.time > OFF_BED) : yui.pose === "sleep" && place?.spot === "bed" ||
+        step?.kind === "leave-bed" && ["grumble", "start"].includes(step.phase)
+      return inBed && position.y > BED.surface - .1 ? BED.surface + lift : null
+    },
+    // How far she is under the duvet (0..1).
+    get cover() {
+      const acting = yui.acting
+      if (acting?.part.clip === "getup") return 1 - smooth(Math.min(1, Math.max(0, (acting.time - SAT_UP) / (OFF_BED - SAT_UP))))
+      if (acting) return 1
+      if (step?.kind === "leave-bed" && ["grumble", "start"].includes(step.phase)) return 1
+      return yui.pose === "sleep" && place?.spot === "bed" && !step ? 1 : 0
+    },
     get attending() { return attending },
     // The way she faces the visitor once stopped (the closeup looks at her from there).
     get facing() { return facing },

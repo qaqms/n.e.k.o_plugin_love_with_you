@@ -14,7 +14,16 @@ export const SPOTS = {
   bench: { room: "porch", x: 8.5, y: .2, z: -.72, turn: 0, pose: "sit", node: "bench", enter: "sit" },
   desk: { room: "study", x: 3, y: 3.52, z: -1.5, turn: Math.PI, pose: "type", node: "desk", enter: "sit" },
   bedside: { room: "bedroom", x: -.3, y: 3.52, z: .25, turn: .35, pose: "stand", node: "bedside", enter: "walk" },
-  bed: { room: "bedroom", x: -1.6, y: 3.99, z: -1.3, turn: -Math.PI / 2, pose: "sleep", node: "bedside", enter: "bed" },
+  bed: { room: "bedroom", x: -1.6, y: 3.99, z: -1.3, turn: 0, pose: "sleep", node: "bedside", enter: "bed" },
+}
+
+// Getting into and out of bed (cottage-yui-life.mjs): lying on her back where she sits up, the edge she sits on,
+// facing the room, and the floor beside the bed where she stands up from it. `surface`: the mattress top.
+export const BED = {
+  back: { x: -1.5, y: 3.99, z: -1.38 },
+  edge: { x: -.95, y: 3.99, z: -1.15 },
+  floor: { x: -.38, y: 3.52, z: -1.15 },
+  surface: 3.97,
 }
 
 // The walking graph: points she can walk between in a straight line without going through furniture or walls.

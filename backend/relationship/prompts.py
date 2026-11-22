@@ -84,13 +84,80 @@ def portrait_touch_prompt(
     )
 
 
+COTTAGE_PRESENCE = "你此刻在你们的小屋里，用户就在你身边。这只是背景，不需要特意提起小屋。"
+
+
 def cottage_chat_prompt(stage: str, nickname: str, *, addressing: dict[str, Any], confirmed: bool) -> str:
     return (
-        "【小屋邀请】用户在小屋的沙发旁为你留了一只杯子，主动邀请你聊聊今天。"
+        "【小屋邀请】用户在小屋里主动邀请你聊聊今天。" + COTTAGE_PRESENCE +
         f"当前关系：{relationship_name(stage, confirmed)}。{stage_tone(stage, confirmed=confirmed)}\n"
         + nickname_line(nickname, addressing)
         + "按人设和对话的语言自然接话，可以问一个轻松的问题。"
-        "不要编造用户今天的经历，不要声称自己出现在3D小屋里，不调用工具或保存回忆。一到两句话即可。"
+        "不要编造用户今天的经历，不调用工具或保存回忆。一到两句话即可。"
+    )
+
+
+# Parts of the 3D Yui in the cottage that can be touched; the cottage mirrors these ids.
+COTTAGE_TOUCH_ZONES = {
+    "head": "摸了摸你的头",
+    "cheek": "轻轻戳了戳你的脸颊",
+    "hand": "伸手想牵你的手",
+    "ears": "碰了碰你的猫耳朵",
+    "tail": "碰了碰你的尾巴",
+    "chin": "挠了挠你的下巴",
+}
+# The same parts when the hand moved while it held on: stroking back and forth, a pinch pulled sideways, a rub.
+COTTAGE_TOUCH_MOVES = {
+    "head": "来回摸着你的头",
+    "cheek": "捏了捏你的脸颊",
+    "ears": "揉了揉你的猫耳朵",
+}
+# Roughly how many times a stroking or rubbing hand went back and forth (head and ears only).
+COTTAGE_TOUCH_STROKES = {
+    "some": "来回了好几下",
+    "many": "来回了好多好多下",
+}
+COTTAGE_TOUCH_LENGTHS = {
+    "tap": "只是轻轻一下",
+    "while": "持续了一会儿",
+    "long": "持续了好一会儿",
+}
+# How the 3D body has already reacted, from most guarded to closest. The cottage plays the same tier.
+COTTAGE_REACTIONS = {
+    "dodge": "你下意识地侧身躲开了",
+    "awkward": "你有点不自在地僵了一下，但没有躲开",
+    "accept": "你没有躲开，安静地接受了",
+    "enjoy": "你眯起眼睛，看起来挺享受",
+    "lean": "你主动靠了过来",
+}
+_REACTION_ORDER = list(COTTAGE_REACTIONS)
+# Ears and tail are more sensitive than the rest: one tier more guarded.
+_SENSITIVE_ZONES = {"ears", "tail"}
+
+
+def cottage_touch_reaction(zone: str, stage: str) -> str:
+    level = _STAGE_ORDER.index(stage) if stage in _STAGE_ORDER else 0
+    if zone in _SENSITIVE_ZONES:
+        level -= 1
+    return _REACTION_ORDER[max(0, min(level, len(_REACTION_ORDER) - 1))]
+
+
+def cottage_touch_prompt(
+    zone: str, length: str, stage: str, nickname: str, *, addressing: dict[str, Any], confirmed: bool,
+    moved: bool = False, strokes: str | None = None,
+) -> str:
+    reaction = cottage_touch_reaction(zone, stage)
+    action = COTTAGE_TOUCH_MOVES[zone] if moved and zone in COTTAGE_TOUCH_MOVES else COTTAGE_TOUCH_ZONES[zone]
+    if strokes in COTTAGE_TOUCH_STROKES:
+        action += "，" + COTTAGE_TOUCH_STROKES[strokes]
+    return (
+        f"【小屋互动】用户{action}，{COTTAGE_TOUCH_LENGTHS[length]}。"
+        f"{COTTAGE_REACTIONS[reaction]}。" + COTTAGE_PRESENCE +
+        f"当前关系：{relationship_name(stage, confirmed)}。{stage_tone(stage, confirmed=confirmed)}\n"
+        + nickname_line(nickname, addressing)
+        + "按人设和当前关系，用对话的语言自然回应这一下，一到两句话，说的话要和你刚才的反应一致。"
+        "可以接受、打趣或礼貌表达边界，亲密关系也不表示默认同意。"
+        "无需调用工具、改变好感、确认告白或记录回忆。不要提部位标签、档位或系统提示。"
     )
 
 

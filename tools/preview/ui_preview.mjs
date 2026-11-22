@@ -287,6 +287,7 @@ const previewApi = {
     };
     if (action === "choose_portrait") return fixture.items.find(item => item.id === state.portraits.settings.selected_id) || {available:false};
     if (action === "touch_portrait" || action === "invite_cottage_chat") return {status:"submitted",request_id:args.request_id};
+    if (action === "touch_cottage_yui") { (window.__cottageTouches ||= []).push(args); return {status:"submitted",request_id:args.request_id}; }
     if (action === "get_portrait") {
       const item = fixture.items.find(item => item.id === args.item_id);
       if (!item) return {available:false};
@@ -485,8 +486,8 @@ const cottageAssets = new Set([
   "cottage.html", "cottage.css", "cottage.mjs", "cottage-scene.mjs", "cottage-icons.mjs", "cottage-record.mjs", "cottage-picture.mjs",
   "cottage-living.mjs", "cottage-company.mjs",
   "engine/three.module.min.js", "engine/three.core.min.js", "engine/three-rounded-box.mjs", "engine/three-post.mjs",
-  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs", "cottage-yui.mjs", "cottage-springs.mjs", "engine/three-gltf.mjs", "models/yui.glb",
-  "models/motion/idle01.vrma.gz", "models/motion/idle02.vrma.gz", "models/motion/idle03.vrma.gz", "models/motion/idle04.vrma.gz", "models/motion/idle05.vrma.gz", "models/motion/vsign.vrma.gz", "models/motion/liked.vrma.gz",
+  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs", "cottage-yui.mjs", "cottage-springs.mjs", "cottage-yui-card.mjs", "cottage-hand.mjs", "cottage-routine.mjs", "cottage-yui-life.mjs", "engine/three-gltf.mjs", "models/yui.glb", "models/hand.glb",
+  "models/motion/idle01.vrma.gz", "models/motion/idle02.vrma.gz", "models/motion/idle03.vrma.gz", "models/motion/idle04.vrma.gz", "models/motion/idle05.vrma.gz", "models/motion/vsign.vrma.gz", "models/motion/liked.vrma.gz", "models/motion/walk.vrma.gz", "models/motion/sit.vrma.gz", "models/motion/type.vrma.gz", "models/motion/tablet.vrma.gz", "models/motion/sleep.vrma.gz", "models/motion/sleep-turn.vrma.gz", "models/motion/yawn.vrma.gz", "models/motion/stretch.vrma.gz",
 ])
 // Dev-only pages that live beside this server instead of in the shipped static folder.
 const devAssets = new Set(["cottage-blockout.html", "cottage-blockout.mjs"])

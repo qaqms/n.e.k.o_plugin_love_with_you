@@ -6,7 +6,11 @@ import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
 import { buildRoom } from "./cottage-scene.mjs?v=0.9.28"
 import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.28"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
-import { loadYui } from "./cottage-yui.mjs?v=0.9.35"
+import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.40"
+import { createLife } from "./cottage-yui-life.mjs?v=0.9.40"
+import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.40"
+import { createYuiCard } from "./cottage-yui-card.mjs?v=0.9.40"
+import { HAND_POSE, createHand } from "./cottage-hand.mjs?v=0.9.38"
 import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
 import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.27"
 import { createPicturePages } from "./cottage-picture.mjs?v=0.9.21"
@@ -66,6 +70,17 @@ function viewFrame(id) {
   ] }
 }
 const STORAGE_KEY = "love_with_you:cottage:v1"
+// The view and camera angle on leaving, kept for this run of the app only (session storage): coming back to the
+// cottage shows it as it was left, and after a restart it opens on the whole house.
+const CAMERA_KEY = "love_with_you:cottage:camera"
+function loadCamera() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CAMERA_KEY))
+    return VIEW_IDS.includes(saved?.view) && Number.isFinite(saved.azimuth) && Number.isFinite(saved.elevation) ? saved : null
+  } catch {
+    return null
+  }
+}
 const START_ANGLE = .69
 const START_HEIGHT = .52
 const clamp = T.MathUtils.clamp
@@ -184,7 +199,19 @@ export function startCottage() {
     return button
   }
   roomMenu.setAttribute("aria-label", roomsLabel)
-  for (const id of VIEW_IDS) textButton(roomMenu, viewNames[id]).dataset.view = id
+  for (const id of VIEW_IDS) {
+    const button = textButton(roomMenu, viewNames[id])
+    button.dataset.view = id
+    // Which room she is in (the badge is not part of the button's name).
+    if (id !== "overview") {
+      const badge = document.createElement("span")
+      badge.className = "yui-here"
+      badge.setAttribute("aria-hidden", "true")
+      badge.textContent = "Yui"
+      badge.hidden = true
+      button.append(badge)
+    }
+  }
   moodMenu.setAttribute("aria-label", moodLabel)
   itemMenu.setAttribute("aria-label", itemsLabel)
   document.querySelector("#mood-period-title").textContent = periodLabel
@@ -265,8 +292,9 @@ export function startCottage() {
   const yuiBounds = new T.Sphere()
   const yuiMatrix = new T.Matrix4()
   const yuiOnScreen = () => {
-    // Upstairs views look down through the upper floor, which hides her.
-    if (views[currentView].upper && upperLift < .5) return false
+    if (yui.shown < .01) return false
+    // Upstairs views look down through the upper floor, which hides her when she is downstairs.
+    if (!life?.upstairs && views[currentView].upper && upperLift < .5) return false
     yuiView.setFromProjectionMatrix(yuiMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse))
     yuiBounds.center.copy(yui.root.position).y += .8
     yuiBounds.radius = .9
@@ -275,6 +303,14 @@ export function startCottage() {
   // Yui loads after the room is up; the cottage works the same without her if the model cannot load.
   let yui = null
   let yuiMood = null
+  // The relationship stage (0 stranger .. 4 lover) sets how she takes a touch; without the panel, "fond".
+  let bondStage = 2
+  // Where the closeup looks: her chest and face, from in front of her (she turns to the visitor when clicked).
+  const yuiChest = new T.Vector3(.25, 1.24, 1.5)
+  let yuiAngle = .5
+  // Her day in the house (where she is, walking between places); null until she has loaded.
+  let life = null
+  let yuiRoom = ""
   const yuiFocus = new T.Vector3()
   // Yui's mood follows the relationship shown in the panel; it only changes how she looks and moves.
   const moodFrom = ({ bond, calendar }) => {
@@ -288,6 +324,7 @@ export function startCottage() {
   }
   loadYui(scene, "./models").then(loaded => {
     yui = loaded
+    life = createLife(loaded, T.Vector3)
     hitObjects.push(loaded.hitArea)
     hitLookup.set(loaded.hitArea, "yui")
     roomView.dataset.yui = "ready"
@@ -303,6 +340,7 @@ export function startCottage() {
   const reduced = matchMedia("(prefers-reduced-motion: reduce)")
   const views = Object.fromEntries(VIEW_IDS.map(id => [id, viewFrame(id)]))
   const center = new T.Vector3()
+  const savedCamera = loadCamera()
   let currentView = "living"
   // A room change blends from the framing on screen when it started, so a second change mid-flight does not jump.
   let viewMotion = null
@@ -316,8 +354,8 @@ export function startCottage() {
   let returnToMenu = false
   const raycaster = new T.Raycaster()
   const pointer = new T.Vector2()
-  let azimuth = START_ANGLE
-  let elevation = START_HEIGHT
+  let azimuth = savedCamera?.azimuth ?? START_ANGLE
+  let elevation = savedCamera?.elevation ?? START_HEIGHT
   let targetAzimuth = azimuth
   let targetElevation = elevation
   let lamp = Number(preferences.lamp)
@@ -417,7 +455,25 @@ export function startCottage() {
     } else openKeepsake("notebook")
   } })
   const projector = createProjector(companyNames)
-  const closeups = { record: station, picture: pages, notebook, shelf, seat, calendar, projector, company }
+  // A touch in progress: the zone, and the pointer holding it (none for the card's buttons and keys).
+  let held = null
+  // The visitor's hand in touch mode: it follows the pointer and rests on her while a touch is held.
+  const hand = createHand(scene, "./models")
+  const handAt = { point: new T.Vector3(), zone: "none", inside: false, start: new T.Vector3(),
+    anchor: null, local: new T.Vector3(), inverse: new T.Matrix4() }
+  // `at` is the input event's own time, so a slow frame does not make a touch look longer than it was.
+  function pressTouch(zone, side = 0, pointer = null, at = performance.now()) {
+    if (!yui || held || closeup !== "yui" || !opening || yui.touching()) return false
+    if (!yui.touchStart(zone, touchTier(zone, bondStage), side)) return false
+    held = { zone, pointer, side, since: at, travel: 0, pinched: false, passes: 0, way: 0, peak: 0 }
+    yuiCard.busy(true)
+    invalidate()
+    return true
+  }
+  const yuiCard = createYuiCard({ locale, linked, send, press: (zone, at) => pressTouch(zone, 0, null, at),
+    release: at => releaseTouch(at), changed: () => invalidate() })
+  let giftsSeen = null
+  const closeups = { record: station, picture: pages, notebook, shelf, seat, calendar, projector, company, yui: yuiCard }
   backButton.append(icon("ChevronLeft"))
   backButton.title = backLabel(locale)
   backButton.setAttribute("aria-label", backButton.title)
@@ -584,6 +640,17 @@ export function startCottage() {
       const pitch = closeup === "company" ? .65 : 0
       aimCloseup(point, angle, pitch, 3.2, motion)
     }
+    if (focus > 0 && closeup === "yui") {
+      // Her upper body fills the view, beside the card (above it on narrow screens).
+      const motion = T.MathUtils.smoothstep(focus, 0, 1)
+      const mix = (from, to) => T.MathUtils.lerp(from, to, motion)
+      const closeSpan = compact ? 1.7 : 1.02
+      span = zoom(span, closeSpan, motion)
+      amount = motion
+      midX = mix(midX, compact ? 0 : closeSpan * aspect * .17)
+      midY = mix(midY, compact ? -closeSpan * .13 : 0)
+      aimCloseup(yuiChest, yuiAngle - .05, .08, 3, motion)
+    }
     if (returnToSeat && focus === 0) aimCamera(source.point, source.angle, source.pitch, source.distance)
     // The field of view widens as the camera nears an object, while `span` keeps the framing at the
     // target plane, so DOM overlays sized from it still line up with the model.
@@ -725,6 +792,10 @@ export function startCottage() {
       calendar.show(arrival, opening && focus === 1)
       showThread(arrival)
     }
+    if (closeup === "yui") {
+      yuiCard.show(T.MathUtils.smoothstep(focus, .8, 1), opening && focus === 1)
+      yuiCard.busy(Boolean(yui?.touching()))
+    }
     if (closeup === "projector") {
       room.projector.reveal(T.MathUtils.smoothstep(focus, .36, .92))
       projector.show(T.MathUtils.smoothstep(focus, .87, 1), opening && focus === 1)
@@ -740,7 +811,8 @@ export function startCottage() {
     }
     const night = light("glow")
     // Leaning in to read something at night lifts the ambient light; the sofa view keeps the evening mood.
-    const reading = closeup && closeup !== "seat" && closeup !== "projector" ? cameraAmount * night : 0
+    // Not for Yui: she is partly self-lit already, and the boost overexposed her face up close.
+    const reading = closeup && !["seat", "projector", "yui"].includes(closeup) ? cameraAmount * night : 0
     const projectionShade = (closeup === "projector" ? 1 - focus * .25 : 1) * (1 + 1.5 * reading)
     sky.intensity = (.4 + .2 * curtains) * light("sky") * projectionShade
     key.intensity = (.36 + .84 * curtains) * light("key") * projectionShade * (1 + 1.5 * reading)
@@ -748,7 +820,10 @@ export function startCottage() {
     key.color.copy(lightColors[from]).lerp(lightColors[from + 1], blend)
     scene.environmentIntensity = (.3 + .16 * curtains) * light("env") * projectionShade
     // Without its shadow map the sun cannot be blocked by the curtains, so dim it directly.
-    room.sun.intensity = 5.2 * light("sun") * projectionShade * (room.sun.castShadow ? 1 : .2 + .8 * curtains)
+    // Close to Yui the strong dusk sun glares on her toon shading; it softens while the camera is near her.
+    const sunGlare = closeup === "yui" ? cameraAmount * clamp((light("sun") - 1) / .2, 0, 1) : 0
+    room.sun.intensity = 5.2 * light("sun") * projectionShade * (room.sun.castShadow ? 1 : .2 + .8 * curtains) *
+      (1 - .45 * sunGlare)
     mood("sun", room.sun.color)
     mood("from", room.sun.position)
     mood("to", room.sun.target.position)
@@ -769,10 +844,35 @@ export function startCottage() {
     // Yui's self-lit share follows the room: full by day, dimmer at night, brighter again with the lamp on.
     // She watches the visitor (the camera), and whatever keepsake is being opened.
     const opened = closeup && focus > .2 ? room.hits.find(item => item.id === closeup)?.object : null
+    // The low dusk sun already lights her front strongly, so her self-lit share drops while it is out.
+    const glow = Math.min(1, .3 + .7 * light("env") * (1 - .7 * Math.max(0, light("sun") - 1) / .2) + .3 * lamp * night)
+    // The hand shows in touch mode while the pointer is over the room, or while a card button holds a touch.
+    const handShown = Boolean(touchReady() && (handAt.inside || (held && !held.pointer)))
+    if (handShown !== hand.object.visible) {
+      hand.show(handShown)
+      canvas.toggleAttribute("data-hand", handShown)
+    }
+    if (handShown && held && !held.pointer) scriptedHand(timestamp)
+    else if (handShown && held && handAt.anchor) placeHand(handAt.point.copy(handAt.local).applyMatrix4(handAt.anchor.matrixWorld), held.zone)
+    hand.glow(glow)
+    hand.scratch(held?.zone === "chin")
+    const handMoving = hand.update(dt, !motionAllowed)
+    // Where her day has her (walking there when motion is allowed), then her body, face and eyes.
+    const lived = life ? life.update(dt, {
+      minutes: cottageMinutes(preferences.period), moving: motionAllowed, upperLift: 4.2 * upperLift ** 2,
+    }) : null
+    if (life) {
+      yui.chest(yuiChest)
+      if (life.attending) yuiAngle = life.facing
+      showYuiRoom(life.room)
+      const doing = life.attending ? "with-you" : life.activity
+      if (roomView.dataset.yuiDoing !== doing) roomView.dataset.yuiDoing = doing
+    }
     const yuiMoving = yui ? yui.update(dt, {
-      moving: motionAllowed, glow: Math.min(1, .3 + .7 * light("env") + .3 * lamp * night), viewer: camera.position,
+      moving: motionAllowed, glow, viewer: camera.position,
       focus: opened ? opened.getWorldPosition(yuiFocus) : null, hovered: canvas.dataset.target === "yui",
-    }) : false
+      task: life?.task() || null, asleep: Boolean(life?.asleep),
+    }) || Boolean(lived?.changed) : false
     const ambientActive = ambient.update(dt, {
       enabled: motionAllowed,
       night, sun: Math.min(1, light("sun")) * curtains, lift: 4.2 * upperLift ** 2, upperShown: upperLift < .995,
@@ -808,6 +908,11 @@ export function startCottage() {
         roomView.dataset.view = "room"
         const previous = closeup
         closeup = null
+        // Back from her closeup, she goes on with her day after a moment.
+        if (previous === "yui" && life) {
+          life.resume()
+          invalidate()
+        }
         const next = afterReturn
         afterReturn = null
         if (next) openKeepsake(next)
@@ -817,7 +922,7 @@ export function startCottage() {
           if (returnToMenu && itemMenu.contains(elements[previous])) {
             toggleMenu(itemMenu, true)
             elements[previous].focus({ preventScroll: true })
-          } else (itemMenu.contains(elements[previous]) ? elements.items : elements[previous]).focus({ preventScroll: true })
+          } else (itemMenu.contains(elements[previous]) ? elements.items : elements[previous] || elements.rooms).focus({ preventScroll: true })
           returnToMenu = false
         }
       }
@@ -825,7 +930,8 @@ export function startCottage() {
     if (composer) composer.render(dt)
     else renderer.render(scene, camera)
     const animating = azimuth !== targetAzimuth || elevation !== targetElevation || lamp !== Number(preferences.lamp) ||
-      curtains !== Number(preferences.curtains) || time !== wantedTime || focusMotion || spinning || viewMotion || houseMoving
+      curtains !== Number(preferences.curtains) || time !== wantedTime || focusMotion || spinning || viewMotion || houseMoving ||
+      handMoving || Boolean(handShown && held && !held.pointer)
     // When "auto" quality cannot keep up during motion, step down one tier. Yui alone never forces "low",
     // which would stop her moving.
     const yuiShown = yuiMoving && yuiOnScreen()
@@ -891,7 +997,25 @@ export function startCottage() {
     roomName.textContent = viewNames[id]
     for (const button of roomMenu.querySelectorAll("button")) button.setAttribute("aria-pressed", String(button.dataset.view === id))
     delete canvas.dataset.target
+    rememberCamera()
     invalidate()
+  }
+
+  function rememberCamera() {
+    try {
+      sessionStorage.setItem(CAMERA_KEY, JSON.stringify({ view: currentView, azimuth: targetAzimuth, elevation: targetElevation }))
+    } catch { /* the camera then starts on the whole house next time */ }
+  }
+
+  // The room menu marks the room she is in.
+  function showYuiRoom(id) {
+    if (id === yuiRoom) return
+    yuiRoom = id
+    roomView.dataset.yuiRoom = id
+    for (const button of roomMenu.querySelectorAll("button")) {
+      const badge = button.querySelector(".yui-here")
+      if (badge) badge.hidden = button.dataset.view !== id
+    }
   }
 
   function applyQuality(level = resolveQuality()) {
@@ -949,6 +1073,7 @@ export function startCottage() {
   function changeView(angle, height) {
     targetAzimuth = clamp(angle, .13, 1.24)
     targetElevation = clamp(height, .33, .81)
+    rememberCamera()
     invalidate()
   }
 
@@ -986,6 +1111,28 @@ export function startCottage() {
     approach(id)
   }
 
+  // The hand leaves her: the companion hears about every touch, with how long it lasted.
+  function releaseTouch(at = performance.now()) {
+    handAt.anchor = null
+    if (!held || !yui) return
+    const { zone, since } = held
+    // Stroking her head, pinching her cheek and rubbing an ear tell the companion so; a still hand does not.
+    const moved = held.pinched || (TOUCH_MOVE[zone] !== undefined && held.travel > TOUCH_MOVE[zone])
+    const strokes = moved && STROKED.includes(zone) ? strokesFrom(held.passes) : null
+    held = null
+    yui.touchEnd()
+    const seconds = Math.max(0, (at - since) / 1000)
+    yui.touchFollow(0)
+    const length = seconds < .7 ? "tap" : seconds < 2.5 ? "while" : "long"
+    delete canvas.dataset.touch
+    invalidate()
+    if (!linked) return
+    const character = yuiCard.character()
+    if (!character) yuiCard.touched("offline")
+    else send("love-with-you-cottage-touch", { token: crypto.randomUUID(), character, zone, length, moved,
+      ...(strokes ? { strokes } : {}) })
+  }
+
   function approach(id) {
     closeup = id
     if (id === "picture" && recentNote && pages.select(recentNote.character, recentNote.id)) recentNote = null
@@ -1003,6 +1150,7 @@ export function startCottage() {
 
   function closeKeepsake() {
     if (!opening) return
+    releaseTouch()
     opening = false
     if (closeup === "record") station.hide()
     if (closeup === "seat") {
@@ -1025,13 +1173,23 @@ export function startCottage() {
       if (event.data.type === "love-with-you-cottage-room-data") {
         notebook.update(payload)
         shelf.update(payload.gifts)
+        // A gift that arrives while she is in the closeup (sent from the bag) makes her happy.
+        const ids = new Set((payload.gifts || []).map(gift => gift?.id))
+        if (giftsSeen && closeup === "yui" && [...ids].some(id => !giftsSeen.has(id))) {
+          yui?.cheer()
+          invalidate()
+        }
+        giftsSeen = ids
       }
+      if (event.data.type === "love-with-you-cottage-touch-result") yuiCard.touched(payload.status)
       if (event.data.type === "love-with-you-cottage-note-result") notebook.result(payload)
       if (event.data.type === "love-with-you-cottage-company-data") {
         company.update(payload.company)
         calendar.update(payload)
         projector.update(payload.watch)
         room.notebook.card.visible = payload.calendar.some(item => item.today)
+        yuiCard.update(payload.company)
+        if (Number.isFinite(payload.bond?.stage)) bondStage = clamp(Math.round(payload.bond.stage), 0, 4)
         yuiMood = moodFrom(payload)
         roomView.dataset.yuiMood = Object.entries(yuiMood)
           .map(([key, value]) => key === "warmth" ? `warmth:${value}` : value ? key : "").filter(Boolean).join(" ")
@@ -1039,7 +1197,7 @@ export function startCottage() {
         showOccasion = room.notebook.card.visible && payload.canWrite
         invalidate()
       }
-      if (event.data.type === "love-with-you-cottage-invite-result") company.result(payload)
+      if (event.data.type === "love-with-you-cottage-invite-result" && !yuiCard.invited(payload)) company.result(payload)
     })
     window.parent.postMessage({ type: "love-with-you-cottage-ready" }, location.origin)
   }
@@ -1055,12 +1213,26 @@ export function startCottage() {
   })
   document.addEventListener("visibilitychange", invalidate)
   reduced.addEventListener("change", invalidate)
-  setInterval(() => { if (!document.hidden && time !== periodIndex()) invalidate() }, 30_000)
+  // The light follows the clock, and so does she (without motion she is redrawn where the time has her).
+  setInterval(() => {
+    if (document.hidden) return
+    if (time !== periodIndex() || (life && activityAt(cottageMinutes(preferences.period)).id !== life.activity)) invalidate()
+  }, 30_000)
 
   function activate(id) {
     closeMenus()
     if (id === "yui") {
-      yui?.react()
+      // She stops what she is doing (getting up if seated or asleep) and turns to the visitor, and the camera
+      // comes closer to her, in the room she is in.
+      if (!yui) return
+      life?.interrupt(camera.position)
+      if (life) yuiAngle = life.facing
+      yui.react()
+      const here = life?.room || "living"
+      if (here !== currentView || viewMotion) {
+        pendingOpen = "yui"
+        if (here !== currentView) goTo(here)
+      } else openKeepsake("yui")
       invalidate()
     } else if (id.startsWith("room:")) goTo(id.slice(5))
     else if (id === "lamp" || id === "curtains") toggle(id)
@@ -1103,9 +1275,13 @@ export function startCottage() {
     pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1,
       1 - (event.clientY - bounds.top) / bounds.height * 2)
     raycaster.setFromCamera(pointer, camera)
+    // She can be clicked wherever she is in sight: not while out of sight on the stairs or getting into bed, nor
+    // behind a wall or under the upper floor.
+    const yuiSeen = Boolean(yui && !viewMotion && yuiInSight())
+    if (yuiSeen && currentView !== "living") return "yui"
     if (currentView === "living" && !viewMotion) {
       const intersection = raycaster.intersectObjects(hitObjects, false)
-        .find(hit => showOccasion || hitLookup.get(hit.object) !== "occasion")
+        .find(hit => (showOccasion || hitLookup.get(hit.object) !== "occasion") && (hit.object !== yui?.hitArea || yuiSeen))
       if (intersection) return hitLookup.get(intersection.object)
     }
     // Any other room can be entered by clicking it; upstairs only while it is in place.
@@ -1114,6 +1290,30 @@ export function startCottage() {
       (upperShown || ROOMS.find(item => item.id === id).storey === 0)).map(([object]) => object)
     const roomHit = raycaster.intersectObjects(rooms, false)[0]
     return roomHit ? `room:${roomLookup.get(roomHit.object)}` : undefined
+  }
+
+  // Whether the pointer's ray reaches her before any shown part of the house (walls, floors).
+  const drawn = object => {
+    for (let item = object; item; item = item.parent) if (!item.visible) return false
+    return Array.isArray(object.material) || !object.material || object.material.opacity > .5
+  }
+  // Walls, floors, the roof and big furniture hide her; chairs and small things in front of her do not.
+  let screens = null
+  function yuiInSight() {
+    if (yui.shown < .9) return false
+    const hit = raycaster.intersectObject(yui.hitArea, false)[0]
+    if (!hit) return false
+    if (!screens) {
+      const size = new T.Vector3()
+      screens = []
+      for (const storey of room.house.storeys) storey.traverse(object => {
+        if (!object.isMesh) return
+        new T.Box3().setFromObject(object).getSize(size)
+        if ([size.x, size.y, size.z].filter(value => value >= 1.2).length >= 2) screens.push(object)
+      })
+    }
+    const blocker = raycaster.intersectObjects(screens, false).find(item => drawn(item.object))
+    return !blocker || blocker.distance > hit.distance
   }
 
   function showHover(id, event) {
@@ -1130,7 +1330,152 @@ export function startCottage() {
     delete canvas.dataset.dragging
   }
 
+  // In the closeup's touch mode, the pointer touches her instead of turning the room.
+  const touchReady = () => closeup === "yui" && opening && focus === 1 && yuiCard.mode === "touch" && yui
+  function zoneAt(event) {
+    const bounds = canvas.getBoundingClientRect()
+    pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1, 1 - (event.clientY - bounds.top) / bounds.height * 2)
+    raycaster.setFromCamera(pointer, camera)
+    // The head zone is the largest; a smaller part (ears, cheek, hand) just as near wins over it.
+    const hits = raycaster.intersectObjects(yui.zones, false)
+    const hit = hits.find(item => item.object.userData.zone !== "head" && item.distance - hits[0].distance < .1) || hits[0]
+    if (hit) Object.assign(hit.object.userData, { point: hit.point, object: hit.object })
+    return hit?.object.userData
+  }
+  // How far the hand goes sideways while it holds on (metres) for her to follow it fully, and how far it must have
+  // travelled to count as a stroke, a pinch or a rub (the hand and tail have no such move).
+  const TOUCH_REACH = { head: .08, cheek: .035, ears: .04, chin: .03 }
+  const TOUCH_MOVE = { head: .03, cheek: .012, ears: .015 }
+  // Stroking her head and rubbing an ear also tell the companion roughly how many times: a few, or many.
+  const STROKED = ["head", "ears"]
+  const strokesFrom = passes => passes >= 8 ? "many" : passes >= 3 ? "some" : null
+  const handRight = new T.Vector3()
+  const pullPoint = new T.Vector3()
+  const handForward = new T.Vector3()
+  const handFingers = new T.Vector3()
+  const handUp = new T.Vector3()
+  const worldUp = new T.Vector3(0, 1, 0)
+  // Where the hand goes and how it turns: it comes in from the right of the view, across rather than into the
+  // screen (so its cuff never faces the camera or covers her): palm down on her head and ears with its back
+  // turned a little toward the visitor, the index finger into her cheek, palm up under her hand and tail.
+  function placeHand(point, zone) {
+    camera.matrixWorld.extractBasis(handRight, handUp, handForward)
+    handForward.negate()
+    handUp.copy(worldUp)
+    if (zone === "cheek") handFingers.copy(handRight).multiplyScalar(-.85).addScaledVector(handForward, .4)
+    else if (zone === "chin") {
+      // Palm up, fingertips toward her and under her chin.
+      handFingers.copy(handForward).multiplyScalar(.6).addScaledVector(handRight, -.65).addScaledVector(worldUp, .25)
+      handUp.negate().addScaledVector(handForward, -.25)
+    } else if (zone === "hand" || zone === "tail") {
+      handFingers.copy(handRight).negate().addScaledVector(handForward, .15)
+      handUp.negate().addScaledVector(handForward, -.3)
+    } else if (zone === "none") {
+      handFingers.copy(handRight).multiplyScalar(-.85).addScaledVector(worldUp, .15).addScaledVector(handForward, .1)
+      handUp.addScaledVector(handForward, -.5)
+    } else {
+      handFingers.copy(handRight).negate().addScaledVector(worldUp, -.15).addScaledVector(handForward, -.1)
+      handUp.addScaledVector(handForward, -.35)
+    }
+    hand.setPose(zone === "cheek" && held?.pinched ? "pinch" : HAND_POSE[zone])
+    hand.aim(point, handFingers, handUp)
+  }
+  // From a pointer: over a part of her the hand hovers just off it (rests on it while held); elsewhere it floats
+  // at her depth. While stroking her head, its sideways travel turns her head a little with it.
+  function aimHand(event) {
+    const zone = zoneAt(event)
+    const touching = held && held.pointer === event.pointerId
+    // A pinched cheek stays pinched: the hand keeps hold of it (and goes where it goes), and pulling only draws her
+    // head after the hand.
+    if (touching && held.pinched && handAt.anchor) {
+      camera.matrixWorld.extractBasis(handRight, handUp, handForward)
+      raycaster.ray.at(raycaster.ray.origin.distanceTo(handAt.start), pullPoint)
+      yui.touchFollow(clamp(pullPoint.sub(handAt.start).dot(handRight) / TOUCH_REACH.cheek, -1, 1))
+      invalidate()
+      return
+    }
+    if (zone && (!touching || zone.zone === held.zone)) {
+      handAt.zone = touching ? held.zone : zone.zone
+      handAt.point.copy(zone.point)
+      // Hovering, it stays just off her; held, it rests on her head and ears, and in front of her hand and tail.
+      if (!touching || held.zone === "hand" || held.zone === "tail") handAt.point.addScaledVector(raycaster.ray.direction, -.035)
+      if (touching) holdAt(zone.object)
+    } else {
+      if (!touching) handAt.zone = "none"
+      handAt.anchor = null
+      const depth = raycaster.ray.origin.distanceTo(touching ? handAt.start : yuiChest)
+      raycaster.ray.at(depth, handAt.point)
+      // Moving past the edge of the part it holds: the hand stays on her and only slides sideways, a little past.
+      const reach = touching && TOUCH_REACH[held.zone]
+      if (reach) {
+        camera.matrixWorld.extractBasis(handRight, handUp, handForward)
+        const sideways = clamp(handAt.point.sub(handAt.start).dot(handRight), -reach * .9, reach * .9)
+        handAt.point.copy(handAt.start).addScaledVector(handRight, sideways)
+      }
+    }
+    // While it holds on, her head goes a little with the hand; on her cheek, a hand pulled sideways pinches.
+    if (touching && TOUCH_REACH[held.zone]) {
+      camera.matrixWorld.extractBasis(handRight, handUp, handForward)
+      const sideways = handAt.point.clone().sub(handAt.start).dot(handRight)
+      held.travel = Math.max(held.travel, Math.abs(sideways))
+      countPasses(sideways)
+      if (held.zone === "cheek" && !held.pinched && held.travel > TOUCH_MOVE.cheek) {
+        // The pinch takes hold just in front of her cheek, so the fingers stay in view.
+        held.pinched = true
+        handAt.point.addScaledVector(raycaster.ray.direction, -.014)
+        if (handAt.anchor) holdAt(handAt.anchor)
+      }
+      yui.touchFollow(clamp(sideways / TOUCH_REACH[held.zone], -1, 1))
+    }
+    placeHand(handAt.point, handAt.zone)
+    invalidate()
+  }
+  // A held hand keeps its place on the part of her it holds, so it goes along when she leans in or reaches
+  // (but not when she pulls away: then it stays where she was).
+  function holdAt(object) {
+    handAt.anchor = touchTier(held.zone, bondStage) === "dodge" ? null : object
+    if (handAt.anchor) handAt.local.copy(handAt.point).applyMatrix4(handAt.inverse.copy(object.matrixWorld).invert())
+  }
+  // Each sweep of a stroking or rubbing hand that turns back after going far enough is one more pass.
+  function countPasses(sideways) {
+    const sweep = (TOUCH_MOVE[held.zone] || 0) * .6
+    if (!STROKED.includes(held.zone)) return
+    if (!held.way) {
+      if (Math.abs(sideways) > sweep) Object.assign(held, { way: Math.sign(sideways), passes: 1, peak: sideways })
+    } else if (held.way * (sideways - held.peak) > 0) held.peak = sideways
+    else if (held.way * (held.peak - sideways) > sweep) {
+      held.way = -held.way
+      held.passes += 1
+      held.peak = sideways
+    }
+  }
+  // Card buttons and keys have no pointer: the hand goes to the part by itself, and strokes her head.
+  function scriptedHand(now) {
+    const sphere = yui.zones.find(item => item.userData.zone === held.zone && item.userData.side >= 0) ||
+      yui.zones.find(item => item.userData.zone === held.zone)
+    sphere.getWorldPosition(handAt.point)
+    camera.matrixWorld.extractBasis(handRight, handUp, handForward)
+    handAt.point.addScaledVector(handForward, .03)
+    if (held.zone === "head" || held.zone === "ears") {
+      // Strokes her head, or rubs an ear, back and forth.
+      const sway = Math.sin((now - held.since) / 1000 * (held.zone === "head" ? 5.5 : 7))
+      handAt.point.addScaledVector(handRight, sway * (held.zone === "head" ? .045 : .015))
+      yui.touchFollow(sway * .7)
+    }
+    placeHand(handAt.point, held.zone)
+  }
   canvas.addEventListener("pointerdown", event => {
+    if (event.button === 0 && touchReady() && !held) {
+      handAt.inside = true
+      const zone = zoneAt(event)
+      if (zone && pressTouch(zone.zone, zone.side, event.pointerId, event.timeStamp)) {
+        canvas.setPointerCapture(event.pointerId)
+        canvas.dataset.touch = "held"
+        handAt.start.copy(zone.point)
+      }
+      aimHand(event)
+      return
+    }
     if (event.button !== 0 || drag || closeup) return
     closeMenus()
     hoverLabel.hidden = true
@@ -1139,6 +1484,15 @@ export function startCottage() {
     canvas.setPointerCapture(event.pointerId)
   })
   canvas.addEventListener("pointermove", event => {
+    if (touchReady() && (!held || held.pointer === event.pointerId)) {
+      handAt.inside = true
+      if (!held) {
+        const zone = zoneAt(event)
+        if (zone && !yui.touching()) canvas.dataset.touch = zone.zone
+        else delete canvas.dataset.touch
+      }
+      aimHand(event)
+    }
     if (closeup) return
     if (!drag) {
       const id = hitAt(event)
@@ -1156,14 +1510,21 @@ export function startCottage() {
       changeView(drag.azimuth - dx * .006, drag.elevation + dy * .004)
     }
   })
+  const endHeld = event => { if (held && held.pointer === event.pointerId) releaseTouch(event.timeStamp) }
+  canvas.addEventListener("pointercancel", endHeld)
   canvas.addEventListener("pointerup", event => {
+    endHeld(event)
     if (event.pointerId !== drag?.id) return
     const id = !drag.moved && hitAt(event)
     clearDrag()
     if (id) activate(id)
   })
-  canvas.addEventListener("lostpointercapture", clearDrag)
+  canvas.addEventListener("lostpointercapture", event => {
+    endHeld(event)
+    clearDrag()
+  })
   canvas.addEventListener("pointerleave", () => {
+    if (!held?.pointer) handAt.inside = false
     delete canvas.dataset.target
     hoverLabel.hidden = true
   })
@@ -1230,7 +1591,7 @@ export function startCottage() {
   })
   applyQuality()
   syncControls()
-  goTo("living")
+  goTo(savedCamera?.view || "overview")
   viewMotion = null
   controls.hidden = false
 }

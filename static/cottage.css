@@ -68,6 +68,9 @@ h1 { margin: 0; font-size: 23px; font-weight: 650; line-height: 1.25; overflow-w
 }
 .cottage-menu button:hover { background: #f3ead9; }
 .cottage-menu button[aria-pressed="true"] { border-color: #b79970; background: #f1e1c6; color: #4b3a2c; }
+/* The room Yui is in right now. */
+.yui-here { margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #f6d9cf; color: #8a4a3c; font-size: 11px; font-weight: 600; }
+.yui-here[hidden] { display: none; }
 #room-menu, .menu-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .menu-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
 .menu-list button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; text-align: left; }
@@ -564,7 +567,7 @@ button:focus-visible { outline: 2px solid #306c62; outline-offset: 1px; }
   box-shadow: 0 2px 10px #21433940;
 }
 #seat-empty:hover { background: #d9eee3; }
-#company-cups, #calendar-sheet, #projector-screen { opacity: var(--arrival, 0); }
+#company-cups, #calendar-sheet, #projector-screen, #yui-card { opacity: var(--arrival, 0); }
 #company-cups {
   --cup-label: min(258px, calc(100% - 24px));
   position: absolute;
@@ -696,3 +699,23 @@ button:focus-visible { outline: 2px solid #306c62; outline-offset: 1px; }
   .control-group { gap: 1px; padding: 2px; }
   button { width: 32px; height: 38px; }
 }
+
+/* Yui's closeup: the card stands to her right, or below her on narrow screens. */
+#yui-card {
+  position: absolute;
+  top: 50%;
+  right: max(16px, 7%);
+  width: min(290px, calc(100% - 32px));
+  padding: 12px 14px;
+  transform: translateY(-50%);
+}
+#yui-card h2 { margin: 0; font-size: 17px; }
+#yui-hint, #yui-status { margin: 6px 0 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+#yui-done { border-style: dashed; }
+@media (max-width: 574px) {
+  #yui-card { top: auto; right: 12px; bottom: 12px; left: 12px; width: auto; transform: none; }
+}
+#room[data-view] canvas[data-touch] { cursor: grab; }
+#room[data-view] canvas[data-touch="held"] { cursor: grabbing; }
+/* The 3D hand is the pointer in touch mode. */
+#room[data-view] canvas[data-hand] { cursor: none; }

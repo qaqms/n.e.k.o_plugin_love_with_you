@@ -113,6 +113,8 @@ _ART_MIME = {
 _ART_MAX_BYTES = 1024 * 1024
 _ART_CACHE_LIMIT = 6
 _TOUCH_COOLDOWN = 8.0
+# Touching Yui in the cottage is gated by her reaction there; this only stops scripted floods.
+_COTTAGE_TOUCH_FLOOR = 1.0
 _TOUCH_REQUEST_ID = re.compile(r"[a-zA-Z0-9_-]{8,80}")
 
 
@@ -186,8 +188,9 @@ class LoveWithYouPlugin(NekoPluginBase):
         self._last_tool_verify = _NEVER
         # image path -> (version, data URL); insertion-ordered for eviction
         self._art_cache: dict[str, tuple[str, str]] = {}
-        self._touch_receipts: dict[str, tuple[str, str, str]] = {}
+        self._touch_receipts: dict[str, tuple[str, str, str, dict[str, Any]]] = {}
         self._touch_ready_at = _NEVER
+        self._cottage_touch_ready_at = _NEVER
         self._portraits: portraits.PortraitLibrary | None = None
         self._appearance: appearance.AppearancePrefs | None = None
         self._adventure: adventure.AdventureStore | None = None
@@ -274,7 +277,7 @@ class LoveWithYouPlugin(NekoPluginBase):
                 self._latest_message_ts.clear()
                 self._art_cache.clear()
                 self._touch_receipts.clear()
-                self._touch_ready_at = _NEVER
+                self._touch_ready_at = self._cottage_touch_ready_at = _NEVER
                 self._confession_turns.clear()
                 self._auto.update(bus_ok=None, bus_error="", conversation_sources={})
                 self._bus_read_error = ""
@@ -2268,7 +2271,34 @@ class LoveWithYouPlugin(NekoPluginBase):
     async def invite_cottage_chat(self, request_id: Any = None, character: Any = None, **_: Any):
         return await self._respond_to_panel_gesture(request_id, character, "cottage_chat")
 
-    async def _respond_to_panel_gesture(self, request_id: Any, character: Any, zone: str):
+    @ui.action(label="小屋抚摸", refresh_context=False)
+    @plugin_entry(id="touch_cottage_yui", name="小屋抚摸", input_schema={
+        "type": "object", "properties": {
+            "request_id": {"type": "string"}, "character": {"type": "string"},
+            "zone": {"type": "string", "enum": list(prompts.COTTAGE_TOUCH_ZONES)},
+            "length": {"type": "string", "enum": list(prompts.COTTAGE_TOUCH_LENGTHS)},
+            # The hand moved while it held on (stroked, pinched, rubbed); only the parts that have such a move.
+            "moved": {"type": "boolean"},
+            # Roughly how many times a stroke or rub went back and forth; only with moved, on the head or ears.
+            "strokes": {"type": "string", "enum": list(prompts.COTTAGE_TOUCH_STROKES)},
+        }, "required": ["request_id", "character", "zone", "length"],
+    })
+    async def touch_cottage_yui(self, request_id: Any = None, character: Any = None, zone: Any = None,
+                                length: Any = None, moved: Any = False, strokes: Any = None, **_: Any):
+        if (not isinstance(zone, str) or zone not in prompts.COTTAGE_TOUCH_ZONES
+                or not isinstance(length, str) or length not in prompts.COTTAGE_TOUCH_LENGTHS
+                or not isinstance(moved, bool) or (moved and zone not in prompts.COTTAGE_TOUCH_MOVES)
+                or (strokes is not None and (not isinstance(strokes, str) or strokes not in prompts.COTTAGE_TOUCH_STROKES
+                                             or not moved or zone not in ("head", "ears")))):
+            return Err(SdkError("touch_invalid"))
+        return await self._respond_to_panel_gesture(request_id, character, zone, length, moved, strokes)
+
+    async def _respond_to_panel_gesture(self, request_id: Any, character: Any, zone: str, length: str | None = None,
+                                        moved: bool = False, strokes: str | None = None):
+        cottage_touch = length is not None
+        # Receipts keep the whole gesture, so a reused request id cannot change the zone, length, move or strokes.
+        gesture = (f"cottage_{zone}_{length}{'_moved' if moved else ''}{'_' + strokes if strokes else ''}"
+                   if cottage_touch else zone)
         if (not isinstance(request_id, str) or not _TOUCH_REQUEST_ID.fullmatch(request_id)
                 or not isinstance(character, str) or not 0 < len(character) <= 256):
             return Err(SdkError("touch_invalid"))
@@ -2278,10 +2308,11 @@ class LoveWithYouPlugin(NekoPluginBase):
                 return Err(SdkError("touch_unavailable"))
             previous = self._touch_receipts.get(request_id)
             if previous is not None:
-                if previous[:2] != (character, zone):
+                if previous[:2] != (character, gesture):
                     return Err(SdkError("touch_invalid"))
-                return Ok({"status": previous[2], "request_id": request_id})
-            if time.monotonic() < self._touch_ready_at:
+                return Ok({"status": previous[2], "request_id": request_id, **previous[3]})
+            ready_at = self._cottage_touch_ready_at if cottage_touch else self._touch_ready_at
+            if time.monotonic() < ready_at:
                 return Err(SdkError("touch_cooldown"))
             return None
 
@@ -2306,18 +2337,29 @@ class LoveWithYouPlugin(NekoPluginBase):
             addressing = engine.resolve_addressing(record)
             confirmed = record.get("confessed") is True
             event_type = "portrait_touch"
-            if zone == "cottage_chat":
+            extra: dict[str, Any] = {}
+            if cottage_touch:
+                event_type = "cottage_touch"
+                extra["reaction"] = prompts.cottage_touch_reaction(zone, stage)
+                prompt = prompts.cottage_touch_prompt(zone, length, stage, nickname, addressing=addressing,
+                                                      confirmed=confirmed, moved=moved, strokes=strokes)
+            elif zone == "cottage_chat":
                 event_type = "cottage_chat"
                 prompt = prompts.cottage_chat_prompt(stage, nickname, addressing=addressing, confirmed=confirmed)
             else:
                 prompt = prompts.portrait_touch_prompt(zone, stage, nickname, addressing=addressing, confirmed=confirmed)
-            self._touch_ready_at = time.monotonic() + _TOUCH_COOLDOWN
+            if cottage_touch:
+                self._cottage_touch_ready_at = time.monotonic() + _COTTAGE_TOUCH_FLOOR
+            else:
+                self._touch_ready_at = time.monotonic() + _TOUCH_COOLDOWN
+            # Every cottage touch reaches the companion, so each one gets its own key instead of replacing the last.
+            coalesce = f"{event_type.replace('_', '-')}:{character}" + (f":{request_id}" if cottage_touch else "")
             status = "unknown"
             try:
                 receipt = self.push_message(
                     source=self.plugin_id, target_lanlan=character, visibility=[], ai_behavior="respond",
                     parts=[{"type": "text", "text": prompt}],
-                    coalesce_key=f"{self.plugin_id}:{event_type.replace('_', '-')}:{character}",
+                    coalesce_key=f"{self.plugin_id}:{coalesce}",
                     metadata={"event_type": event_type, "expires_in_s": 10},
                 )
                 if isinstance(receipt, dict):
@@ -2327,10 +2369,10 @@ class LoveWithYouPlugin(NekoPluginBase):
                         status = "unavailable"
             except Exception as exc:
                 self.logger.warning("与你相恋: panel gesture submission unconfirmed: {}", type(exc).__name__)
-            self._touch_receipts[request_id] = (character, zone, status)
+            self._touch_receipts[request_id] = (character, gesture, status, extra)
             if len(self._touch_receipts) > 64:
                 self._touch_receipts.pop(next(iter(self._touch_receipts)))
-            return Ok({"status": status, "request_id": request_id})
+            return Ok({"status": status, "request_id": request_id, **extra})
 
     def _shop_transaction(self, action: str, request_id: Any, revision: Any,
                           item_id: Any = "", character: Any = "", *, expected_gain: Any = None,

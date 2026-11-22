@@ -20,9 +20,20 @@ after(async () => {
   if (server) await new Promise(resolve => server.close(resolve))
 })
 
-async function roomPage(viewport, isMobile = false, demo = false, reducedMotion = "reduce", clock = false) {
+const CAMERA_KEY = "love_with_you:cottage:camera"
+// The cottage's clock places Yui (cottage-routine.mjs): at 8:30 she stands on the living-room rug. The cottage opens
+// on the view it was left in during this session; most tests start in the living room (`view: null` starts fresh).
+async function roomPage(viewport, isMobile = false, demo = false, reducedMotion = "reduce", clock = false,
+  { at = [8, 30], view = "living" } = {}) {
   const page = await browser.newPage({ viewport, isMobile, hasTouch: isMobile, reducedMotion })
-  if (clock) await page.clock.install()
+  const time = new Date(2026, 10, 22, ...at)
+  if (clock) await page.clock.install({ time })
+  else await page.clock.setFixedTime(time)
+  if (view) {
+    await page.addInitScript(([key, view]) => {
+      if (!sessionStorage.getItem(key)) sessionStorage.setItem(key, JSON.stringify({ view, azimuth: .69, elevation: .52 }))
+    }, [CAMERA_KEY, view])
+  }
   const errors = []
   page.on("pageerror", error => errors.push(error.message))
   await page.goto(`${url}/?locale=zh-CN${demo ? "&cottageDemo=1" : ""}`)
@@ -669,13 +680,13 @@ test("ambient motion runs only above low quality and stops for reduced motion", 
   } finally { await page.close() }
 })
 
-test("Yui loads with her motion clips, answers hover with her name and a click without leaving the room", async () => {
+test("Yui loads with her motion clips, answers hover with her name, and a click brings the camera to her card", async () => {
   const { page, frame, errors } = await roomPage({ width: 1000, height: 700 }, false, false, "no-preference")
   try {
     const room = frame.locator("#room")
     await frame.locator('#room[data-yui="ready"]').waitFor({ timeout: 30000 })
     await frame.locator("#room[data-yui-motion]").waitFor({ timeout: 30000 })
-    assert.equal(await room.getAttribute("data-yui-motion"), "7", "five idles and two gestures load")
+    assert.equal(await room.getAttribute("data-yui-motion"), "15", "five idles, two gestures and her day's eight clips load")
     const canvas = frame.locator("canvas")
     const box = await canvas.boundingBox()
     let spot = null
@@ -686,8 +697,92 @@ test("Yui loads with her motion clips, answers hover with her name and a click w
     assert.ok(spot, "Yui can be pointed at in the living room")
     assert.equal(await frame.locator("#hover-label").innerText(), "Yui")
     await page.mouse.click(...spot)
-    await page.waitForTimeout(300)
+    await frame.locator('#room[data-view="yui"]').waitFor()
     assert.equal(await room.getAttribute("data-room"), "living", "clicking her does not move the camera to another room")
+    const card = frame.locator("#yui-card")
+    for (const name of ["摸摸她", "送礼物", "说说话"]) assert.ok(await card.getByRole("button", { name }).isVisible(), name)
+    await capture(page, frame, "cottage-yui-card.png")
+    await page.keyboard.press("Escape")
+    await frame.locator('#room[data-view="room"]').waitFor()
+    assert.ok(await card.isHidden())
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("touching Yui tells the companion each time, waits for her reaction, and the bag opens for a gift", async () => {
+  const { page, frame, errors } = await roomPage({ width: 1000, height: 700 }, false, false, "no-preference")
+  try {
+    await frame.locator("#room[data-yui-motion]").waitFor({ timeout: 30000 })
+    const canvas = frame.locator("canvas")
+    const box = await canvas.boundingBox()
+    let spot = null
+    for (let y = .3; y < .95 && !spot; y += .03) for (let x = .2; x < .8 && !spot; x += .02) {
+      await page.mouse.move(box.x + box.width * x, box.y + box.height * y)
+      if (await canvas.getAttribute("data-target") === "yui") spot = [box.x + box.width * x, box.y + box.height * y]
+    }
+    await page.mouse.click(...spot)
+    const card = frame.locator("#yui-card")
+    await card.getByRole("button", { name: "摸摸她" }).click()
+    const head = card.getByRole("button", { name: "摸摸头" })
+    assert.equal(await card.getByRole("button", { name: "说说话" }).isVisible(), false, "touch mode shows the parts instead")
+    // In touch mode the pointer over the room becomes the 3D hand.
+    await page.mouse.move(box.x + box.width * .3, box.y + box.height * .5)
+    await frame.locator("canvas[data-hand]").waitFor({ timeout: 5000 })
+    const touches = () => page.evaluate(() => window.__cottageTouches || [])
+    // Held for a while on the head: one touch of length "while"; the parts wait while she reacts.
+    const area = await head.boundingBox()
+    await page.mouse.move(area.x + area.width / 2, area.y + area.height / 2)
+    await page.mouse.down()
+    await page.waitForTimeout(900)
+    assert.equal(await canvas.getAttribute("data-hand"), "", "a button touch moves the hand to her by itself")
+    await page.mouse.up()
+    await page.waitForFunction(() => (window.__cottageTouches || []).length === 1)
+    assert.ok(await card.getByRole("button", { name: "尾巴" }).isDisabled(), "a new touch waits for her reaction")
+    await frame.locator("#yui-status").filter({ hasText: "已告诉桌宠。" }).waitFor()
+    await frame.locator('#yui-zones button[data-zone="tail"]:not([disabled])').waitFor({ timeout: 8000 })
+    const [first] = await touches()
+    assert.deepEqual({ character: first.character, zone: first.zone }, { character: "YUI", zone: "head" })
+    // Held for 0.9 s: not a tap. (The software renderer can hold the release back by seconds, so "while" or "long";
+    // the key touches below have set lengths and are checked exactly.)
+    assert.ok(["while", "long"].includes(first.length), first.length)
+    assert.match(first.request_id, /^[0-9a-f-]{36}$/)
+    // No gap between messages: the next touch goes as soon as she has finished.
+    await card.getByRole("button", { name: "尾巴" }).focus()
+    await page.keyboard.press("Enter")
+    await page.waitForFunction(() => (window.__cottageTouches || []).length === 2)
+    const second = (await touches())[1]
+    assert.deepEqual([second.zone, second.length], ["tail", "tap"])
+    await frame.locator('#yui-zones button[data-zone="tail"]:not([disabled])').waitFor({ timeout: 8000 })
+    // Scratching under her chin is a part of its own; a button touch never counts as a stroke or a pinch.
+    await card.getByRole("button", { name: "挠下巴" }).focus()
+    await page.keyboard.press("Enter")
+    await page.waitForFunction(() => (window.__cottageTouches || []).length === 3)
+    const third = (await touches())[2]
+    assert.deepEqual([third.zone, third.moved], ["chin", false])
+    assert.equal(first.moved, false)
+    await frame.locator('#yui-zones button[data-zone="tail"]:not([disabled])').waitFor({ timeout: 8000 })
+    // Stroking her head back and forth with the pointer: a stroke, and roughly how many times.
+    let crown = null
+    for (let y = .05; y < .6 && !crown; y += .03) for (let x = .1; x < .7 && !crown; x += .03) {
+      await page.mouse.move(box.x + box.width * x, box.y + box.height * y)
+      if (await canvas.getAttribute("data-touch") === "head") crown = [box.x + box.width * x, box.y + box.height * y]
+    }
+    assert.ok(crown, "her head can be found under the pointer")
+    await page.mouse.move(...crown)
+    await page.mouse.down()
+    for (const shift of [30, -30, 30, -30]) await page.mouse.move(crown[0] + shift, crown[1], { steps: 6 })
+    await page.mouse.up()
+    await page.waitForFunction(() => (window.__cottageTouches || []).length === 4)
+    const stroke = (await touches())[3]
+    assert.deepEqual([stroke.zone, stroke.moved, stroke.strokes], ["head", true, "some"])
+    await frame.locator('#yui-zones button[data-zone="tail"]:not([disabled])').waitFor({ timeout: 8000 })
+    await card.getByRole("button", { name: "好了" }).click()
+    await frame.locator("canvas:not([data-hand])").waitFor({ timeout: 5000 })
+    await card.getByRole("button", { name: "送礼物" }).click()
+    const bag = page.getByRole("group", { name: "背包" })
+    await bag.waitFor()
+    await bag.getByRole("button", { name: "收起背包" }).click()
+    assert.equal(await bag.count(), 0)
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
@@ -707,7 +802,7 @@ test("Yui's motion keeps her feet on the floor and blends clips without snapping
       const pelvis = yui.root.getObjectByName("下半身")
       const point = new T.Vector3(), turn = new T.Quaternion(), last = new T.Quaternion()
       yui.setMood({ warmth: .75, missed: true })
-      let floor = null, sink = 0, snap = 0
+      let floor = null, sink = 0, snap = 0, drift = 0
       for (let frame = 0; frame < 60 * 50; frame++) {
         if (frame === 60 * 12 || frame === 60 * 30) yui.react()
         yui.update(1 / 60, { moving: true, viewer: new T.Vector3(4, 4, 6) })
@@ -718,16 +813,83 @@ test("Yui's motion keeps her feet on the floor and blends clips without snapping
         pelvis.getWorldQuaternion(turn)
         if (frame) snap = Math.max(snap, 2 * Math.acos(Math.min(1, Math.abs(turn.dot(last)))))
         last.copy(turn)
+        // Her body stays over her own spot; gestures sway it a little (0.9.31-0.9.35 stood her about 1.5 m away).
+        pelvis.getWorldPosition(point)
+        drift = Math.max(drift, Math.hypot(point.x - yui.root.position.x, point.z - yui.root.position.z))
       }
-      window.result = { clips, sink, snap }
+      window.result = { clips, sink, snap, drift }
     </script>`
     await page.route("**/plugin/love_with_you/ui/yui-probe.html", route =>
       route.fulfill({ contentType: "text/html; charset=utf-8", body: probe }))
     await page.goto(`${url}/plugin/love_with_you/ui/yui-probe.html`)
-    const { clips, sink, snap } = await page.waitForFunction(() => window.result, null, { timeout: 90000 }).then(handle => handle.jsonValue())
-    assert.equal(clips, 7)
+    const { clips, sink, snap, drift } = await page.waitForFunction(() => window.result, null, { timeout: 90000 }).then(handle => handle.jsonValue())
+    assert.equal(clips, 15)
     assert.ok(sink < .005, `the lower ankle stays on the floor (moved ${sink.toFixed(3)} m)`)
     assert.ok(snap < .06, `the hips never turn more than a smooth step in one frame (${snap.toFixed(3)} rad)`)
+    assert.ok(drift < .3, `her body stays on her spot (${drift.toFixed(3)} m away)`)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("the cottage opens on the whole house, and on the view it was left in when it is opened again", async () => {
+  const { page, frame, nav, errors } = await roomPage({ width: 1100, height: 760 }, false, true, "reduce", false, { view: null })
+  try {
+    const room = frame.locator("#room")
+    assert.equal(await room.getAttribute("data-room"), "overview")
+    await frame.locator("#rooms").click()
+    await frame.locator("#room-menu").getByRole("button", { name: "厨房", exact: true }).click()
+    await frame.locator('#room[data-room="kitchen"]').waitFor()
+    await frame.getByRole("button", { name: "向右转" }).click()
+    await nav.getByRole("button", { name: "关系概览" }).click()
+    await nav.getByRole("button", { name: "我们的小屋" }).click()
+    await frame.locator('#room[data-room="kitchen"]').waitFor()
+    const saved = await page.evaluate(key => JSON.parse(sessionStorage.getItem(key)), CAMERA_KEY)
+    assert.equal(saved.view, "kitchen")
+    assert.ok(Math.abs(saved.azimuth - .93) < 1e-6, "the turned camera is kept")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+// Points at her by sweeping the canvas until the pointer is over her.
+async function findYui(page, frame) {
+  const canvas = frame.locator("canvas")
+  const box = await canvas.boundingBox()
+  for (let y = .15; y < .95; y += .03) for (let x = .1; x < .9; x += .02) {
+    await page.mouse.move(box.x + box.width * x, box.y + box.height * y)
+    if (await canvas.getAttribute("data-target") === "yui") return [box.x + box.width * x, box.y + box.height * y]
+  }
+  return null
+}
+
+test("Yui keeps her day: the clock puts her somewhere, the room menu says where, and a click wakes her", async () => {
+  const cooking = await roomPage({ width: 1100, height: 760 }, false, true, "reduce", false, { at: [7, 20], view: "living" })
+  try {
+    const { frame } = cooking
+    await frame.locator('#room[data-yui-doing="breakfast-cook"]').waitFor({ timeout: 30000 })
+    assert.equal(await frame.locator("#room").getAttribute("data-yui-room"), "kitchen")
+    await frame.locator("#rooms").click()
+    const menu = frame.locator("#room-menu")
+    assert.ok(await menu.locator('button[data-view="kitchen"] .yui-here').isVisible(), "the kitchen is marked")
+    assert.ok(await menu.locator('button[data-view="living"] .yui-here').isHidden())
+    assert.ok(await menu.getByRole("button", { name: "厨房", exact: true }).isVisible(), "the mark is not part of the name")
+    assert.deepEqual(cooking.errors, [])
+  } finally { await cooking.page.close() }
+
+  const { page, frame, errors } = await roomPage({ width: 1100, height: 760 }, false, false, "reduce", false, { at: [3, 0], view: "bedroom" })
+  try {
+    const room = frame.locator("#room")
+    await frame.locator('#room[data-yui-doing="sleep"]').waitFor({ timeout: 30000 })
+    assert.equal(await room.getAttribute("data-yui-room"), "bedroom")
+    const spot = await findYui(page, frame)
+    assert.ok(spot, "she can be pointed at in bed")
+    await page.mouse.click(...spot)
+    await frame.locator('#room[data-view="yui"]').waitFor()
+    assert.equal(await room.getAttribute("data-room"), "bedroom", "the closeup is where she is")
+    assert.equal(await room.getAttribute("data-yui-doing"), "with-you", "she got up for the visitor")
+    await capture(page, frame, "cottage-yui-woken.png")
+    await page.keyboard.press("Escape")
+    await frame.locator('#room[data-view="room"]').waitFor()
+    await frame.locator('#room[data-yui-doing="sleep"]').waitFor({ timeout: 10000 })
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })

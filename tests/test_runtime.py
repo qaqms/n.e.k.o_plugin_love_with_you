@@ -184,6 +184,82 @@ def test_cottage_chat_only_invites_the_active_role_and_replays_without_sending_t
     assert plugin._state == before
 
 
+def test_cottage_touch_reaches_the_active_role_each_time_with_its_own_floor(
+    plugin, runtime, monkeypatch, module_clock,
+):
+    monkeypatch.setattr(runtime.host, "fetch_characters", lambda: (["YUI", "MIO"], "YUI"))
+    now = [200.0]
+    module_clock.monotonic = lambda: now[0]
+    plugin.push_message = Mock(return_value={"submitted": True})
+    before = copy.deepcopy(plugin._state)
+
+    def touch(request, zone="head", length="tap", character="YUI", **more):
+        return asyncio.run(plugin.touch_cottage_yui(request, character, zone, length, **more))
+
+    assert str(touch("cottage_touch_bad1", zone="legs").error) == "touch_invalid"
+    assert str(touch("cottage_touch_bad2", length="forever").error) == "touch_invalid"
+    assert str(touch("cottage_touch_bad3", character="MIO").error) == "touch_character_changed"
+    # Only head, cheek and ears have a move; it must be a real boolean.
+    assert str(touch("cottage_touch_bad4", zone="hand", moved=True).error) == "touch_invalid"
+    assert str(touch("cottage_touch_bad5", moved="yes").error) == "touch_invalid"
+    first = touch("cottage_touch_001", length="long")
+    assert first.value == {"status": "submitted", "request_id": "cottage_touch_001", "reaction": "dodge"}
+    assert touch("cottage_touch_001", length="long").value == first.value
+    assert str(touch("cottage_touch_001", length="tap").error) == "touch_invalid"
+    assert str(touch("cottage_touch_002").error) == "touch_cooldown"
+    args = plugin.push_message.call_args.kwargs
+    text = args["parts"][0]["text"]
+    assert args["target_lanlan"] == "YUI" and args["metadata"]["event_type"] == "cottage_touch"
+    assert runtime.conv._special_message(args["metadata"])
+    assert "摸了摸你的头" in text and "好一会儿" in text and "侧身躲开" in text and "小屋" in text
+    assert "当前关系：陌生" in text
+    assert plugin._state == before
+
+    # The short floor is separate from the portrait cooldown: a portrait touch right after still goes through.
+    assert asyncio.run(plugin.touch_portrait("portrait_after_cottage", "YUI", "head")).value["status"] == "submitted"
+    now[0] += 1.1
+    plugin._state["shared"] = runtime.engine.new_record(90)
+    plugin._state["shared"].update(stage="lover", confessed=True)
+    second = touch("cottage_touch_002", zone="tail")
+    assert second.value["reaction"] == "enjoy"
+    assert touch("cottage_touch_003", zone="head").error is not None
+    now[0] += 1.1
+    assert touch("cottage_touch_003", zone="head").value["reaction"] == "lean"
+    # A scratch under her chin is taken like the head; a pinch tells the companion it was a pinch, and a reused
+    # request id cannot turn a poke into a pinch.
+    now[0] += 1.1
+    assert touch("cottage_touch_004", zone="chin").value["reaction"] == "lean"
+    assert "挠了挠你的下巴" in plugin.push_message.call_args.kwargs["parts"][0]["text"]
+    now[0] += 1.1
+    assert touch("cottage_touch_005", zone="cheek", moved=True).value["status"] == "submitted"
+    assert "捏了捏你的脸颊" in plugin.push_message.call_args.kwargs["parts"][0]["text"]
+    assert str(touch("cottage_touch_005", zone="cheek").error) == "touch_invalid"
+    # How many times only goes with a stroke of the head or a rub of an ear, and names a known amount.
+    assert str(touch("cottage_touch_bad6", strokes="many").error) == "touch_invalid"
+    assert str(touch("cottage_touch_bad7", zone="cheek", moved=True, strokes="some").error) == "touch_invalid"
+    assert str(touch("cottage_touch_bad8", moved=True, strokes="lots").error) == "touch_invalid"
+    now[0] += 1.1
+    assert touch("cottage_touch_006", moved=True, strokes="many").value["status"] == "submitted"
+    text = plugin.push_message.call_args.kwargs["parts"][0]["text"]
+    assert "来回摸着你的头，来回了好多好多下" in text
+    assert str(touch("cottage_touch_006", moved=True, strokes="some").error) == "touch_invalid"
+    now[0] += 1.1
+    assert touch("cottage_touch_007", zone="ears", moved=True, strokes="some").value["status"] == "submitted"
+    assert "揉了揉你的猫耳朵，来回了好几下" in plugin.push_message.call_args.kwargs["parts"][0]["text"]
+    keys = [call.kwargs["coalesce_key"] for call in plugin.push_message.call_args_list
+            if call.kwargs["metadata"]["event_type"] == "cottage_touch"]
+    assert len(keys) == len(set(keys)) == 7
+
+
+def test_cottage_touch_reaction_follows_stage_and_is_guarded_for_ears_and_tail(runtime):
+    reaction = runtime.prompts.cottage_touch_reaction
+    stages = ["stranger", "familiar", "fond", "ambiguous", "lover"]
+    assert [reaction("head", stage) for stage in stages] == ["dodge", "awkward", "accept", "enjoy", "lean"]
+    assert [reaction("tail", stage) for stage in stages] == ["dodge", "dodge", "awkward", "accept", "enjoy"]
+    assert reaction("ears", "unknown") == "dodge"
+    assert [reaction("chin", stage) for stage in stages] == ["dodge", "awkward", "accept", "enjoy", "lean"]
+
+
 def restart_args(plugin, scope="shared"):
     module = sys.modules[plugin.__class__.__module__]
     record = module.engine.get_record(plugin._state, scope)

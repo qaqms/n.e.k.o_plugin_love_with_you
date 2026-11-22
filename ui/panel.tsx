@@ -31,7 +31,7 @@ import { Together, TOGETHER_STYLE } from "./together"
 import type { AdventureResume } from "./together"
 import { errorCode, submitAction, unwrap } from "./requests"
 import { CompanionGame, GAME_STYLE } from "./companion-game"
-import { Cottage } from "./cottage"
+import { COTTAGE_STYLE, Cottage } from "./cottage"
 import { PortraitLightbox, PORTRAIT_LIGHTBOX_STYLE } from "./portrait-lightbox"
 import { portraitTouchPresets } from "./portrait-touch-presets"
 import { useBackgroundRefresh } from "./refresh"
@@ -2049,7 +2049,7 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
 
   return (
     <div className={sidebarCollapsed ? "lwy sidebar-collapsed" : "lwy"}>
-      <style>{STYLE + GAME_STYLE + SHOP_STYLE + EXPERIENCE_STYLE + TOGETHER_STYLE + PORTRAIT_IMPORT_STYLE + PORTRAIT_LIGHTBOX_STYLE + INTERACTION_STYLE + SCROLLBAR_STYLE + themeCss(liveAppearance)}</style>
+      <style>{STYLE + GAME_STYLE + COTTAGE_STYLE + SHOP_STYLE + EXPERIENCE_STYLE + TOGETHER_STYLE + PORTRAIT_IMPORT_STYLE + PORTRAIT_LIGHTBOX_STYLE + INTERACTION_STYLE + SCROLLBAR_STYLE + themeCss(liveAppearance)}</style>
 
       <aside className="lwy-sidebar">
         <div className="lwy-sidebar-head">
@@ -2201,7 +2201,11 @@ export default function LoveWithYouPanel(props: PluginSurfaceProps<Dashboard>) {
           }))}
           activeCharacter={state.current_character || ""} online={Boolean(state.host_online)} api={api}
           bond={scope && { stage: scope.stage_index, idle: scope.idle_days || 0, gained: scope.gained_today, lost: scope.lost_today }}
-          busy={busy} stale={refreshError} run={run} refresh={refreshPanel} /> : null}
+          busy={busy} stale={refreshError} run={run} refresh={refreshPanel}
+          bag={<Shop compactBag data={state.shop} characters={[]} current={state.host_online === false ? null : currentCharacter}
+            perCharacter={Boolean(state.per_character)} scopes={scopes} dailyGain={limits.daily_gain} dailyChat={limits.daily_chat ?? 4}
+            api={api} t={t} useLocalState={props.useLocalState} busy={busy} stale={refreshError} run={run}
+            refresh={refreshPanel} dialog={onShopDialog} feedback={() => renderFeedback(true)} beginEdit={() => setFeedback(null)} />} /> : null}
       </main>
       {/* Keep this slot mounted so the host preserves page nodes and focus. */}
       <div className="lwy-feedback-slot">{!dialogOpen && !portraitOpen ? renderFeedback() : null}</div>

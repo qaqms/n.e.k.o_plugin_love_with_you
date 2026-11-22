@@ -8,5 +8,22 @@ Copied unchanged (gzip VRMA, VRM 1.0 humanoid) from the N.E.K.O host's `static/v
 | liked.vrma.gz | liked.vrma.gz |
 | vsign.vrma.gz | 比 V 手势.vrma.gz |
 
+For her day in the house (0.9.40), from the host's motion library `static/vrm/motion/` and `static/vrm/animation/`:
+
+| here | host file |
+| --- | --- |
+| walk.vrma.gz | animation/world-walk.vrma.gz |
+| sit.vrma.gz | motion/05_pose/双脚平放端正地坐.vrma.gz |
+| type.vrma.gz | motion/06_activity/坐着用双手敲击键盘.vrma.gz |
+| tablet.vrma.gz | motion/06_activity/站着用手操作平板电脑.vrma.gz |
+| sleep.vrma.gz | motion/05_pose/趴着安静熟睡轻微呼吸.vrma.gz |
+| sleep-turn.vrma.gz | motion/05_pose/趴着睡梦中翻动身体.vrma.gz |
+| yawn.vrma.gz | motion/03_emote/困倦地抬手打哈欠.vrma.gz |
+| stretch.vrma.gz | motion/03_emote/开心地舒展身体.vrma.gz |
+
+The host's `static/vrm/motion/manifest.json` lists the seven `motion/` clips as Apache-2.0 with the origin `VSWQH`;
+`world-walk` is covered by the notice beside these files. Whether the `motion/` clips may ship with the plugin is to be
+confirmed by the project owner (the earlier confirmation was for the idle and gesture clips above).
+
 The host's attribution notice is kept beside them as `HANAMI_VRMA_NOTICE.md`.
 The project owner, who works on the host, confirmed these may ship with the plugin.

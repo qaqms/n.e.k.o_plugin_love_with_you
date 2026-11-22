@@ -37,7 +37,7 @@ const gameNames = ["Coins", "ShoppingBag", "Undo2", "ArrowLeft", "Plus", "Check"
   "Pause", "Sparkles", "Zap", "Mountain", "Orbit", "Scan", "Lamp", "Ban"]
 const cottageNames = ["Scan", "Lamp", "Blinds", "ChevronLeft", "ChevronRight", "Disc3", "Image",
   "BookOpen", "Gift", "Armchair", "Sun", "Sunset", "Moon", "Clock", "Plus", "X", "Pencil", "Save",
-  "CalendarDays", "Projector", "Coffee", "MessageCircle", "House", "Package", "SunMoon", "Gauge"]
+  "CalendarDays", "Projector", "Coffee", "MessageCircle", "House", "Package", "SunMoon", "Gauge", "Hand", "Check"]
 function writeStaticIcons(filename, names) {
   const staticIcons = Object.fromEntries(names.map(name => [name,
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${(icons[name][0] === "svg" ? icons[name][2] : icons[name]).map(([tag, attrs]) =>

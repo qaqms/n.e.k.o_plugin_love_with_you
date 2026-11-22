@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>我们的小屋</title>
-  <link rel="stylesheet" href="./cottage.css?v=0.9.35">
+  <link rel="stylesheet" href="./cottage.css?v=0.9.40">
 </head>
 <body>
   <main id="room" aria-labelledby="title">
@@ -156,10 +156,23 @@
       <p id="projector-progress"></p>
       <a id="projector-action" target="_blank" rel="noopener noreferrer" hidden></a>
     </section>
+    <section id="yui-card" class="paper-card" aria-labelledby="yui-card-title" data-mode="options" hidden>
+      <h2 id="yui-card-title" class="card-title"></h2>
+      <div id="yui-options" class="company-actions" role="group" aria-labelledby="yui-card-title">
+        <button type="button" id="yui-touch"></button>
+        <button type="button" id="yui-gift"></button>
+        <button type="button" id="yui-talk"></button>
+      </div>
+      <div id="yui-zones" role="group" aria-labelledby="yui-card-title" hidden>
+        <p id="yui-hint"></p>
+        <div class="company-actions" id="yui-zone-buttons"><button type="button" id="yui-done"></button></div>
+      </div>
+      <p id="yui-status" role="status" aria-live="polite" hidden></p>
+    </section>
     <p id="fallback" role="status" hidden></p>
   </main>
   <script type="module">
-    import("./cottage.mjs?v=0.9.35").then(module => module.startCottage()).catch(() => {
+    import("./cottage.mjs?v=0.9.40").then(module => module.startCottage()).catch(() => {
       const fallback = document.getElementById("fallback")
       fallback.textContent = /^(en|pt|es|ru|ko|ja)/i.test(new URLSearchParams(location.search).get("locale") || "")
         ? "The 3D room could not load." : "暂时无法加载 3D 小屋。"

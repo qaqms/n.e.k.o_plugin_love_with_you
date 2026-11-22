@@ -92,6 +92,7 @@ def _special_message(metadata: dict[str, Any]) -> bool:
         or "avatar-drop" in sources or proof.get("origin") in ("tool", "agent")
         or metadata.get("event_type") in (
             "gift_received", "relationship_context", "proactive_confession", "experience_note", "portrait_touch", "cottage_chat",
+            "cottage_touch",
         )
         or metadata.get("turn_type") in ("proactive_reply", "proactive_instruction")
     )

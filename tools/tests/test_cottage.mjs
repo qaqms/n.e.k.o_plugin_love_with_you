@@ -692,6 +692,46 @@ test("Yui loads with her motion clips, answers hover with her name and a click w
   } finally { await page.close() }
 })
 
+test("Yui's motion keeps her feet on the floor and blends clips without snapping", async () => {
+  // Runs her layers headless for 50 simulated seconds: the opening after days apart, idles and two clicked gestures.
+  const page = await browser.newPage()
+  try {
+    const errors = []
+    page.on("pageerror", error => errors.push(error.message))
+    const probe = `<!doctype html><meta charset="utf-8"><script type="module">
+      import * as T from "./engine/three.module.min.js"
+      import { loadYui } from "./cottage-yui.mjs"
+      const yui = await loadYui(new T.Scene(), "./models")
+      const clips = await yui.motion
+      const ankles = ["左足首", "右足首"].map(name => yui.root.getObjectByName(name))
+      const pelvis = yui.root.getObjectByName("下半身")
+      const point = new T.Vector3(), turn = new T.Quaternion(), last = new T.Quaternion()
+      yui.setMood({ warmth: .75, missed: true })
+      let floor = null, sink = 0, snap = 0
+      for (let frame = 0; frame < 60 * 50; frame++) {
+        if (frame === 60 * 12 || frame === 60 * 30) yui.react()
+        yui.update(1 / 60, { moving: true, viewer: new T.Vector3(4, 4, 6) })
+        yui.root.updateMatrixWorld(true)
+        const lowest = Math.min(...ankles.map(ankle => ankle.getWorldPosition(point).y))
+        floor ??= lowest
+        sink = Math.max(sink, Math.abs(lowest - floor))
+        pelvis.getWorldQuaternion(turn)
+        if (frame) snap = Math.max(snap, 2 * Math.acos(Math.min(1, Math.abs(turn.dot(last)))))
+        last.copy(turn)
+      }
+      window.result = { clips, sink, snap }
+    </script>`
+    await page.route("**/plugin/love_with_you/ui/yui-probe.html", route =>
+      route.fulfill({ contentType: "text/html; charset=utf-8", body: probe }))
+    await page.goto(`${url}/plugin/love_with_you/ui/yui-probe.html`)
+    const { clips, sink, snap } = await page.waitForFunction(() => window.result, null, { timeout: 90000 }).then(handle => handle.jsonValue())
+    assert.equal(clips, 7)
+    assert.ok(sink < .005, `the lower ankle stays on the floor (moved ${sink.toFixed(3)} m)`)
+    assert.ok(snap < .06, `the hips never turn more than a smooth step in one frame (${snap.toFixed(3)} rad)`)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
 test("Yui's mood follows the relationship stage, time apart and a bad day", async () => {
   for (const [bond, expected] of [["", "warmth:0.75"], ["missed", "warmth:0.75 missed"], ["low", "warmth:0.75 low"]]) {
     const page = await browser.newPage({ viewport: { width: 1000, height: 700 } })

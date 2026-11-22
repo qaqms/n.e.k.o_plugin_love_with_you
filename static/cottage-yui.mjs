@@ -8,6 +8,7 @@
 // It only moves when the caller allows motion (not on low quality or with reduced motion).
 import * as T from "./engine/three.module.min.js"
 import { GLTFLoader } from "./engine/three-gltf.mjs?v=0.9.29"
+import { createSprings } from "./cottage-springs.mjs?v=0.9.35"
 
 // Standing spot in the living room, at the front of the rug, turned toward the room view. The model faces +z.
 const PLACE = { x: .25, z: 1.5, turn: .55, height: 1.55 }
@@ -39,7 +40,7 @@ for (const [side, mark] of [["left", "左"], ["right", "右"]]) {
   for (const [finger, name] of Object.entries(FINGERS)) RIG[`${side}${finger}`] = mark + name
 }
 const TAIL = ["尻尾1", "尻尾2", "尻尾3", "尻尾4", "尻尾5", "尻尾6"]
-const EXTRA = ["左目", "右目", "左猫耳", "右猫耳", "左髪1", "右髪1", "左髪2", "右髪2", ...TAIL]
+const EXTRA = ["左目", "右目", "左猫耳", "右猫耳", ...TAIL]
 
 const damp = (value, target, rate, dt) => value + (target - value) * (1 - Math.exp(-rate * dt))
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value))
@@ -76,7 +77,7 @@ async function readClip(loader, url) {
 
 export async function loadYui(scene, base) {
   const loader = new GLTFLoader()
-  const gltf = await loader.loadAsync(`${base}/yui.glb?v=0.9.33`)
+  const gltf = await loader.loadAsync(`${base}/yui.glb?v=0.9.35`)
   const model = gltf.scene
   const size = new T.Box3().setFromObject(model).getSize(new T.Vector3())
   const root = new T.Group()
@@ -168,9 +169,16 @@ export async function loadYui(scene, base) {
   // Root motion goes to グルーブ, mapped from the model frame into its parent's space.
   const groove = bones.get("グルーブ")
   const grooveSpace = new T.Matrix4().copy(groove.object.parent.matrixWorld).invert().multiply(model.matrixWorld)
+  const grooveLinear = new T.Matrix3().setFromMatrix4(grooveSpace)
   const grooveRest = groove.at.clone()
   const legHeight = bonePosition("左足").y
   const headRest = bonePosition("頭")
+  // Feet stay on the floor: the captured clips were made for other leg lengths, so the hips are nudged up or down
+  // until the lower ankle is back at its resting height (this also turns the "liked" hop into a small bounce).
+  const ankles = ["左足首", "右足首"].map(name => bones.get(name)?.object).filter(Boolean)
+  const ankleRest = Math.min(...ankles.map(ankle => ankle.getWorldPosition(new T.Vector3()).y))
+  const anklePoint = new T.Vector3()
+  let ground = 0
 
   // Hit area for clicks and hover: a simple column around her.
   const hitArea = new T.Mesh(new T.CylinderGeometry(.24, .24, PLACE.height * .96, 10), new T.MeshBasicMaterial())
@@ -179,10 +187,46 @@ export async function loadYui(scene, base) {
   root.add(hitArea)
   root.updateMatrixWorld(true)
 
+  // Skirt (eight chains of three around the waist) and ponytails (four joints each) swing on springs.
+  // Capsules around the thighs and shins keep the skirt outside the legs; the body and shoulders hold the hair.
+  // Distances are in room metres (Yui is 1.55 m tall).
+  const named = name => model.getObjectByName(name)
+  // The skirt's chains go round the waist in order, so they are solved as a ring.
+  // Each panel also swings with the thigh beside it: fully for panels over the leg, partly toward the front
+  // (a leg stepping forward pushes the front of the skirt), not at all at the back.
+  const pelvis = named("下半身")
+  const across = bone => {
+    const point = bone.getWorldPosition(new T.Vector3()).applyMatrix4(toModel).sub(pelvis.getWorldPosition(new T.Vector3()).applyMatrix4(toModel))
+    return point.setY(0).normalize()
+  }
+  const skirt = Array.from({ length: 8 }, (_, i) => {
+    const bones = [1, 2, 3].map(n => named(`スカート_${i}_${n}`))
+    const follow = bones[0] && pelvis ? ["左", "右"].map(mark => named(`${mark}足`)).filter(Boolean).map(limb => {
+      const side = across(bones[0])
+      return { limb, base: pelvis, weight: Math.min(.85, .8 * Math.max(0, side.dot(across(limb))) + .35 * Math.max(0, side.z)) }
+    }) : []
+    return { bones, stiffness: [6, 2.6, 1.6], drag: .42, gravity: .15, radius: .015, tip: .9, follow }
+  })
+  const ponytails = ["左", "右"].map(mark => ({
+    bones: [1, 2, 3, 4].map(n => named(`${mark}髪${n}`)), stiffness: [8, 3, 1.4, 1], drag: .35, gravity: .5,
+    radius: .03, tip: 1.6,
+  }))
+  const complete = chains => chains.filter(chain => chain.bones.every(Boolean))
+  const legs = ["左", "右"].flatMap(mark => [
+    { from: named(`${mark}足`), to: named(`${mark}ひざ`), radius: .066, start: .2 },
+    { from: named(`${mark}ひざ`), to: named(`${mark}足首`), radius: .055 },
+  ])
+  const colliders = [...legs, { from: named("上半身"), to: named("首"), radius: .085 },
+    { from: named("左腕"), radius: .05 }, { from: named("右腕"), radius: .05 }].filter(item => item.from)
+  const springs = createSprings([
+    { ring: complete(skirt).length === 8, chains: complete(skirt) }, { ring: false, chains: complete(ponytails) },
+  ], colliders)
+  springs.reset()
+
   // Motion clips load in the background; until they do (or if they cannot), a procedural idle stands in.
   const clips = {}
   const motion = Promise.all([...IDLE_CLIPS, ...GESTURES].map(name =>
-    readClip(loader, `${base}/motion/${name}.vrma.gz?v=0.9.33`).then(clip => { clips[name] = clip })
+    readClip(loader, `${base}/motion/${name}.vrma.gz?v=0.9.35`).then(clip => { clips[name] = clip })
       .catch(error => console.warn("cottage: Yui motion unavailable", name, error)))).then(() => {
     motionReady = true
     return Object.keys(clips).length
@@ -191,6 +235,7 @@ export async function loadYui(scene, base) {
 
   // ---- state
   let clock = 0
+  let tailPhase = 0
   let still = false
   let current = null
   let previous = null
@@ -199,12 +244,11 @@ export async function loadYui(scene, base) {
   let lastGesture = null
   // gaze
   const gaze = { mode: "you", until: 3 + Math.random() * 3, target: new T.Vector3(), headYaw: 0, headPitch: 0,
-    eyeYaw: 0, eyePitch: 0, jumpYaw: 0, jumpPitch: 0, nextJump: .8, contact: 0, lastYaw: 0, twist: .12 }
+    eyeYaw: 0, eyePitch: 0, jumpYaw: 0, jumpPitch: 0, nextJump: .8, contact: 0, twist: .12 }
   // face
   const face = { blink: 0, nextBlink: 2, doubleBlink: false, smile: 0, happy: 0, raise: 0, worried: 0, wide: 0,
     raisePulse: 0, widePulse: 0 }
   const ears = { flick: 0, nextFlick: 4, back: 0, perk: 0 }
-  const hair = { swing: 0, speed: 0 }
   let hoverTime = 0
   let shyFor = 0
   let reactFor = 0
@@ -223,9 +267,27 @@ export async function loadYui(scene, base) {
     return true
   }
   function startClip(name, fadeSeconds) {
-    previous = current
+    // From the procedural pose, or in the middle of another fade: fade from the pose she is in right now
+    // (the last frame's body layer) instead of snapping.
+    const fromPose = (!current || (previous && fade < 1)) && bodyPose.size > 0
+    previous = fromPose ? null : current
     current = { name, clip: clips[name], time: 0, fadeSeconds }
     fade = previous ? 0 : 1
+    if (fromPose) {
+      for (const [name, pose] of bodyPose) (startPose.get(name) || startPose.set(name, new T.Quaternion()).get(name)).copy(pose)
+      startOffset.copy(bodyOffset)
+      startBlend = 1
+    }
+  }
+  const startPose = new Map()
+  const startOffset = new T.Vector3()
+  let startBlend = 0
+  // The body layer of the last frame (before gaze and face), to fade from when a clip starts.
+  const bodyPose = new Map()
+  const bodyOffset = new T.Vector3()
+  const keepBody = () => {
+    for (const [name, entry] of bones) (bodyPose.get(name) || bodyPose.set(name, new T.Quaternion()).get(name)).copy(entry.delta)
+    bodyOffset.copy(groove.object.position)
   }
 
   const scratch = new T.Quaternion()
@@ -270,6 +332,7 @@ export async function loadYui(scene, base) {
       setDelta("左腕", 0, 0, -.2 - breath * .015)
       setDelta("右腕", 0, 0, .2 + breath * .015)
       groove.object.position.copy(groove.position)
+      keepBody()
       return
     }
     current.time += dt
@@ -283,7 +346,9 @@ export async function loadYui(scene, base) {
     if (previous && fade < 1) {
       sample(previous, previousValues, otherOffset)
       const weight = T.MathUtils.smoothstep(fade, 0, 1)
-      for (const [bone, quaternion] of values) quaternion.slerpQuaternions(previousValues.get(bone), quaternion, weight)
+      // Blend into the previous sample (re-read every frame): slerping a quaternion into itself would copy the
+      // first argument over it and show the old clip until the fade ends, then snap.
+      for (const [bone, quaternion] of values) quaternion.copy(previousValues.get(bone).slerp(quaternion, weight))
       offset.lerpVectors(otherOffset, offset, weight)
     } else previous = null
     for (const [bone, name] of Object.entries(RIG)) {
@@ -295,7 +360,18 @@ export async function loadYui(scene, base) {
       if (fix) scratch.premultiply(other.copy(fix[0]).invert()).multiply(fix[1])
       entry.delta.copy(scratch)
     }
+    offset.y += ground
     groove.object.position.copy(offset.add(grooveRest).applyMatrix4(grooveSpace))
+    if (startBlend > 0) {
+      startBlend = Math.max(0, startBlend - dt / current.fadeSeconds)
+      const weight = T.MathUtils.smoothstep(1 - startBlend, 0, 1)
+      for (const [name, entry] of bones) {
+        const from = startPose.get(name)
+        if (from) entry.delta.copy(scratch.copy(from).slerp(entry.delta, weight))
+      }
+      groove.object.position.lerpVectors(startOffset, groove.object.position, weight)
+    }
+    keepBody()
   }
 
   const localPoint = new T.Vector3()
@@ -352,9 +428,6 @@ export async function loadYui(scene, base) {
     gaze.eyePitch = damp(gaze.eyePitch, clamp(pitch - gaze.headPitch, -.18, .18) + gaze.jumpPitch, 22, dt)
     // A blink often comes with a bigger turn of the head.
     if (changed && Math.random() < .75) startBlink()
-    const turnSpeed = Math.abs(gaze.headYaw - gaze.lastYaw) / Math.max(dt, 1e-3)
-    gaze.lastYaw = gaze.headYaw
-    hair.speed = turnSpeed * Math.sign(headYaw - gaze.headYaw)
     gaze.contact = gaze.mode === "you" && Math.abs(yaw - gaze.headYaw - gaze.eyeYaw) < .12
       ? gaze.contact + dt : 0
     // Watching the door she turns from the waist as well.
@@ -414,13 +487,10 @@ export async function loadYui(scene, base) {
     addDelta("右猫耳", lean, 0, flick * .4 + ears.back * .25)
     // The tail sways slowly when calm and quicker when she is pleased.
     const lively = Math.max(face.smile, face.happy)
-    const speed = 1 + lively * 1.4
-    TAIL.forEach((name, i) => addDelta(name, 0, Math.sin(clock * speed - i * .55) * (.14 + lively * .14),
-      Math.sin(clock * .7 * speed - i * .4) * .05))
-    // Ponytails lag behind turns of the head and swing back.
-    hair.swing = damp(hair.swing, clamp(hair.speed * .18, -.35, .35), 4, dt)
-    for (const [name, sign] of [["左髪1", 1], ["右髪1", -1]]) addDelta(name, hair.swing * .6 * sign, 0, hair.swing * .4)
-    for (const [name, sign] of [["左髪2", 1], ["右髪2", -1]]) addDelta(name, hair.swing * .4 * sign, 0, hair.swing * .3)
+    // The phase is accumulated, so a change of speed never makes the tail jump to another point of its swing.
+    tailPhase += dt * (1 + lively * 1.4)
+    TAIL.forEach((name, i) => addDelta(name, 0, Math.sin(tailPhase - i * .55) * (.14 + lively * .14),
+      Math.sin(tailPhase * .7 - i * .4) * .05))
   }
 
   function apply() {
@@ -443,6 +513,8 @@ export async function loadYui(scene, base) {
         setDelta("頭", -.12, 0, .05)
         groove.object.position.copy(groove.position)
         apply()
+        root.updateMatrixWorld(true)
+        springs.reset()
         for (const name of shapes.keys()) shape(name, 0)
         still = true
       }
@@ -473,6 +545,17 @@ export async function loadYui(scene, base) {
     expressions(dt)
     secondary(dt)
     apply()
+    root.updateMatrixWorld(true)
+    if (current && ankles.length) {
+      // Correct within the same frame (a smoothed correction lags fast moves and lets the feet sink).
+      const error = (Math.min(...ankles.map(ankle => ankle.getWorldPosition(anklePoint).y)) - ankleRest) / model.scale.y
+      if (Math.abs(error) > 1e-4) {
+        ground -= error
+        groove.object.position.add(anklePoint.set(0, -error, 0).applyMatrix3(grooveLinear))
+        root.updateMatrixWorld(true)
+      }
+    } else ground = 0
+    springs.update(dt)
     return true
   }
 

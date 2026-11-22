@@ -130,7 +130,7 @@ def main() -> None:
         "static/cottage.html", "static/cottage.css", "static/cottage.mjs", "static/cottage-scene.mjs", "static/cottage-icons.mjs",
         "static/cottage-record.mjs", "static/cottage-picture.mjs", "static/cottage-living.mjs", "static/cottage-company.mjs",
         "static/cottage-house.mjs", "static/cottage-layout.mjs", "static/cottage-card.mjs",
-        "static/cottage-furnish.mjs", "static/cottage-ambient.mjs", "static/cottage-yui.mjs",
+        "static/cottage-furnish.mjs", "static/cottage-ambient.mjs", "static/cottage-yui.mjs", "static/cottage-springs.mjs",
         "static/engine/three-gltf.mjs", "static/models/yui.glb",
         "static/models/motion/idle01.vrma.gz", "static/models/motion/idle02.vrma.gz", "static/models/motion/idle03.vrma.gz", "static/models/motion/idle04.vrma.gz", "static/models/motion/idle05.vrma.gz", "static/models/motion/vsign.vrma.gz", "static/models/motion/liked.vrma.gz", "static/models/motion/HANAMI_VRMA_NOTICE.md",
         "static/engine/three.module.min.js", "static/engine/three.core.min.js",

@@ -485,7 +485,7 @@ const cottageAssets = new Set([
   "cottage.html", "cottage.css", "cottage.mjs", "cottage-scene.mjs", "cottage-icons.mjs", "cottage-record.mjs", "cottage-picture.mjs",
   "cottage-living.mjs", "cottage-company.mjs",
   "engine/three.module.min.js", "engine/three.core.min.js", "engine/three-rounded-box.mjs", "engine/three-post.mjs",
-  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs", "cottage-yui.mjs", "engine/three-gltf.mjs", "models/yui.glb",
+  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs", "cottage-yui.mjs", "cottage-springs.mjs", "engine/three-gltf.mjs", "models/yui.glb",
   "models/motion/idle01.vrma.gz", "models/motion/idle02.vrma.gz", "models/motion/idle03.vrma.gz", "models/motion/idle04.vrma.gz", "models/motion/idle05.vrma.gz", "models/motion/vsign.vrma.gz", "models/motion/liked.vrma.gz",
 ])
 // Dev-only pages that live beside this server instead of in the shipped static folder.

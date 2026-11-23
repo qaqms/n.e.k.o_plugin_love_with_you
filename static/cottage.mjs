@@ -1,11 +1,14 @@
 import * as T from "./engine/three.module.min.js"
-import { EffectComposer, GTAOPass, OutputPass, RenderPass, RoomEnvironment, ShaderPass, UnrealBloomPass }
+import { CopyShader, EffectComposer, FullScreenQuad, GTAOPass, OutputPass, RenderPass, RoomEnvironment, ShaderPass,
+  UnrealBloomPass }
   from "./engine/three-post.mjs?v=0.9.25"
 import { icon } from "./cottage-icons.mjs?v=0.9.26"
 import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
 import { buildRoom } from "./cottage-scene.mjs?v=0.9.41"
 import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.41"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
+import { buildGrounds } from "./cottage-grounds.mjs?v=0.9.47"
+import { PROBE_FRAMES, adapterKind, probeCost, savedQuality, settle, startingQuality } from "./cottage-quality.mjs?v=0.9.46"
 import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.41"
 import { createLife } from "./cottage-yui-life.mjs?v=0.9.41"
 import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.41"
@@ -39,6 +42,9 @@ const HOUSE_LABELS = {
   ru: ["Комнаты", "Весь дом", "Гостиная", "Кухня", "Крыльцо и двор", "Спальня", "Кабинет на чердаке", "Свет и время", "Качество", "Авто", "Низкое", "Среднее", "Высокое", "Предметы", "Время суток"],
 }
 const VIEW_IDS = ["overview", ...ROOMS.map(room => room.id)]
+// The line of the vendored GTAO denoise shader that turns its samples per pixel (see applyQuality); a test checks
+// that static/engine/three-post.mjs still contains it.
+const PD_ROTATION = "mat2 rotationMatrix = mat2(noiseVec.x, -noiseVec.y, noiseVec.x, noiseVec.y);"
 const VIEW_SECONDS = .95
 // Each view frames a box: the living room keeps its 0.9.25 framing, the others follow the layout.
 function viewFrame(id) {
@@ -73,6 +79,14 @@ const STORAGE_KEY = "love_with_you:cottage:v1"
 // The view and camera angle on leaving, kept for this run of the app only (session storage): coming back to the
 // cottage shows it as it was left, and after a restart it opens on the whole house.
 const CAMERA_KEY = "love_with_you:cottage:camera"
+const GROUNDS_KEY = "love_with_you:cottage:grounds"
+function sessionValue(key) {
+  try {
+    return sessionStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
 function loadCamera() {
   try {
     const saved = JSON.parse(sessionStorage.getItem(CAMERA_KEY))
@@ -130,15 +144,22 @@ function loadPreferences() {
   }
 }
 
-// Software renderers get the plain pipeline; small or low-core devices skip ambient occlusion.
-function detectQuality(renderer) {
+// The graphics adapter's name, as the browser reports it ("" when it keeps it to itself).
+function adapterName(renderer) {
   try {
     const gl = renderer.getContext()
     const info = gl.getExtension("WEBGL_debug_renderer_info")
-    const name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : ""
-    if (/swiftshader|llvmpipe|software|basic render/i.test(name)) return "low"
-  } catch { return "low" }
-  return (navigator.hardwareConcurrency || 4) <= 4 || matchMedia("(max-width: 575px)").matches ? "medium" : "high"
+    return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : ""
+  } catch { return "" }
+}
+
+// What "auto" settled on for this adapter last time (see cottage-quality.mjs).
+const AUTO_KEY = "love_with_you:cottage:quality-auto"
+function readAuto() {
+  try { return JSON.parse(localStorage.getItem(AUTO_KEY)) } catch { return null }
+}
+function keepAuto(adapter, quality) {
+  try { localStorage.setItem(AUTO_KEY, JSON.stringify({ adapter, quality, at: Date.now() })) } catch { /* measured again next time */ }
 }
 
 export function startCottage() {
@@ -282,6 +303,9 @@ export function startCottage() {
   fill.position.set(4, 2.7, -3)
   scene.add(fill)
   const room = buildRoom(scene)
+  // The yard, meadow, village and sky around the house (0.9.45); decorative only. Tests and diagnostics can leave
+  // them out (?grounds=off, or "off" under GROUNDS_KEY in session storage) to check the house's own framing.
+  const grounds = query.get("grounds") === "off" || sessionValue(GROUNDS_KEY) === "off" ? null : buildGrounds(scene)
   // The living-room mug sits on the coffee table; the study mug comes with the upstairs furnishing.
   const ambient = createAmbient(scene, {
     steam: [{ at: new T.Vector3(-.2, .7, .38), upper: false }, ...room.house.steam.map(at => ({ at, upper: true }))],
@@ -328,12 +352,14 @@ export function startCottage() {
     hitObjects.push(loaded.hitArea)
     hitLookup.set(loaded.hitArea, "yui")
     roomView.dataset.yui = "ready"
+    startProbe()
     // Once the clips are in she shows (in a pose other than standing she stays hidden until then).
     loaded.motion.then(count => { roomView.dataset.yuiMotion = String(count); invalidate() })
     if (yuiMood) loaded.setMood(yuiMood)
     invalidate()
   }).catch(error => {
     roomView.dataset.yui = "missing"
+    startProbe()
     console.warn("cottage: Yui model unavailable", error)
   })
 
@@ -370,8 +396,19 @@ export function startCottage() {
   }))
   const dimBulb = new T.Color(0xbb9572)
   const litBulb = new T.Color(1.7, 1.25, .8)
-  const detectedQuality = detectQuality(renderer)
   const requestedQuality = query.get("quality")
+  // "auto": a starting tier from the adapter (or the one measured last time), then a short measurement once the
+  // room and Yui are in. `probe` holds the frame costs being collected; `probeTried` the tiers measured so far.
+  const adapter = adapterName(renderer)
+  const adapterType = adapterKind(adapter)
+  const remembered = savedQuality(readAuto(), adapter, Date.now())
+  let autoQuality = remembered || startingQuality(adapter,
+    { cores: navigator.hardwareConcurrency || 4, narrow: matchMedia("(max-width: 575px)").matches })
+  let autoSource = remembered ? "saved" : "adapter"
+  let probe = null
+  let probeTried = []
+  let probeArmed = false
+  const pixel = new Uint8Array(4)
   let quality = "low"
   let composer = null
   let bloom = null
@@ -884,6 +921,8 @@ export function startCottage() {
     })
     if (roomView.dataset.ambient !== String(ambientActive)) roomView.dataset.ambient = String(ambientActive)
     mood("backdrop", backdrop)
+    // The windmill turns only while ambient motion runs (medium and high quality, motion not reduced).
+    grounds?.update(backdrop, night, ambientActive ? dt : 0)
     const shownPeriod = periods[Math.round(time)]
     if (roomView.dataset.period !== shownPeriod) roomView.dataset.period = shownPeriod
     if (grade) {
@@ -932,8 +971,11 @@ export function startCottage() {
         }
       }
     }
+    const measuring = probe && probeArmed && document.visibilityState === "visible"
+    const drawStart = measuring ? performance.now() : 0
     if (composer) composer.render(dt)
     else renderer.render(scene, camera)
+    if (measuring) measureFrame(drawStart)
     const animating = azimuth !== targetAzimuth || elevation !== targetElevation || lamp !== Number(preferences.lamp) ||
       curtains !== Number(preferences.curtains) || time !== wantedTime || focusMotion || spinning || viewMotion || houseMoving ||
       handMoving || Boolean(handShown && held && !held.pointer)
@@ -941,12 +983,15 @@ export function startCottage() {
     // which would stop her moving.
     const yuiShown = yuiMoving && yuiOnScreen()
     slowFrames = (animating || yuiShown) && dt > .045 ? slowFrames + 1 : 0
-    if (slowFrames > 24 && quality !== "low" && (animating || quality === "high") &&
-      !qualities.includes(requestedQuality) && preferences.quality === "auto") {
+    if (slowFrames > 24 && quality !== "low" && (animating || quality === "high") && wantedQuality() === "auto") {
       slowFrames = 0
-      applyQuality(quality === "high" ? "medium" : "low")
+      probe = null
+      autoQuality = quality === "high" ? "medium" : "low"
+      autoSource = "slowed"
+      keepAuto(adapter, autoQuality)
+      applyQuality()
     }
-    if (animating) invalidate()
+    if (animating || probe && probeArmed) invalidate()
     // Yui in view moves at up to 60 frames a second; ambient motion alone at 30. Both stay on the display's clock.
     else if (ambientActive || yuiMoving || duvetMoving) {
       paceUntil = timestamp + (yuiShown ? 1000 / 60 : 1000 / 30) - 4
@@ -1034,18 +1079,27 @@ export function startCottage() {
       light.shadow.map?.dispose()
       light.shadow.map = null
     }
+    for (const pass of composer?.passes || []) pass.dispose?.()
     composer?.dispose()
     composer = bloom = grade = null
     if (level !== "low") {
-      const target = new T.WebGLRenderTarget(1, 1, { type: T.HalfFloatType, samples: 4 })
+      // Only the scene is multisampled (see scenePass); the composer's own buffers stay single-sampled.
+      const target = new T.WebGLRenderTarget(1, 1, { type: T.HalfFloatType })
       composer = new EffectComposer(renderer, target)
-      composer.addPass(new RenderPass(scene, camera))
+      composer.addPass(scenePass())
       if (level === "high") {
         const occlusion = new GTAOPass(scene, camera, 1, 1)
+        // Kept at full size: at half size the occlusion steps into visible teeth along wall corners and
+        // furniture edges (tried in 0.9.42, withdrawn in 0.9.43).
         occlusion.output = GTAOPass.OUTPUT.Default
         occlusion.blendIntensity = .85
         occlusion.updateGtaoMaterial({ radius: .32, distanceExponent: 1.5, thickness: 1.4, scale: 1, samples: 12 })
         occlusion.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 5, rings: 2, samples: 12 })
+        // The stock denoise turns its sample pattern by a different random angle in every pixel. Along wall
+        // corners and furniture edges, where few neighbours count, that leaves a dotted dark line the raw
+        // occlusion does not have; one fixed pattern for all pixels keeps those lines smooth (0.9.44).
+        occlusion.pdMaterial.fragmentShader = occlusion.pdMaterial.fragmentShader.replace(PD_ROTATION, "mat2 rotationMatrix = mat2(1., 0., 0., 1.);")
+        occlusion.pdMaterial.needsUpdate = true
         composer.addPass(occlusion)
       }
       bloom = new UnrealBloomPass(new T.Vector2(1, 1), .3, .5, .95)
@@ -1057,9 +1111,82 @@ export function startCottage() {
     resize()
   }
 
+  // Draws the scene with 4x MSAA into its own buffer and copies the resolved picture into the composer.
+  // Multisampling the composer's buffers instead made every later pass (bloom, output, grade) write and resolve
+  // at 4x as well: the same picture, at about a quarter of each frame on integrated graphics.
+  function scenePass() {
+    const samples = new T.WebGLRenderTarget(1, 1, { type: T.HalfFloatType, samples: 4 })
+    const copy = new FullScreenQuad(new T.ShaderMaterial({
+      ...CopyShader, uniforms: T.UniformsUtils.clone(CopyShader.uniforms), depthTest: false, depthWrite: false,
+    }))
+    copy.material.uniforms.tDiffuse.value = samples.texture
+    const pass = new RenderPass(scene, camera)
+    const draw = pass.render.bind(pass)
+    pass.render = (target, writeBuffer, readBuffer, deltaTime, maskActive) => {
+      draw(target, writeBuffer, samples, deltaTime, maskActive)
+      target.setRenderTarget(readBuffer)
+      copy.render(target)
+    }
+    pass.setSize = (width, height) => samples.setSize(width, height)
+    pass.dispose = () => {
+      samples.dispose()
+      copy.material.dispose()
+      copy.dispose()
+    }
+    return pass
+  }
+
+  function wantedQuality() {
+    return qualities.includes(requestedQuality) ? requestedQuality : preferences.quality
+  }
+
   function resolveQuality() {
-    const wanted = qualities.includes(requestedQuality) ? requestedQuality : preferences.quality
-    return wanted === "auto" ? detectedQuality : wanted
+    const wanted = wantedQuality()
+    roomView.dataset.qualitySource = wanted === "auto" ? autoSource : "chosen"
+    return wanted === "auto" ? autoQuality : wanted
+  }
+
+  // Measures "auto" when nothing is remembered for this adapter. A tier that is already low has nowhere to go,
+  // so it is not measured. Started once the room is up, and again whenever the choice goes back to auto.
+  function startProbe() {
+    if (wantedQuality() !== "auto" || autoSource === "saved" || autoSource === "measured" || autoQuality === "low") {
+      probe = null
+      return
+    }
+    probe = []
+    probeArmed = false
+    setTimeout(() => {
+      probeArmed = true
+      invalidate()
+    }, 800)
+  }
+
+  // One measured frame: the time to draw it, waiting on the GPU by reading back a single pixel, so the
+  // display's refresh rate does not enter into it.
+  function measureFrame(start) {
+    if (quality !== autoQuality) return
+    const gl = renderer.getContext()
+    renderer.setRenderTarget(null)
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel)
+    probe.push(performance.now() - start)
+    if (probe.length < PROBE_FRAMES) return
+    const cost = probeCost(probe)
+    roomView.dataset.qualityCost = cost.toFixed(1)
+    probeTried = [...probeTried, quality]
+    const next = settle(quality, cost, { kind: adapterType, tried: probeTried })
+    // Stepping up to high and finding it slow settles back on medium without measuring medium again.
+    const settled = next && probeTried.includes(next) ? next : null
+    if (next && !settled) {
+      autoQuality = next
+      probe = []
+      applyQuality()
+      return
+    }
+    probe = null
+    autoQuality = settled || quality
+    autoSource = "measured"
+    keepAuto(adapter, autoQuality)
+    applyQuality()
   }
 
   function resize() {
@@ -1552,6 +1679,14 @@ export function startCottage() {
   for (const [level, button] of qualityButtons) button.onclick = () => {
     preferences.quality = level
     savePreferences()
+    // Back to auto measures afresh, starting from what the adapter suggests.
+    if (level === "auto") {
+      autoQuality = startingQuality(adapter,
+        { cores: navigator.hardwareConcurrency || 4, narrow: matchMedia("(max-width: 575px)").matches })
+      autoSource = "adapter"
+      probeTried = []
+      startProbe()
+    } else probe = null
     applyQuality()
   }
   const observer = new ResizeObserver(([entry]) => {

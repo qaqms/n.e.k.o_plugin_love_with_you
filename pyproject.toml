@@ -1,12 +1,12 @@
 [project]
 name = "love_with_you"
-version = "0.9.41"
+version = "0.9.47"
 dependencies = []
 
 # Editor-only: resolve the N.E.K.O SDK (`plugin.sdk.plugin`) from the sibling
 # host checkout during local development. Has no effect on packaging or runtime.
 [tool.pyright]
-extraPaths = ["../N.E.K.O"]
+extraPaths = ["../N.E.K.O", "../N.E.K.O-main"]
 
 [tool.pytest.ini_options]
 # The standalone source folder is not importable as a top-level Python package.

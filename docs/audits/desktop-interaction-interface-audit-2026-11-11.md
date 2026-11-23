@@ -2,7 +2,7 @@
 
 核实日期：2026-11-11。
 
-核实对象为本机 `D:\neko kaifa\N.E.K.O`，Git 提交 `3a7f4555d562002cc5215333d52f67abc618626b`。结论以这一份源码为准，不推断其他宿主版本。宿主代码未修改，也未向正在运行的角色发送测试消息。
+核实对象为当时与插件相邻的宿主目录 `N.E.K.O`，Git 提交 `3a7f4555d562002cc5215333d52f67abc618626b`。结论以这一份源码为准，不推断其他宿主版本。宿主代码未修改，也未向正在运行的角色发送测试消息。
 
 ## 结论
 
@@ -26,35 +26,35 @@ Live2D 的短按分支判断是否移动和点击时长，解析命中区后调�
 
 相关代码：
 
-- [短按与触摸区域路由](</D:/neko kaifa/N.E.K.O/static/live2d/live2d-interaction.js:2217>)
-- [配置缺失时的回退](</D:/neko kaifa/N.E.K.O/static/live2d/live2d-interaction.js:4428>)
-- [模型命中区监听](</D:/neko kaifa/N.E.K.O/static/live2d/live2d-interaction.js:4506>)
-- [实际播放触摸动作或表情](</D:/neko kaifa/N.E.K.O/static/live2d/live2d-interaction.js:4576>)
+- 短按与触摸区域路由：宿主 `static/live2d/live2d-interaction.js:2217`
+- 配置缺失时的回退：宿主 `static/live2d/live2d-interaction.js:4428`
+- 模型命中区监听：宿主 `static/live2d/live2d-interaction.js:4506`
+- 实际播放触摸动作或表情：宿主 `static/live2d/live2d-interaction.js:4576`
 
 因此可以在宿主已有界面配置“点头部区域后做什么反馈”，前提是当前模型有适合的区域和资源。不能把这个事实写成“插件已能识别玩家摸头”，也不能把短按命中头部等同于连续抚摸。
 
 宿主还提供 `PATCH /api/characters/catgirl/{name}/touch_set` 保存当前模型的触摸配置。这是持久配置接口，会更新角色数据，不是本次播放动作或订阅触摸事件的接口。本次未调用。
 
-- [触摸配置保存接口](</D:/neko kaifa/N.E.K.O/main_routers/characters_router/live2d_models.py:1058>)
+- 触摸配置保存接口：宿主 `main_routers/characters_router/live2d_models.py:1058`
 
 ## 2. 动作和表情
 
 主页面暴露 `window.LanLan1.setEmotion(emotion)`：委派到 Live2D 情绪管理器、VRM 的 `setMood` 或 MMD 的情绪管理器。`window.LanLan1.playMotion(group, no, priority)` 只处理 Live2D，明确忽略 VRM、MMD、PNGTuber。
 
-- [表情与动作前端兼容接口](</D:/neko kaifa/N.E.K.O/static/live2d/live2d-init.js:265>)
+- 表情与动作前端兼容接口：宿主 `static/live2d/live2d-init.js:265`
 
 这些方法在主桌宠页面的 JavaScript 环境中。本插件面板运行在 `sandbox="allow-scripts"` 的 Hosted TSX iframe，不能直接取得主页面的 `window.live2dManager` 或 `window.LanLan1`。其宿主请求桥也没有转发任意动作、表情命令的方法。
 
-- [Hosted TSX iframe 边界](</D:/neko kaifa/N.E.K.O/frontend/plugin-manager/src/components/plugin/HostedSurfaceFrame.vue:33>)
-- [Hosted UI 请求桥](</D:/neko kaifa/N.E.K.O/frontend/plugin-manager/src/components/plugin/HostedSurfaceFrame.vue:533>)
+- Hosted TSX iframe 边界：宿主 `frontend/plugin-manager/src/components/plugin/HostedSurfaceFrame.vue:33`
+- Hosted UI 请求桥：宿主 `frontend/plugin-manager/src/components/plugin/HostedSurfaceFrame.vue:533`
 
 `push_message` 虽支持 `ui_action` 部件，当前宿主桥实际处理的是 `media_play_url`、`media_allowlist_add` 和 `jukebox_control`；未知 action 只记警告。不能仅因为 schema 接受了字符串，就认为 `set_emotion` 或 `play_motion` 能控制桌宠。
 
-- [实际 ui_action 分发](</D:/neko kaifa/N.E.K.O/plugin/server/messaging/proactive_bridge.py:406>)
+- 实际 ui_action 分发：宿主 `plugin/server/messaging/proactive_bridge.py:406`
 
 模型与情绪映射的 REST 路由主要用于列举资源、编辑映射和保存参数，不能当作“立即播放”的接口。
 
-- [Live2D REST 接口用途](</D:/neko kaifa/N.E.K.O/docs/zh-CN/api/rest/live2d.md:1>)
+- Live2D REST 接口用途：宿主 `docs/zh-CN/api/rest/live2d.md:1`
 
 ## 3. 气泡与聊天演出
 
@@ -62,14 +62,14 @@ Live2D 的短按分支判断是否移动和点击时长，解析命中区后调�
 
 `push_message(visibility=[], ai_behavior="respond", parts=[...])` 可请求角色使用聊天模型生成回应；`visibility=["chat"], ai_behavior="blind"` 可直接展示插件内容而不让模型读取。后者保留插件来源，不代表角色真的说过或记住。
 
-- [SDK 的 visibility / ai_behavior 合同](</D:/neko kaifa/N.E.K.O/plugin/sdk/shared/core/push_message_schema.py:1>)
-- [实际聊天展示帧与来源标识](</D:/neko kaifa/N.E.K.O/main_logic/core/turn.py:3232>)
+- SDK 的 visibility / ai_behavior 合同：宿主 `plugin/sdk/shared/core/push_message_schema.py:1`
+- 实际聊天展示帧与来源标识：宿主 `main_logic/core/turn.py:3232`
 
 角色实际回应后，宿主前端可调用 `analyzeEmotion`，再用 `applyEmotion` 应用情绪，并发出 `neko-assistant-emotion-ready`。头顶气泡监听轮次、情绪和语音事件，且受用户的气泡开关约束。因此插件发起聊天可能间接带来已有演出，但不能保证笑、脸红或在指定毫秒出现指定气泡。
 
-- [聊天完成后的情绪分析与应用](</D:/neko kaifa/N.E.K.O/static/app/app-websocket.js:1839>)
-- [头顶气泡的轮次与情绪处理](</D:/neko kaifa/N.E.K.O/static/avatar/avatar-reaction-bubble.js:2480>)
-- [头顶气泡当前暴露的方法](</D:/neko kaifa/N.E.K.O/static/avatar/avatar-reaction-bubble.js:2772>)
+- 聊天完成后的情绪分析与应用：宿主 `static/app/app-websocket.js:1839`
+- 头顶气泡的轮次与情绪处理：宿主 `static/avatar/avatar-reaction-bubble.js:2480`
+- 头顶气泡当前暴露的方法：宿主 `static/avatar/avatar-reaction-bubble.js:2772`
 
 该气泡暴露的方法主要用于隐藏、读取状态和锚点，不包含供插件调用的任意内容展示接口。
 
@@ -79,25 +79,25 @@ Live2D 的短按分支判断是否移动和点击时长，解析命中区后调�
 
 进一步核对身体分区时发现：原生道具的区域分类目前按角色外框比例判断；提示源码明确注明这种方式可能误判，所以暂时省略部位台词与部位记忆。协议中的 `head/body` 字段不能当作已验证准确的身体识别，更不能直接区分肚子和腿。
 
-- [外框比例分区](</D:/neko kaifa/N.E.K.O/frontend/react-neko-chat/src/avatar-tools/interaction.ts:340>)
-- [暂时省略部位台词的源码说明](</D:/neko kaifa/N.E.K.O/config/prompts/prompts_avatar_interaction.py:57>)
+- 外框比例分区：宿主 `frontend/react-neko-chat/src/avatar-tools/interaction.ts:340`
+- 暂时省略部位台词的源码说明：宿主 `config/prompts/prompts_avatar_interaction.py:57`
 
-- [允许的道具、动作与区域](</D:/neko kaifa/N.E.K.O/config/prompts/avatar_interaction_contract.py:19>)
-- [WebSocket 入口](</D:/neko kaifa/N.E.K.O/main_routers/websocket_router.py:1424>)
-- [互动处理与专用回应](</D:/neko kaifa/N.E.K.O/main_logic/core/greeting.py:168>)
-- [发给前端的确认](</D:/neko kaifa/N.E.K.O/main_logic/core/notify.py:1125>)
+- 允许的道具、动作与区域：宿主 `config/prompts/avatar_interaction_contract.py:19`
+- WebSocket 入口：宿主 `main_routers/websocket_router.py:1424`
+- 互动处理与专用回应：宿主 `main_logic/core/greeting.py:168`
+- 发给前端的确认：宿主 `main_logic/core/notify.py:1125`
 
 未发现对应的结构化互动事实向插件事件总线发布。现有 AI 回复向插件会话总线发布的是文本、轮次类型和时间等信息，不能把“读到一句像摸头回应的话”视为可验证的点击、部位或游戏结果。
 
-- [AI 回复的插件会话发布字段](</D:/neko kaifa/N.E.K.O/main_logic/core/turn.py:707>)
+- AI 回复的插件会话发布字段：宿主 `main_logic/core/turn.py:707`
 
 另有小游戏 SDK 的 `avatar.mount(...)` 与返回控制器的 `setEmotion(...)`。它面向小游戏自己的渲染槽位，不是对主桌宠的远程控制接口，不能直接接入当前 Hosted TSX 面板后宣称已经控制桌宠。
 
-- [小游戏 Avatar 挂载与控制器](</D:/neko kaifa/N.E.K.O/static/game/sdk/neko-minigame-sdk.d.ts:614>)
+- 小游戏 Avatar 挂载与控制器：宿主 `static/game/sdk/neko-minigame-sdk.d.ts:614`
 
 `/plugin/{plugin_id}/ui-api/push` 则广播到该插件静态页面的 SSE 订阅者；其中的 `avatar`、`style` 元数据不是主桌宠动作或头顶气泡指令。
 
-- [插件静态 UI 的推送用途](</D:/neko kaifa/N.E.K.O/plugin/server/routes/plugin_ui.py:460>)
+- 插件静态 UI 的推送用途：宿主 `plugin/server/routes/plugin_ui.py:460`
 
 ## 5. 验证与后续边界
 

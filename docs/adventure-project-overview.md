@@ -17,11 +17,11 @@
 
 ## 2. 目录
 
-项目主人 2026-11-20 说明，最新代码在 `F:\ai\neko kaifa5\n.e.k.o_plugin_love_with_you\`（插件 0.9.24），以下以工作区 `F:\ai\neko kaifa5\` 为准。`F:\ai\neko kaifa8\` 等早先的工作区是旧版本，不要在那里开发。插件目录从 2026-11-20 起是 git 仓库（`main` 分支，首个提交为 0.9.24 基线），改动前后可用 git 对比和回退。
+项目主人在多台电脑上开发，各台的工作区盘符和文件夹名不同，文档里一律只写相对路径。工作区里插件目录 `n.e.k.o_plugin_love_with_you\` 和宿主目录并排；宿主目录可能叫 `N.E.K.O\`，也可能是从 GitHub 下载解压的 `N.E.K.O-main\`，开发工具两种都能自动找到，也可以用环境变量 `NEKO_HOST_ROOT` 指定。插件目录是否带 git 仓库取决于那台电脑：有就用 git 对比和回退；从别处拷来、没有 `.git` 时，改动前先按第 12 节备份。
 
 | 路径 | 是什么 | 能否修改 |
 | --- | --- | --- |
-| `N.E.K.O\` | 宿主源码 | **不能** |
+| `N.E.K.O\` 或 `N.E.K.O-main\` | 宿主源码 | **不能** |
 | `n.e.k.o_plugin_love_with_you\` | **当前插件源码，所有开发都在这里** | 能 |
 
 插件内与游戏有关的部分：
@@ -72,7 +72,8 @@ npm --prefix tools run test:rules
 
 | 变量 | 含义 | 不设时 |
 | --- | --- | --- |
-| `NEKO_PYTHON` | 运行预览服务器的 Python | `..\N.E.K.O\.venv\Scripts\python.exe` |
+| `NEKO_PYTHON` | 运行预览服务器的 Python | 宿主目录下的 `.venv\Scripts\python.exe`，没有就用 PATH 里的 `python` |
+| `NEKO_HOST_ROOT` | 宿主目录 | 插件旁边的 `N.E.K.O` 或 `N.E.K.O-main` |
 | `NEKO_UI_DEPS` | 装有 `playwright` 的目录 | `tools\node_modules` |
 | `NEKO_UI_BROWSER` | 浏览器可执行文件 | Playwright 自带的 Chromium |
 | `NEKO_UI_ARTIFACTS` | 截图输出目录 | `archive\reviews\browser`；导航测试为 `archive\reviews\navigation` |

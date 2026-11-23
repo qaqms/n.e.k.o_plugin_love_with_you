@@ -4,7 +4,7 @@
 
 为 N.E.K.O 的日常聊天加入好感、恋爱关系、专属称呼和共同回忆，让相处的变化留在每一天里。
 
-**当前版本：0.9.41** · 插件标识：`love_with_you`
+**当前版本：0.9.47** · 插件标识：`love_with_you`
 
 [使用指南](docs/guide.md) · [问题反馈](https://github.com/qaqms/n.e.k.o_plugin_love_with_you/issues) · [开发文档](docs/development.md)
 

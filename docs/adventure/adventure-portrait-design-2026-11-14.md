@@ -359,7 +359,7 @@ surprise:  surprised, wide eyes, open mouth, ears perked up
 
 **配色**：按 3.1 节的配色表，但裙子改用浅色（见 11.1）。
 
-**存放位置**：放在插件目录外，例如 `D:\neko kaifa\yui-sprite-source\front|back|side\`，由开发工具处理后再进入插件。
+**存放位置**：放在插件目录外，例如 工作区里与插件目录并排的 `yui-sprite-source\front|back|side\`，由开发工具处理后再进入插件。
 
 提示词与生成步骤见 11.5。
 
@@ -499,7 +499,7 @@ No text, no watermark.
 **交付目录**：
 
 ```text
-D:\neko kaifa\yui-sprite-source\
+..\yui-sprite-source\      （与插件目录并排）
   sheet.png              第 1 步选中的三视图
   front\  head.png  head_hurt.png  twintail_left.png  twintail_right.png  body.png
           arm_left.png  arm_right.png  leg_left.png  leg_right.png  tail.png
@@ -537,4 +537,4 @@ D:\neko kaifa\yui-sprite-source\
   - `static/art/companion-yui-{guardian,mage}.png`：头像。
   - 素材加载失败时，战斗回退到 `companion-art.mjs` 矢量版，并提示“同行外观未能载入”；头像图失败时也回退为矢量版。
   - 用 PNG 而不用 WebP：宿主静态路由在 Python 3.11 / Windows 下无法识别 `.webp` 的 MIME 类型。
-- **素材源与生成脚本**：在插件外的 `D:\neko kaifa\yui-sprite-source\`，说明见其中的 README。
+- **素材源与生成脚本**：在插件外、与插件目录并排的 `yui-sprite-source\`，说明见其中的 README。

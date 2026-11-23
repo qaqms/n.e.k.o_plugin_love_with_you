@@ -211,7 +211,7 @@ export function Cottage(props: {
 
   return <div className="lwy-game lwy-cottage">
     <iframe ref={frame} title={t("nav.cottage")}
-      src={`/plugin/love_with_you/ui/cottage.html?version=0.9.41&linked=1&locale=${encodeURIComponent(props.locale)}`} />
+      src={`/plugin/love_with_you/ui/cottage.html?version=0.9.47&linked=1&locale=${encodeURIComponent(props.locale)}`} />
     {bagOpen && props.bag ? <div className="lwy-cottage-bag lwy-portrait-bag" role="group" aria-label={t("shop.tab.bag")}>
       <div className="lwy-cottage-bag-head">
         <strong>{t("shop.tab.bag")}</strong>

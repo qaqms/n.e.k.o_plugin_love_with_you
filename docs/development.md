@@ -1,6 +1,6 @@
 # 开发说明
 
-从插件仓库根目录运行下列命令。相邻 `../N.E.K.O` 仅提供 SDK、渲染器和构建工具，不修改宿主代码。游戏的规则版本和存档约定先读[开发总览](adventure-project-overview.md)，各模块入口见[模块职责](module-map.md)。
+从插件仓库根目录运行下列命令。相邻的宿主目录（`../N.E.K.O` 或 `../N.E.K.O-main`，也可用环境变量 `NEKO_HOST_ROOT` 指定）仅提供 SDK、渲染器和构建工具，不修改宿主代码。游戏的规则版本和存档约定先读[开发总览](adventure-project-overview.md)，各模块入口见[模块职责](module-map.md)。
 
 ## 本地加载
 

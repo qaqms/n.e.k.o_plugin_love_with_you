@@ -53,7 +53,7 @@ npm --prefix tools/game run build
 启动独立试玩服务器：
 
 ```powershell
-& '../N.E.K.O/.venv/Scripts/python.exe' -B tools/preview/adventure_preview.py --port 4322
+python -B tools/preview/adventure_preview.py --port 4322
 ```
 
 默认使用系统临时目录；需要跨服务器重启保留测试存档时，显式传入仓库外的 `--data` 测试目录。该服务器只监听本机，不加载宿主插件、角色模型或真实存档。预览中的 YUI/MIO 是固定测试身份。
@@ -61,7 +61,6 @@ npm --prefix tools/game run build
 浏览器回归：
 
 ```powershell
-$env:NEKO_UI_DEPS='D:\neko kaifa\.neko-ui-review'
 $env:NEKO_UI_BROWSER='C:\Program Files\Google\Chrome\Application\chrome.exe'
 npm --prefix tools run test:adventure
 ```

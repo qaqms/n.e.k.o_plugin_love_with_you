@@ -5,6 +5,7 @@ import { existsSync, readFileSync, readdirSync, mkdirSync, mkdtempSync, realpath
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { panelUrl } from "../build/panel_entry.mjs"
+import { previewPython } from "../build/host_root.mjs"
 import { dependency, fixture, pluginRoot, startPreview } from "../preview/ui_preview.mjs"
 
 const { chromium } = dependency("playwright")
@@ -33,7 +34,7 @@ before(async () => {
 })
 beforeEach(async () => {
   backendData = mkdtempSync(join(tmpdir(), "neko-adventure-test-"))
-  backend = spawn(process.env.NEKO_PYTHON || "python", ["-B", "tools/preview/adventure_preview.py", "--port", "0", "--data", backendData], {
+  backend = spawn(previewPython(), ["-B", "tools/preview/adventure_preview.py", "--port", "0", "--data", backendData], {
     cwd: pluginRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
   })
   backendUrl = await new Promise((resolve, reject) => {

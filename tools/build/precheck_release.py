@@ -11,21 +11,34 @@ import sys
 import tempfile
 from pathlib import Path
 
+from host_root import default_host
+
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def source_files() -> list[str]:
+    """Tracked and non-ignored files; a folder copied without .git is read through a throwaway index."""
+    command = ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"]
+    if (ROOT / ".git").exists():
+        listed = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+    else:
+        with tempfile.TemporaryDirectory(prefix="love-precheck-index-") as index:
+            subprocess.run(["git", "init", "-q", "--bare", index], check=True)
+            listed = subprocess.run(
+                ["git", f"--git-dir={index}", f"--work-tree={ROOT}", *command[1:]],
+                cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+            ).stdout
+    return sorted({name for name in listed.decode("utf-8").split("\0") if name})
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", type=Path, default=ROOT.parent / "N.E.K.O")
+    parser.add_argument("--host", type=Path, default=default_host())
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     host = args.host.resolve(strict=True)
     output = ROOT / "dist" / "precheck"
-    listed = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-    ).stdout.decode("utf-8")
-    files = sorted({name for name in listed.split("\0") if name})
+    files = source_files()
     with tempfile.TemporaryDirectory(prefix="love-market-precheck-") as temporary:
         parent = Path(temporary).resolve()
         assert parent.parent == Path(tempfile.gettempdir()).resolve()

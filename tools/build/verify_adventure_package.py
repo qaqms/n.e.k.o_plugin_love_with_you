@@ -15,6 +15,7 @@ from pathlib import Path
 from types import ModuleType
 
 from audit_release import package_path_allowed, scan_package
+from host_root import default_host
 
 
 def smoke_backend(archive: zipfile.ZipFile, prefix: str) -> int:
@@ -84,7 +85,7 @@ def main() -> None:
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser()
     parser.add_argument("package", type=Path)
-    parser.add_argument("--host", type=Path, default=root.parent / "N.E.K.O")
+    parser.add_argument("--host", type=Path, default=default_host())
     args = parser.parse_args()
     sys.path.insert(0, str(args.host))
     from plugin.neko_plugin_cli.core import inspect_package
@@ -130,7 +131,7 @@ def main() -> None:
         "static/cottage.html", "static/cottage.css", "static/cottage.mjs", "static/cottage-scene.mjs", "static/cottage-icons.mjs",
         "static/cottage-record.mjs", "static/cottage-picture.mjs", "static/cottage-living.mjs", "static/cottage-company.mjs",
         "static/cottage-house.mjs", "static/cottage-layout.mjs", "static/cottage-card.mjs",
-        "static/cottage-furnish.mjs", "static/cottage-ambient.mjs", "static/cottage-yui.mjs", "static/cottage-springs.mjs", "static/cottage-duvet.mjs", "static/cottage-yui-card.mjs", "static/cottage-hand.mjs", "static/cottage-routine.mjs", "static/cottage-yui-life.mjs",
+        "static/cottage-furnish.mjs", "static/cottage-ambient.mjs", "static/cottage-grounds.mjs", "static/cottage-grounds-life.mjs", "static/cottage-quality.mjs", "static/cottage-yui.mjs", "static/cottage-springs.mjs", "static/cottage-duvet.mjs", "static/cottage-yui-card.mjs", "static/cottage-hand.mjs", "static/cottage-routine.mjs", "static/cottage-yui-life.mjs",
         "static/engine/three-gltf.mjs", "static/models/yui.glb", "static/models/hand.glb",
         "static/models/motion/idle01.vrma.gz", "static/models/motion/idle02.vrma.gz", "static/models/motion/idle03.vrma.gz", "static/models/motion/idle04.vrma.gz", "static/models/motion/idle05.vrma.gz", "static/models/motion/vsign.vrma.gz", "static/models/motion/liked.vrma.gz", "static/models/motion/walk.vrma.gz", "static/models/motion/sit.vrma.gz", "static/models/motion/type.vrma.gz", "static/models/motion/tablet.vrma.gz", "static/models/motion/sleep.vrma.gz", "static/models/motion/sleep-turn.vrma.gz", "static/models/motion/yawn.vrma.gz", "static/models/motion/stretch.vrma.gz", "static/models/motion/getup.vrma.gz", "static/models/motion/HANAMI_VRMA_NOTICE.md",
         "static/engine/three.module.min.js", "static/engine/three.core.min.js",

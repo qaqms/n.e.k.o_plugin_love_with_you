@@ -13,9 +13,8 @@ import math
 import sys
 from pathlib import Path
 
-import bmesh
 import bpy
-from mathutils import Matrix, Quaternion, Vector
+from mathutils import Quaternion, Vector
 from mathutils.geometry import intersect_point_line
 
 OUT = Path(sys.argv[sys.argv.index("--") + 1])

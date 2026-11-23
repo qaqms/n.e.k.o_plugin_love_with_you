@@ -21,11 +21,16 @@ after(async () => {
 })
 
 const CAMERA_KEY = "love_with_you:cottage:camera"
+// The surroundings (cottage-grounds.mjs) fill the frame, so framing and pixel checks run without them;
+// "the surroundings fill the frame" below checks them on their own.
+const GROUNDS_KEY = "love_with_you:cottage:grounds"
+const withoutGrounds = page => page.addInitScript(key => sessionStorage.setItem(key, "off"), GROUNDS_KEY)
 // The cottage's clock places Yui (cottage-routine.mjs): at 8:30 she stands on the living-room rug. The cottage opens
 // on the view it was left in during this session; most tests start in the living room (`view: null` starts fresh).
 async function roomPage(viewport, isMobile = false, demo = false, reducedMotion = "reduce", clock = false,
   { at = [8, 30], view = "living" } = {}) {
   const page = await browser.newPage({ viewport, isMobile, hasTouch: isMobile, reducedMotion })
+  await withoutGrounds(page)
   const time = new Date(2026, 10, 22, ...at)
   if (clock) await page.clock.install({ time })
   else await page.clock.setFixedTime(time)
@@ -104,6 +109,7 @@ test("software rendering picks the plain pipeline and every quality tier renders
     const errors = []
     page.on("pageerror", error => errors.push(error.message))
     try {
+      await withoutGrounds(page)
       await page.addInitScript(() => localStorage.setItem("love_with_you:cottage:v1",
         JSON.stringify({ period: "night", lamp: true, curtains: true })))
       await page.goto(`${url}/plugin/love_with_you/ui/cottage.html?locale=zh-CN${query}`)
@@ -116,6 +122,35 @@ test("software rendering picks the plain pipeline and every quality tier renders
   }
   // Bloom, occlusion and grading must visibly change the frame, not silently fall back.
   assert.ok(changedPixels(shots.low, shots.high) > 300)
+})
+
+test("the surroundings fill the frame around the house and darken at night", async () => {
+  const shots = {}
+  for (const period of ["day", "night"]) {
+    const page = await browser.newPage({ viewport: { width: 900, height: 700 }, reducedMotion: "reduce" })
+    const errors = []
+    page.on("pageerror", error => errors.push(error.message))
+    try {
+      await page.addInitScript(value => localStorage.setItem("love_with_you:cottage:v1", JSON.stringify({ period: value })), period)
+      await page.goto(`${url}/plugin/love_with_you/ui/cottage.html?locale=zh-CN`)
+      await page.locator(`#room[data-period="${period}"]`).waitFor()
+      await page.getByRole("button", { name: "台灯" }).waitFor()
+      shots[period] = await capture(page, page, `cottage-grounds-${period}.png`)
+      assert.deepEqual(errors, [])
+    } finally { await page.close() }
+  }
+  // Without surroundings the corners are one flat backdrop colour; with them the top and bottom rows vary.
+  for (const pixels of Object.values(shots)) {
+    for (const y of [3, 96]) {
+      const row = new Set()
+      for (let x = 0; x < 100; x += 4) row.add(pixels.slice((y * 100 + x) * 4, (y * 100 + x) * 4 + 3).map(v => Math.floor(v / 8)).join(","))
+      assert.ok(row.size > 3, `row ${y} is a flat backdrop`)
+    }
+  }
+  // The meadow is green by day; at night the whole frame darkens.
+  const mean = (pixels, channel) => pixels.filter((_, i) => i % 4 === channel).reduce((a, b) => a + b, 0) / (pixels.length / 4)
+  assert.ok(mean(shots.day, 1) > mean(shots.day, 2), "the day frame is not green")
+  assert.ok(mean(shots.night, 1) < mean(shots.day, 1) - 30, "night did not darken the surroundings")
 })
 
 test("the sofa empty seat places a second cup and only chat sends an invitation", async () => {
@@ -897,6 +932,7 @@ test("Yui keeps her day: the clock puts her somewhere, the room menu says where,
 test("Yui's mood follows the relationship stage, time apart and a bad day", async () => {
   for (const [bond, expected] of [["", "warmth:0.75"], ["missed", "warmth:0.75 missed"], ["low", "warmth:0.75 low"]]) {
     const page = await browser.newPage({ viewport: { width: 1000, height: 700 } })
+    await withoutGrounds(page)
     try {
       const errors = []
       page.on("pageerror", error => errors.push(error.message))

@@ -6,12 +6,13 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
+import { previewPython } from "../build/host_root.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const require = createRequire(process.env.NEKO_UI_DEPS
   ? join(resolve(process.env.NEKO_UI_DEPS), "package.json") : import.meta.url)
 const { chromium } = require("playwright")
-const python = process.env.NEKO_PYTHON || resolve(root, "../N.E.K.O/.venv/Scripts/python.exe")
+const python = previewPython()
 const artifacts = process.env.NEKO_UI_ARTIFACTS || resolve(root, "archive/reviews/browser")
 mkdirSync(artifacts, { recursive: true })
 

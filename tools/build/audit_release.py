@@ -96,6 +96,12 @@ def scan_bytes(content: bytes, location: str) -> list[dict]:
     return findings
 
 
+def source_files() -> list[str]:
+    from precheck_release import source_files as listed  # also covers a copy without .git
+
+    return listed()
+
+
 def git(*args: str, input_data: bytes | None = None) -> bytes:
     return subprocess.run(
         ["git", *args], cwd=ROOT, input=input_data, stdout=subprocess.PIPE,
@@ -152,10 +158,7 @@ def main() -> None:
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     findings = []
-    tracked = sorted({
-        name for name in git("ls-files", "--cached", "--others", "--exclude-standard", "-z")
-        .decode("utf-8").split("\0") if name
-    })
+    tracked = source_files()
     for name in tracked:
         path = ROOT / name
         if path.is_file():

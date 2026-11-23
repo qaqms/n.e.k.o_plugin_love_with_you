@@ -4,9 +4,10 @@ import { createRequire } from "node:module"
 import { readFileSync, readdirSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { hostRoot as findHost } from "../build/host_root.mjs"
 
 export const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
-export const hostRoot = process.env.NEKO_HOST_ROOT || resolve(pluginRoot, "../N.E.K.O")
+export const hostRoot = findHost()
 const requireDependency = createRequire(process.env.NEKO_UI_DEPS
   ? join(resolve(process.env.NEKO_UI_DEPS), "package.json") : import.meta.url)
 export const dependency = name => requireDependency(name)
@@ -97,6 +98,9 @@ function document(sourcePath, search = "") {
 <style>${readFileSync(join(hostedRoot, "ui-kit/styles.css"), "utf8")}</style></head>
 <body><main id="root"></main><script>
 window.__NEKO_PAYLOAD = {plugin:{id:"love_with_you"}, surface:{id:"main",kind:"panel"},locale:"zh-CN",
+  // Newer host renderers post to payload.host.origin; an opaque srcdoc sandbox reports origin "null".
+  host:{origin:location.origin !== "null" ? location.origin
+    : (location.ancestorOrigins && location.ancestorOrigins[0]) || (document.referrer && new URL(document.referrer).origin) || location.origin},
   i18n:{default_locale:"en",messages:${escape(JSON.stringify(messages))}}};
 const createPluginDisplayClient = (function () {
 const module = { exports: {}, nekoPluginDisplayFactoryOnly: true };
@@ -486,7 +490,7 @@ const cottageAssets = new Set([
   "cottage.html", "cottage.css", "cottage.mjs", "cottage-scene.mjs", "cottage-icons.mjs", "cottage-record.mjs", "cottage-picture.mjs",
   "cottage-living.mjs", "cottage-company.mjs",
   "engine/three.module.min.js", "engine/three.core.min.js", "engine/three-rounded-box.mjs", "engine/three-post.mjs",
-  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs", "cottage-yui.mjs", "cottage-springs.mjs", "cottage-duvet.mjs", "cottage-yui-card.mjs", "cottage-hand.mjs", "cottage-routine.mjs", "cottage-yui-life.mjs", "engine/three-gltf.mjs", "models/yui.glb", "models/hand.glb",
+  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs", "cottage-grounds.mjs", "cottage-grounds-life.mjs", "cottage-quality.mjs", "cottage-yui.mjs", "cottage-springs.mjs", "cottage-duvet.mjs", "cottage-yui-card.mjs", "cottage-hand.mjs", "cottage-routine.mjs", "cottage-yui-life.mjs", "engine/three-gltf.mjs", "models/yui.glb", "models/hand.glb",
   "models/motion/idle01.vrma.gz", "models/motion/idle02.vrma.gz", "models/motion/idle03.vrma.gz", "models/motion/idle04.vrma.gz", "models/motion/idle05.vrma.gz", "models/motion/vsign.vrma.gz", "models/motion/liked.vrma.gz", "models/motion/walk.vrma.gz", "models/motion/sit.vrma.gz", "models/motion/type.vrma.gz", "models/motion/tablet.vrma.gz", "models/motion/sleep.vrma.gz", "models/motion/sleep-turn.vrma.gz", "models/motion/yawn.vrma.gz", "models/motion/stretch.vrma.gz", "models/motion/getup.vrma.gz",
 ])
 // Dev-only pages that live beside this server instead of in the shipped static folder.

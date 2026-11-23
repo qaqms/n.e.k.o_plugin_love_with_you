@@ -19,11 +19,11 @@
 
 依据：
 
-- [现有外框比例分类](</D:/neko kaifa/N.E.K.O/frontend/react-neko-chat/src/avatar-tools/interaction.ts:340>)
-- [暂时禁用部位台词的原因](</D:/neko kaifa/N.E.K.O/config/prompts/prompts_avatar_interaction.py:57>)
-- [Live2D 点击路由](</D:/neko kaifa/N.E.K.O/static/live2d/live2d-interaction.js:2217>)
-- [Live2D 自定义区域](</D:/neko kaifa/N.E.K.O/static/live2d/live2d-interaction.js:4469>)
-- [插件已有阶段语气](</D:/neko kaifa/n.e.k.o_plugin_love_with_you/_prompts.py:78>)
+- 现有外框比例分类：宿主 `frontend/react-neko-chat/src/avatar-tools/interaction.ts:340`
+- 暂时禁用部位台词的原因：宿主 `config/prompts/prompts_avatar_interaction.py:57`
+- Live2D 点击路由：宿主 `static/live2d/live2d-interaction.js:2217`
+- Live2D 自定义区域：宿主 `static/live2d/live2d-interaction.js:4469`
+- 插件已有阶段语气：当时的 `_prompts.py:78`（现为 `backend/relationship/prompts.py` 的 `STAGE_TONES`）
 
 因此，不能把当前的 `body` 分类直接细说成肚子或腿，也不能仅增加一段提示词就声称接通桌面点击。
 

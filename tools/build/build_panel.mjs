@@ -4,9 +4,10 @@ import { copyFileSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { panelEntry } from "./panel_entry.mjs"
+import { hostRoot } from "./host_root.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
-const host = process.env.NEKO_HOST_ROOT || resolve(root, "../N.E.K.O")
+const host = hostRoot()
 const require = createRequire(import.meta.url)
 const { transform } = require("sucrase")
 const hosted = join(host, "frontend/plugin-manager/src/components/plugin/hosted")

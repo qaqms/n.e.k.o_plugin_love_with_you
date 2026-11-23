@@ -436,6 +436,8 @@ export function createLife(yui, Vector3) {
     get room() { return roomOf(position) },
     get upstairs() { return position.y > 2 },
     get activity() { return activity?.id || "" },
+    // The spot she is settled at ("" while walking): the lofi medium shot frames each spot its own way.
+    get spot() { return !step && place?.spot || "" },
     // Out of sight for a moment, or still getting up: not to be clicked or framed yet.
     get settled() { return !step },
   }

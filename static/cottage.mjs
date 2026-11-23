@@ -2,15 +2,16 @@ import * as T from "./engine/three.module.min.js"
 import { CopyShader, EffectComposer, FullScreenQuad, GTAOPass, OutputPass, RenderPass, RoomEnvironment, ShaderPass,
   UnrealBloomPass }
   from "./engine/three-post.mjs?v=0.9.25"
-import { icon } from "./cottage-icons.mjs?v=0.9.26"
+import { icon } from "./cottage-icons.mjs?v=0.9.48.1"
 import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
 import { buildRoom } from "./cottage-scene.mjs?v=0.9.41"
 import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.41"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
 import { buildGrounds } from "./cottage-grounds.mjs?v=0.9.47"
 import { PROBE_FRAMES, adapterKind, probeCost, savedQuality, settle, startingQuality } from "./cottage-quality.mjs?v=0.9.46"
-import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.41"
-import { createLife } from "./cottage-yui-life.mjs?v=0.9.41"
+import { InkShader, STYLES, setCharacterLight, setPixelRatio as styleRatio, stylize } from "./cottage-style.mjs?v=0.9.48.3"
+import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.48.3"
+import { createLife } from "./cottage-yui-life.mjs?v=0.9.48.1"
 import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.41"
 import { createYuiCard } from "./cottage-yui-card.mjs?v=0.9.40"
 import { HAND_POSE, createHand } from "./cottage-hand.mjs?v=0.9.38"
@@ -119,7 +120,25 @@ const daylight = [
     backdrop: 0x1d2833, sunColor: 0x9fb9ff, sunFrom: [-1.8, 6, -7.4], sunTo: [.1, 0, .9], tint: [.93, .97, 1.05] },
 ]
 const qualities = ["auto", "low", "medium", "high"]
-const FOV = { room: 24, closeup: 38, seat: 32 }
+const FOV = { room: 24, closeup: 38, seat: 32, watch: 30 }
+// Lofi sample, third round: "watch her", a medium shot from the side and front while she gets on with her day (the
+// reference game frames its girl like this at her desk). Unlike clicking her, she is not interrupted. Per spot:
+// the world angle the camera looks from (her front is her own turn; spots facing a wall are seen from the open
+// side), pitch, the height of the frame (span, metres at her), how far below her chest the frame centre sits, and
+// which side of the frame she stands in (-1 left third, 1 right third).
+const WATCH = { label: { "zh-CN": "看看她", "zh-TW": "看看她", en: "Watch her", es: "Mirarla", ja: "彼女を眺める", ko: "그녀 바라보기" } }
+const SHOTS = {
+  sofa: { angle: .62, pitch: .2, span: 1.6, drop: .26, side: -1 },
+  // Desk and counter face the back wall (bookshelf to the right of the desk, stairs right of the counter): the desk
+  // is seen from her right side, the tablet over her right shoulder.
+  desk: { angle: 1.75, pitch: .16, span: 1.3, drop: .3, side: -1 },
+  counter: { angle: 1.1, pitch: .4, span: .95, drop: .04, side: 1 },
+  table: { angle: 1.05, pitch: .16, span: 1.3, drop: .16, side: -1 },
+  bench: { angle: .6, pitch: .12, span: 1.35, drop: .16, side: -1 },
+  rug: { angle: 1.05, pitch: .1, span: 1.45, drop: .2, side: -1 },
+  bedside: { angle: .9, pitch: .1, span: 1.45, drop: .2, side: -1 },
+  bed: { angle: .75, pitch: .62, span: 1.2, drop: .1, side: 0 },
+}
 // Warm vignette and per-period tint, applied after tone mapping.
 const GradeShader = {
   uniforms: { tDiffuse: { value: null }, vignette: { value: .2 }, tint: { value: new T.Color(1, 1, 1) } },
@@ -166,6 +185,8 @@ export function startCottage() {
   const query = new URLSearchParams(location.search)
   const requested = query.get("locale") || "zh-CN"
   const linked = window.parent !== window && query.get("linked") === "1"
+  // The lofi look is a sample for now (0.9.48): only with ?style=lofi. See cottage-style.mjs.
+  const style = STYLES.includes(query.get("style")) ? query.get("style") : "classic"
   const locale = [requested, requested.split("-")[0], "en"].find(key => Object.hasOwn(LABELS, key))
   const [title, toolbarLabel, ...labels] = LABELS[locale]
   const stage = document.querySelector("#stage")
@@ -190,6 +211,17 @@ export function startCottage() {
     button.append(icon(symbol))
     return [id, button]
   }))
+  if (style === "lofi") {
+    const button = document.createElement("button")
+    button.type = "button"
+    button.id = "watch"
+    const label = WATCH.label[locale] || WATCH.label.en
+    button.setAttribute("aria-label", label)
+    button.title = label
+    button.append(icon("Video"))
+    elements.seat.before(button)
+    button.onclick = () => activate("watch")
+  }
   for (const [id, label, symbol] of [["rooms", roomsLabel, "House"], ["mood", moodLabel, "SunMoon"], ["items", itemsLabel, "Package"]]) {
     const button = document.getElementById(id)
     button.setAttribute("aria-label", label)
@@ -336,6 +368,7 @@ export function startCottage() {
   let life = null
   let yuiRoom = ""
   const yuiFocus = new T.Vector3()
+  const watchPoint = new T.Vector3()
   // Yui's mood follows the relationship shown in the panel; it only changes how she looks and moves.
   const moodFrom = ({ bond, calendar }) => {
     const number = value => Number.isFinite(value) ? value : 0
@@ -346,7 +379,7 @@ export function startCottage() {
       missed: Boolean(bond) && number(bond.idle) >= 2,
     }
   }
-  loadYui(scene, "./models").then(loaded => {
+  loadYui(scene, "./models", { style }).then(loaded => {
     yui = loaded
     life = createLife(loaded, T.Vector3)
     hitObjects.push(loaded.hitArea)
@@ -411,6 +444,9 @@ export function startCottage() {
   const pixel = new Uint8Array(4)
   let quality = "low"
   let composer = null
+  let ink = null
+  let sceneDepth = null
+  let styled = -Infinity
   let bloom = null
   let grade = null
   let slowFrames = 0
@@ -689,10 +725,21 @@ export function startCottage() {
       midY = mix(midY, compact ? -closeSpan * .13 : 0)
       aimCloseup(yuiChest, yuiAngle - .05, .08, 3, motion)
     }
+    if (focus > 0 && closeup === "watch" && yui) {
+      const motion = T.MathUtils.smoothstep(focus, 0, 1)
+      const shot = SHOTS[life?.spot] || { angle: yui.root.rotation.y + .6, pitch: .12, span: 1.45, drop: .2, side: -1 }
+      const closeSpan = shot.span * (compact ? 1.25 : 1)
+      span = zoom(span, closeSpan, motion)
+      amount = motion
+      midX = T.MathUtils.lerp(midX, compact ? 0 : -shot.side * closeSpan * aspect * .14, motion)
+      midY = T.MathUtils.lerp(midY, 0, motion)
+      watchPoint.copy(yuiChest).y -= shot.drop
+      aimCloseup(watchPoint, shot.angle, shot.pitch, 3, motion)
+    }
     if (returnToSeat && focus === 0) aimCamera(source.point, source.angle, source.pitch, source.distance)
     // The field of view widens as the camera nears an object, while `span` keeps the framing at the
     // target plane, so DOM overlays sized from it still line up with the model.
-    if (closeup) fov = T.MathUtils.lerp(baseFov, closeup === "seat" ? FOV.seat : FOV.closeup, amount)
+    if (closeup) fov = T.MathUtils.lerp(baseFov, closeup === "seat" ? FOV.seat : closeup === "watch" ? FOV.watch : FOV.closeup, amount)
     cameraAmount = closeup ? amount : 0
     placeCamera(span, midX, midY, fov, aspect)
     const maskRecord = compact && closeup === "record" && focus > .65
@@ -885,6 +932,8 @@ export function startCottage() {
     const opened = closeup && focus > .2 ? room.hits.find(item => item.id === closeup)?.object : null
     // The low dusk sun already lights her front strongly, so her self-lit share drops while it is out.
     const glow = Math.min(1, .3 + .7 * light("env") * (1 - .7 * Math.max(0, light("sun") - 1) / .2) + .3 * lamp * night)
+    // Lofi: Yui has her own light rig; it takes its colour and strength from the room (cottage-style.mjs).
+    if (style === "lofi") setCharacterLight({ night, lamp, level: glow })
     // The hand shows in touch mode while the pointer is over the room, or while a card button holds a touch.
     const handShown = Boolean(touchReady() && (handAt.inside || (held && !held.pointer)))
     if (handShown !== hand.object.visible) {
@@ -904,6 +953,8 @@ export function startCottage() {
       yui.chest(yuiChest)
       if (life.attending) yuiAngle = life.facing
       showYuiRoom(life.room)
+      // The medium shot ends when her day takes her to another room (the camera would be framing a wall).
+      if (closeup === "watch" && opening && life.room !== currentView) closeKeepsake()
       const doing = life.attending ? "with-you" : life.activity
       if (roomView.dataset.yuiDoing !== doing) roomView.dataset.yuiDoing = doing
     }
@@ -973,6 +1024,11 @@ export function startCottage() {
     }
     const measuring = probe && probeArmed && document.visibilityState === "visible"
     const drawStart = measuring ? performance.now() : 0
+    // New objects (gifts on the shelf, Yui once loaded) pick up the lofi materials too; each only once.
+    if (style === "lofi" && timestamp - styled > 1500) {
+      stylize(scene)
+      styled = timestamp
+    }
     if (composer) composer.render(dt)
     else renderer.render(scene, camera)
     if (measuring) measureFrame(drawStart)
@@ -1081,7 +1137,7 @@ export function startCottage() {
     }
     for (const pass of composer?.passes || []) pass.dispose?.()
     composer?.dispose()
-    composer = bloom = grade = null
+    composer = bloom = grade = ink = null
     if (level !== "low") {
       // Only the scene is multisampled (see scenePass); the composer's own buffers stay single-sampled.
       const target = new T.WebGLRenderTarget(1, 1, { type: T.HalfFloatType })
@@ -1107,6 +1163,12 @@ export function startCottage() {
       composer.addPass(new OutputPass())
       grade = new ShaderPass(GradeShader)
       composer.addPass(grade)
+      if (style === "lofi") {
+        ink = new ShaderPass(InkShader)
+        ink.uniforms.tDepth.value = sceneDepth
+        Object.assign(ink.uniforms, { near: { value: camera.near }, far: { value: camera.far } })
+        composer.addPass(ink)
+      }
     }
     resize()
   }
@@ -1115,7 +1177,9 @@ export function startCottage() {
   // Multisampling the composer's buffers instead made every later pass (bloom, output, grade) write and resolve
   // at 4x as well: the same picture, at about a quarter of each frame on integrated graphics.
   function scenePass() {
-    const samples = new T.WebGLRenderTarget(1, 1, { type: T.HalfFloatType, samples: 4 })
+    const samples = new T.WebGLRenderTarget(1, 1, { type: T.HalfFloatType, samples: 4,
+      depthTexture: style === "lofi" ? new T.DepthTexture(1, 1) : null })
+    sceneDepth = samples.depthTexture
     const copy = new FullScreenQuad(new T.ShaderMaterial({
       ...CopyShader, uniforms: T.UniformsUtils.clone(CopyShader.uniforms), depthTest: false, depthWrite: false,
     }))
@@ -1129,6 +1193,7 @@ export function startCottage() {
     }
     pass.setSize = (width, height) => samples.setSize(width, height)
     pass.dispose = () => {
+      samples.depthTexture?.dispose()
       samples.dispose()
       copy.material.dispose()
       copy.dispose()
@@ -1194,6 +1259,9 @@ export function startCottage() {
     renderer.setSize(viewportWidth, viewportHeight, false)
     composer?.setPixelRatio(renderer.getPixelRatio())
     composer?.setSize(viewportWidth, viewportHeight)
+    const ratio = renderer.getPixelRatio()
+    ink?.uniforms.texel.value.set(1 / (viewportWidth * ratio), 1 / (viewportHeight * ratio))
+    if (style === "lofi") styleRatio(ratio)
     invalidate()
   }
 
@@ -1366,6 +1434,14 @@ export function startCottage() {
         if (here !== currentView) goTo(here)
       } else openKeepsake("yui")
       invalidate()
+    } else if (id === "watch") {
+      // Frame her where she is, in the room she is in, without stopping her.
+      if (!yui || closeup) return
+      const here = life?.room || "living"
+      if (here !== currentView || viewMotion) {
+        pendingOpen = "watch"
+        if (here !== currentView) goTo(here)
+      } else openKeepsake("watch")
     } else if (id.startsWith("room:")) goTo(id.slice(5))
     else if (id === "lamp" || id === "curtains") toggle(id)
     else if (id === "occasion") calendar.writeToday()

@@ -12,9 +12,15 @@
 import * as T from "./engine/three.module.min.js"
 import { GLTFLoader } from "./engine/three-gltf.mjs?v=0.9.29"
 import { createSprings } from "./cottage-springs.mjs?v=0.9.35"
+import { YUI_RAMP, addHull, faceCharacterLight, lightCharacter } from "./cottage-style.mjs?v=0.9.48.3"
 
 // Standing spot in the living room, at the front of the rug, turned toward the room view. The model faces +z.
 const PLACE = { x: .25, z: 1.5, turn: .55, height: 1.55 }
+// Body proportions (0.9.48). The source model is about 6.5 heads tall with long legs and a long neck, so the head
+// read as small next to the body. The head is scaled up as a whole (hair, ears and eyes come along), the head is
+// moved closer to the neck, and thighs and shins are shortened a little by moving the knees and ankles up their
+// bones. Bone placement only: the poses (rotations) and the source file are unchanged.
+export const PROPORTIONS = { head: 1.1, neck: .9, legs: 1 }
 const CHEST = new T.Vector3(0, 1.2, 0)
 const IDLE_CLIPS = ["idle01", "idle02", "idle03", "idle04", "idle05"]
 // The host's greeting clip is a deep squat that pushes the legs through the skirt (no cloth simulation here),
@@ -129,9 +135,28 @@ async function readClip(loader, url) {
   return { duration: animation.duration, rotations, hips, rest, legHeight: objects.leftUpperLeg.getWorldPosition(point).y }
 }
 
-export async function loadYui(scene, base) {
+function shapeBody(model, { head = 1, neck = 1, legs = 1 }) {
+  const bone = name => model.getObjectByName(name)
+  const headBone = bone("頭")
+  if (headBone) {
+    headBone.scale.multiplyScalar(head)
+    headBone.position.multiplyScalar(neck)
+  }
+  // Shorter legs lift the feet; the whole model goes down by as much, so she still stands on the floor.
+  const ankle = bone("左足首")
+  const point = new T.Vector3()
+  model.updateMatrixWorld(true)
+  const before = ankle ? ankle.getWorldPosition(point).y : 0
+  for (const name of ["左ひざ", "右ひざ", "左足首", "右足首"]) bone(name)?.position.multiplyScalar(legs)
+  if (!ankle) return
+  model.updateMatrixWorld(true)
+  model.position.y -= ankle.getWorldPosition(point).y - before
+}
+
+export async function loadYui(scene, base, { style = "classic", proportions = PROPORTIONS } = {}) {
+  const lofi = style === "lofi"
   const loader = new GLTFLoader()
-  const gltf = await loader.loadAsync(`${base}/yui.glb?v=0.9.35`)
+  const gltf = await loader.loadAsync(`${base}/yui.glb?v=0.9.48.3`)
   const model = gltf.scene
   const size = new T.Box3().setFromObject(model).getSize(new T.Vector3())
   const root = new T.Group()
@@ -150,8 +175,9 @@ export async function loadYui(scene, base) {
     texture.needsUpdate = true
     return texture
   }
-  const soft = ramp([190, 235, 255])
-  const flat = ramp([235, 255])
+  // The lofi look (cottage-style.mjs) uses harder steps, less self-light and a rim along her outline.
+  const soft = ramp(lofi ? YUI_RAMP.body : [190, 235, 255])
+  const flat = ramp(lofi ? YUI_RAMP.face : [235, 255])
   const toonMaterials = new Map()
   const glowing = []
   const toon = old => {
@@ -159,10 +185,16 @@ export async function loadYui(scene, base) {
     const face = /Face|Head|Lashes|Brows|Socket|Iris|Eye|Teeth|Tongue|Mouth/.test(old.name)
     const material = new T.MeshToonMaterial({
       name: old.name, map: old.map, gradientMap: face ? flat : soft, transparent: old.transparent, side: old.side,
-      emissive: 0xffffff, emissiveMap: old.emissiveMap || old.map,
+      emissive: 0xffffff, emissiveMap: old.emissiveMap || old.map, vertexColors: old.vertexColors,
     })
     material.userData.see = old.transparent
-    if (!old.emissiveMap) glowing.push([material, face ? .7 : .62])
+    // Lofi: her own light rig (cottage-style.mjs) instead of the room lights and the self-lit glow. The eye
+    // highlights (their own emissive image) stay unlit either way.
+    if (lofi && !old.emissiveMap) {
+      const kind = /Lash|Brow|Socket|Iris|Eye|Teeth|Tongue|Mouth/.test(old.name) ? "eye" : face ? "face"
+        : /Hair/.test(old.name) ? "hair" : /Cardigan|Skirt|Stockings/.test(old.name) ? "cloth" : "body"
+      lightCharacter(material, kind)
+    } else if (!old.emissiveMap) glowing.push([material, face ? .7 : .62])
     old.dispose()
     toonMaterials.set(old, material)
     return material
@@ -185,7 +217,18 @@ export async function loadYui(scene, base) {
       shapes.get(name).push([object, index])
     }
   })
+  // Ink outline in the lofi look; not on the parts inside the face, nor on see-through ones.
+  const hulls = []
+  if (lofi) {
+    const meshes = []
+    model.traverse(object => { if (object.isSkinnedMesh && !object.material.transparent) meshes.push(object) })
+    for (const mesh of meshes) {
+      if (/Lashes|Brows|Iris|Eye|Teeth|Tongue|Mouth|Socket|RootLining|Buttons|Pendant/.test(mesh.name)) continue
+      hulls.push(addHull(mesh))
+    }
+  }
   const shape = (name, value) => { for (const [mesh, index] of shapes.get(name) || []) mesh.morphTargetInfluences[index] = value }
+  shapeBody(model, proportions)
   // From the root, so the room placement is in every world matrix before rest positions are read into the
   // model frame (0.9.31-0.9.35 read them half-updated, which moved her hips by her room position again).
   root.updateMatrixWorld(true)
@@ -835,6 +878,8 @@ export async function loadYui(scene, base) {
   function update(dt, { moving, glow = 1, viewer, focus = null, hovered = false, task: busyWith = null, asleep: sleeping = false,
     grumpy: cross = 0, support = null }) {
     for (const [material, base] of glowing) material.emissiveIntensity = base * glow
+    // Lofi: her key light turns with her (it is hers, not the camera's).
+    if (lofi) faceCharacterLight(root.rotation.y)
     task = busyWith
     asleep = sleeping
     grumpy = cross
@@ -1042,7 +1087,8 @@ export async function loadYui(scene, base) {
       material.opacity = value
       material.depthWrite = !material.userData.see && value === 1
     }
-    model.traverse(object => { if (object.isMesh) object.castShadow = value > .5 })
+    model.traverse(object => { if (object.isMesh && !object.userData.hull) object.castShadow = value > .5 })
+    for (const hull of hulls) hull.visible = value === 1
   }
 
   return {

@@ -1,17 +1,19 @@
 // Yui's day in the house: follows the schedule in cottage-routine.mjs, walks between places, sits down and gets up,
-// gets into and out of bed (woken by the visitor, crossly: she grumbles, tosses about, then sits up), goes out of sight
-// for a moment on the stairs, and stops for the visitor.
+// gets into and out of bed (woken by the visitor, crossly: she grumbles, tosses about, then sits up), climbs the
+// stairs (0.9.55, cottage-stairs.mjs), and stops for the visitor.
 // Presentation only: nothing here is saved or sent anywhere.
 import { BED, NODES, SPOTS, activityAt, plan, roomOf, standBy } from "./cottage-routine.mjs?v=0.9.53"
 import { walkStep } from "./cottage-walk.mjs?v=0.9.54"
+import { CLIMB, DOWN_YAW, UP_YAW, climbBody, climbFeet, climbPhase, onStairs, railAt } from "./cottage-stairs.mjs?v=0.9.57"
 
-const TURN_RATE = 7
 // The steps that start by walking: a walk that goes on into one of them rounds the corner instead of stopping.
 const WALKING = new Set(["walk", "arrive", "stairs", "sit", "bed"])
 const SIT_SECONDS = 1.3
 const FADE_SECONDS = .45
-// How far she walks on into the stairs while she goes out of sight.
-const STAIRS_STEP = .3
+// Going up she leans forward from the hips, more as she pushes up off each step (0.9.57); coming down a little.
+const CLIMB_BEND = { up: .5, down: .15, push: .35 }
+// On the stairs her eyes go to the treads ahead (0.9.57; her frame, as LOOK): up the stairs, coming down to her feet.
+const CLIMB_LOOK = { up: [0, 1.1, 1], down: [0, -.35, 1.1] }
 // The one-shot clips play when she reaches a place soon after the activity there began (not when you arrive late).
 const FRESH_MINUTES = 10
 // Where her eyes go while busy, in her own frame (x her left, y up, z ahead), from her root.
@@ -29,15 +31,31 @@ const OFF_BED = 2.2
 // How long the getting-up clip takes to hand over to sitting on the side of the bed, and back.
 const SIDE_SECONDS = .5
 // When in the getting-up clip she throws the duvet back (cottage-duvet.mjs): as she sits up, before she swings
-// round; getting in, she pulls it back over her as she lies down.
+// round. (Getting in she pulls it back over her once lying down: PULL.)
 const THROW = [.45, 1.25]
+// From sitting up to the edge of the bed (0.9.58): she turns round on her seat, mostly early, and gets herself over
+// in two pushes, hands down on the mattress, leaning forward and lifting a little off it as she goes (until 0.9.57
+// she slid across it evenly). When in that stretch (0..1) each push happens, and how high she lifts.
+const SCOOTS = [[.15, .45], [.55, .85]]
+const SCOOT_LIFT = .025
+const SCOOT_TURNED = .7
+// Meanwhile (0.9.59) the clip stays where she has just sat up with her arms round her knees (SAT_UP), for as long as
+// it took to play on to OFF_BED: past it, the clip gets up off a floor, her knees going apart and down to kneel, which
+// on the bed looked wrong. `scoot`: which way (1 out, -1 back in getting into bed).
+const SCOOT_SECONDS = OFF_BED - SAT_UP
+const SCOOT_OUT = { clip: "getup", from: SAT_UP, to: SAT_UP, for: SCOOT_SECONDS, scoot: 1, fade: .2 }
+const SCOOT_IN = { ...SCOOT_OUT, scoot: -1, fade: SIDE_SECONDS }
+// Getting into bed (0.9.59) she lies back with the duvet still thrown back, then pulls it over herself with her right
+// hand (the clip held where she lies on her back) before she turns over; until 0.9.58 it closed on its own in a
+// moment while she still sat up.
+const PULL = { clip: "getup", from: 0, to: 0, for: 1.6, pull: true, fade: .3 }
 // Woken by the visitor: how long she grumbles with her eyes shut before she tosses about, and how long she stays
 // cross once up.
 const GRUMBLE_SECONDS = 1.1
 const CROSS_SECONDS = 4
 const WAKE_CROSS = [{ ...ONTO_BACK, speed: 1.6, fade: .5 }, { ...ONTO_SIDE, speed: 1.4, fade: .35 },
-  { ...BACK_AGAIN, speed: 1.4, fade: .35 }, { clip: "getup", to: OFF_BED, speed: 1.15, fade: .6 }]
-const WAKE = [{ ...ONTO_BACK, speed: 1.2, fade: .6 }, { clip: "getup", to: OFF_BED, fade: .6 }]
+  { ...BACK_AGAIN, speed: 1.4, fade: .35 }, { clip: "getup", to: SAT_UP, speed: 1.15, fade: .6 }, SCOOT_OUT]
+const WAKE = [{ ...ONTO_BACK, speed: 1.2, fade: .6 }, { clip: "getup", to: SAT_UP, fade: .6 }, SCOOT_OUT]
 // Woken by the visitor (0.9.49) she only sits up in bed and stays there while they are with her: the getting-up
 // clip held at PROPPED, leaning back on her hands with her face up (by SAT_UP her head is down over her knees).
 // When they leave she lies back down, or, if it is time to be up, gets up from there.
@@ -48,12 +66,19 @@ const LIE_BACK = [{ clip: "getup", from: PROPPED, to: 0, speed: 1.1, fade: .4 },
 const STAY_ANGLE = 1.9
 const SEAT_TURN = .6
 const TURN_DELAY = .9
-const INTO_BED = [{ clip: "getup", from: OFF_BED, to: 0, speed: 1.1, fade: SIDE_SECONDS }, { ...ONTO_BACK, from: 8, to: 6, fade: .5 }]
+const INTO_BED = [SCOOT_IN, { clip: "getup", from: SAT_UP, to: 0, speed: 1.1, fade: .2 }, PULL, { ...ONTO_BACK, from: 8, to: 6, fade: .5 }]
 
 const damp = (value, target, rate, dt) => value + (target - value) * (1 - Math.exp(-rate * dt))
 const smooth = t => t * t * (3 - 2 * t)
 // The turn from `from` to `to`, the short way round.
 const turnBy = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from))
+// Where in getting up she is (the getting-up clip's time, SAT_UP..OFF_BED while she gets herself over to the edge with
+// the clip held, SCOOT_OUT), for a clip part playing (yui.acting).
+function bedTime(acting) {
+  if (!acting.part.scoot) return acting.time
+  const t = Math.min(1, acting.waited / acting.part.for)
+  return SAT_UP + (OFF_BED - SAT_UP) * (acting.part.scoot > 0 ? t : 1 - t)
+}
 
 export function createLife(yui, Vector3) {
   const root = yui.root
@@ -78,8 +103,9 @@ export function createLife(yui, Vector3) {
   // Kept where she is for the visitor (place.stay: seated; place.up: sat up in bed).
   const inPlace = () => Boolean(place && (place.stay || place.up))
 
+  // The upper storey lifted away carries her with it when she is up there, but not on the stairs (they stay put).
   const show = () => {
-    root.position.set(position.x, position.y + (position.y > 2 ? lift : 0), position.z)
+    root.position.set(position.x, position.y + (position.y > 2 && !onStairs(position) ? lift : 0), position.z)
     root.rotation.y = yaw
   }
 
@@ -249,18 +275,13 @@ export function createLife(yui, Vector3) {
       leaveBed(dt)
     } else if (kind === "bed" && !step.fading) {
       intoBed(dt)
+    } else if (kind === "stairs") {
+      climbStairs(dt)
     } else {
-      // Stairs (and the bed when its clips are missing): out of sight, across, back in sight.
+      // The bed when its clips are missing: out of sight, across, back in sight.
       if (step.phase === 0) {
         const t = Math.min(1, step.time / FADE_SECONDS)
         yui.setFade(1 - t)
-        if (kind === "stairs") {
-          position.x = step.from.x + Math.sin(yaw) * STAIRS_STEP * t
-          position.z = step.from.z + Math.cos(yaw) * STAIRS_STEP * t
-          yaw += damp(0, turnBy(yaw, Math.PI), TURN_RATE, dt)
-          // Still walking on as she goes out of sight.
-          walked = true
-        }
         if (t === 1) {
           step.phase = 1
           step.time = 0
@@ -272,9 +293,6 @@ export function createLife(yui, Vector3) {
           } else if (kind === "leave-bed") {
             yaw = SPOTS.bedside.turn
             yui.setPose("stand", .01)
-          } else {
-            // Up the stairs she comes out facing into the study; down them, into the kitchen.
-            yaw = to.y > 2 ? -Math.PI / 2 : 0
           }
           show()
           yui.settle()
@@ -288,6 +306,75 @@ export function createLife(yui, Vector3) {
     return true
   }
 
+  // Up or down the stairs (0.9.55, cottage-stairs.mjs): up, she walks to the foot of them, climbs to the last tread
+  // and steps off it onto the upper floor by the landing; down, from the landing onto the last tread, round, down to
+  // the foot and on. `step.u`: how many steps up she is.
+  function climbStairs(dt) {
+    const up = step.to.y > 2
+    if (step.phase === 0) {
+      Object.assign(step, { phase: up ? "in" : "landing", u: up ? CLIMB.first : CLIMB.last, speed: 0 })
+      // With the upper storey lifted away (a room downstairs in view), stepping between it and the stairs would
+      // drop her out of it or lift her into it: she goes out of sight for a moment there instead.
+      if (!up && lift > .05) hide(() => {
+        const body = climbBody(CLIMB.last, false)
+        position.set(body.x, body.y, body.z)
+        yaw = DOWN_YAW
+      }, "climb")
+    }
+    if (step.phase === "hide" || step.phase === "reveal") {
+      step.fadeTime += dt
+      const t = Math.min(1, step.fadeTime / FADE_SECONDS)
+      yui.setFade(step.phase === "hide" ? 1 - t : t)
+      // Walking on toward the landing as she goes out of sight.
+      if (step.phase === "hide") walkTo(CLIMB.landing, dt, true)
+      if (t < 1) return
+      if (step.phase === "hide") {
+        step.afterHide()
+        Object.assign(step, { phase: "reveal", fadeTime: 0, from: position.clone() })
+        show()
+        yui.settle()
+        return
+      }
+      step.phase = step.afterReveal
+    }
+    if (step.phase === "landing" && walkTo(CLIMB.landing, dt, true)) Object.assign(step, { phase: "in", from: position.clone() })
+    if (step.phase === "in" && walkTo(climbBody(step.u, up), dt)) Object.assign(step, { phase: "climb", from: position.clone() })
+    if (step.phase === "climb") {
+      // Speeding up from a standstill, and slowing in time to stop on the last step.
+      const end = up ? CLIMB.last : CLIMB.first
+      const left = Math.abs(end - step.u)
+      const wanted = Math.min(up ? CLIMB.up : CLIMB.down, Math.sqrt(2 * CLIMB.speedUp * left) + .3)
+      step.speed = Math.min(wanted, step.speed + CLIMB.speedUp * dt)
+      step.u = up ? Math.min(end, step.u + step.speed * dt) : Math.max(end, step.u - step.speed * dt)
+      const body = climbBody(step.u, up)
+      position.set(body.x, body.y, body.z)
+      yaw += damp(0, turnBy(yaw, up ? UP_YAW : DOWN_YAW), 6, dt)
+      // Her pace across the floor, for the walking clip's arm swing (cottage-yui.mjs).
+      walking.pace = step.speed * Math.abs(climbBody(1).z - climbBody(0).z)
+      walking.off = 0
+      walked = true
+      if (step.u === end) {
+        Object.assign(step, { phase: up ? "off" : "out", from: position.clone() })
+        if (up && lift > .05) hide(() => {
+          position.set(step.to.x, step.to.y, step.to.z)
+          // She comes out facing into the study.
+          yaw = -Math.PI / 2
+        }, "done")
+      }
+    }
+    if (step.phase === "off" && walkTo(CLIMB.landing, dt, true)) Object.assign(step, { phase: "out", from: position.clone() })
+    if (step.phase === "out" && walkTo(step.to, dt, goesOn())) step.phase = "done"
+    if (step.phase === "done") {
+      const next = steps[0]
+      finish()
+      if (!WALKING.has(next?.kind)) yui.setPose("stand", .4)
+    }
+  }
+  // Out of sight, then `then` moves her, then back in sight and on to `after`.
+  function hide(then, after) {
+    Object.assign(step, { phase: "hide", fadeTime: 0, afterHide: then, afterReveal: after })
+  }
+
   // Where she is on the bed while a getting-up clip plays at `time` (the same path backwards getting in), up to the
   // edge.
   function onBed(time, into = false) {
@@ -297,10 +384,27 @@ export function createLife(yui, Vector3) {
       else position.lerpVectors(SPOTS.bed, BED.back, smooth(Math.min(1, time / .6)))
       yaw = SPOTS.bed.turn
     } else {
-      const t = smooth(Math.min(1, (time - SAT_UP) / (OFF_BED - SAT_UP)))
-      position.lerpVectors(BED.back, BED.edge, t)
-      yaw = SPOTS.bed.turn + Math.PI / 2 * t
+      const t = Math.min(1, (time - SAT_UP) / (OFF_BED - SAT_UP))
+      let over = 0
+      let rise = 0
+      for (const [from, to] of SCOOTS) {
+        const along = Math.min(1, Math.max(0, (t - from) / (to - from)))
+        over += smooth(along) / SCOOTS.length
+        rise = Math.max(rise, Math.sin(Math.PI * along))
+      }
+      position.lerpVectors(BED.back, BED.edge, over)
+      position.y += SCOOT_LIFT * rise
+      yaw = SPOTS.bed.turn + Math.PI / 2 * smooth(Math.min(1, t / SCOOT_TURNED))
     }
+  }
+
+  // How far she is through getting herself over to the edge of the bed (0..1; null when she is not), from the
+  // getting-up clip (played backwards getting in).
+  function scootAt() {
+    const acting = yui.acting
+    if (acting?.part.clip !== "getup" || (step?.kind !== "leave-bed" && step?.kind !== "bed")) return null
+    const t = (bedTime(acting) - SAT_UP) / (OFF_BED - SAT_UP)
+    return t > 0 && t < 1 ? t : null
   }
 
   // Out of bed: grumbling first when the visitor woke her, turning over, sitting up, standing beside the bed; then
@@ -308,7 +412,7 @@ export function createLife(yui, Vector3) {
   function leaveBed(dt) {
     if (step.phase === 0 && step.fromSatUp) {
       // Already sitting up (she stayed in bed for the visitor): the rest of the getting-up clip.
-      if (!yui.perform([{ clip: "getup", from: PROPPED, to: OFF_BED, fade: .3 }])) Object.assign(step, { fading: true, phase: 0, time: 0 })
+      if (!yui.perform([{ clip: "getup", from: PROPPED, to: SAT_UP, fade: .3 }, SCOOT_OUT])) Object.assign(step, { fading: true, phase: 0, time: 0 })
       else {
         yui.setPose("sit")
         step.phase = "acting"
@@ -326,7 +430,7 @@ export function createLife(yui, Vector3) {
     if (step.phase === "start") {
       const parts = step.cross ? WAKE_CROSS : WAKE
       // For the visitor she only sits up, and stays so.
-      if (!yui.perform(step.stayUp ? [...parts.slice(0, -1), { ...parts.at(-1), to: PROPPED, hold: true }] : parts)) {
+      if (!yui.perform(step.stayUp ? [...parts.slice(0, -2), { ...parts.at(-2), to: PROPPED, hold: true }] : parts)) {
         // Without the clips: out of sight and back, as before.
         Object.assign(step, { fading: true, phase: 0, time: 0 })
         return
@@ -343,7 +447,7 @@ export function createLife(yui, Vector3) {
         place = { spot: "bed", up: true }
         return
       }
-      if (acting?.part.clip === "getup") onBed(acting.time)
+      if (acting?.part.clip === "getup") onBed(bedTime(acting))
       else if (!acting) Object.assign(step, { phase: "side", time: 0, from: position.clone() })
       if (step.cross) crossLeft = CROSS_SECONDS
       if (step.phase === "acting") return
@@ -417,7 +521,7 @@ export function createLife(yui, Vector3) {
     }
     const acting = yui.acting
     if (acting?.part.clip === "getup") {
-      onBed(acting.time, true)
+      onBed(bedTime(acting), true)
       // From the side of the bed up onto the mattress as the getting-up clip (backwards) fades in.
       step.onto = Math.min(1, step.onto + dt / SIDE_SECONDS)
       if (step.onto < 1) position.copy(between.lerpVectors(BED.side, position, smooth(step.onto)))
@@ -556,7 +660,8 @@ export function createLife(yui, Vector3) {
   function task() {
     if (attending || !place) return null
     const pose = yui.pose
-    const offset = LOOK[pose]
+    const climbing = step?.kind === "stairs" && step.phase === "climb"
+    const offset = climbing ? CLIMB_LOOK[step.to.y > 2 ? "up" : "down"] : LOOK[pose]
     if (!offset || yui.playing) return null
     const sin = Math.sin(yaw)
     const cos = Math.cos(yaw)
@@ -580,7 +685,7 @@ export function createLife(yui, Vector3) {
     // (Not once she is off the edge, where she drops onto her feet.)
     get support() {
       const acting = yui.acting
-      const inBed = acting ? !(acting.part.clip === "getup" && acting.time > OFF_BED) : yui.pose === "sleep" && place?.spot === "bed" ||
+      const inBed = acting ? !(acting.part.clip === "getup" && bedTime(acting) > OFF_BED) : yui.pose === "sleep" && place?.spot === "bed" ||
         step?.kind === "leave-bed" && ["grumble", "start"].includes(step.phase)
       return inBed && position.y > BED.surface - .1 ? BED.surface + lift : null
     },
@@ -612,18 +717,22 @@ export function createLife(yui, Vector3) {
     // How far she is under the duvet (0..1).
     get cover() {
       const acting = yui.acting
-      if (acting?.part.clip === "getup") return 1 - smooth(Math.min(1, Math.max(0, (acting.time - SAT_UP) / (OFF_BED - SAT_UP))))
+      if (acting?.part.clip === "getup") return 1 - smooth(Math.min(1, Math.max(0, (bedTime(acting) - SAT_UP) / (OFF_BED - SAT_UP))))
       if (acting) return 1
       if (step?.kind === "leave-bed" && ["grumble", "start"].includes(step.phase)) return 1
       return yui.pose === "sleep" && place?.spot === "bed" && !step ? 1 : 0
     },
     // How far the duvet is thrown back (0..1, cottage-duvet.mjs, 0.9.52): she pushes it over as she sits up to get
-    // out, and it stays so while the bed is empty; getting in, she pulls it back over her as she lies
-    // down.
+    // out, and it stays so while the bed is empty; getting in, once she lies on her back she pulls it back over her
+    // (PULL, 0.9.59).
     get duvetOpen() {
       const acting = yui.acting
-      if (acting?.part.clip === "getup" && (step?.kind === "leave-bed" || step?.kind === "bed")) {
-        return smooth(Math.min(1, Math.max(0, (acting.time - THROW[0]) / (THROW[1] - THROW[0]))))
+      if (step?.kind === "bed" && !step.fading && !step.lieBack && step.phase === "acting" && acting) {
+        if (acting.part.pull) return 1 - smooth(Math.min(1, acting.waited / acting.part.for))
+        return acting.part.clip === "getup" ? 1 : 0
+      }
+      if (acting?.part.clip === "getup" && step?.kind === "leave-bed") {
+        return smooth(Math.min(1, Math.max(0, (bedTime(acting) - THROW[0]) / (THROW[1] - THROW[0]))))
       }
       if (step?.kind === "leave-bed") return step.fading ? Number(step.phase === 1) : Number(["side", "up", "walk"].includes(step.phase))
       if (step?.kind === "bed") {
@@ -636,6 +745,15 @@ export function createLife(yui, Vector3) {
     get pace() { return walking.pace },
     // How far round she still has to turn toward where she is walking (radians, + to her left).
     get turning() { return walking.off },
+    // On the stairs (0.9.55): where in the walking clip's cycle her steps have her, and where each foot goes
+    // (cottage-yui.mjs puts them there); null off them.
+    get climb() {
+      if (step?.kind !== "stairs" || step.phase !== "climb") return null
+      // The hand on the rail a little ahead of her going up (0.9.57); coming down, beside her (ahead, the rail drops
+      // out of her reach).
+      const up = step.to.y > 2
+      return { phase: climbPhase(step.u), feet: climbFeet(step.u), up, rail: railAt(position.z + (up ? -.18 : .03)) }
+    },
     get attending() { return attending },
     // Feet on the floor (cottage-yui.mjs plantFeet): turning on the spot, sitting down, getting up.
     get footing() {
@@ -649,10 +767,42 @@ export function createLife(yui, Vector3) {
       return false
     },
     // How far she leans forward from the hips (0..1): most halfway down into a seat, and early on getting up.
+    // Her hands down on the mattress to push herself over to the edge of the bed (0.9.58, cottage-yui.mjs): how much
+    // (0..1), and how high the mattress is. Null otherwise.
+    // Her right hand on the edge of the duvet as she pulls it over her (0.9.59, cottage-yui.mjs pullHand): how much
+    // (0..1); cottage.mjs adds where the edge is (cottage-duvet.mjs edge). Null otherwise.
+    get pull() {
+      const acting = yui.acting
+      if (step?.kind !== "bed" || !acting?.part.pull) return null
+      const t = Math.min(1, acting.waited / acting.part.for)
+      // Onto the edge as she starts, letting go once it is over her.
+      const weight = smooth(Math.min(1, t / .25)) * (1 - smooth(Math.min(1, Math.max(0, (t - .7) / .3))))
+      return weight > 0 ? { weight, open: 1 - smooth(t) } : null
+    },
+    get brace() {
+      const t = scootAt()
+      if (t === null) return null
+      const weight = Math.max(...SCOOTS.map(([from, to]) => {
+        const on = smooth(Math.min(1, Math.max(0, (t - from + .1) / .1)))
+        return on * (1 - smooth(Math.min(1, Math.max(0, (t - to) / .08))))
+      }))
+      return weight > 0 ? { weight, height: BED.surface + (position.y > 2 ? lift : 0) } : null
+    },
     get bend() {
+      const scoot = scootAt()
+      if (scoot !== null) return .35 * Math.max(...SCOOTS.map(([from, to]) => Math.sin(Math.PI * Math.min(1, Math.max(0, (scoot - from) / (to - from))))))
       const down = (step?.kind === "sit" || step?.kind === "bed") && step.phase === "down"
       if (down) return Math.sin(Math.PI * Math.min(1, step.down / SIT_SECONDS)) * .9
       if ((step?.kind === "rise" || step?.kind === "leave-bed") && step.phase === "up") return Math.sin(Math.PI * Math.min(1, step.time / SIT_SECONDS) ** .7)
+      if (step?.kind === "stairs" && step.phase === "climb") {
+        // Less as she reaches the floor at either end.
+        const on = Math.min(1, (step.u - CLIMB.first) / 1.1, (CLIMB.last - step.u) / 1.4)
+        if (step.to.y <= 2) return smooth(Math.max(0, on)) * CLIMB_BEND.down
+        // A foot comes down every time u passes .9; she pushes up off it over the next .7 of a step.
+        const after = ((step.u - .9) % 1 + 1) % 1
+        const push = after < .7 ? Math.sin(Math.PI * after / .7) : 0
+        return smooth(Math.max(0, on)) * (CLIMB_BEND.up + CLIMB_BEND.push * push)
+      }
       return 0
     },
     // The way she faces the visitor once stopped (the closeup looks at her from there).

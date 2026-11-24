@@ -3,7 +3,7 @@
 import * as T from "./engine/three.module.min.js"
 import { ROOMS, STAIRS, STOREYS, WALLS, room as roomById, wallPieces } from "./cottage-layout.mjs?v=0.9.26"
 import { furnishHouse } from "./cottage-furnish.mjs?v=0.9.28"
-import { createDuvet } from "./cottage-duvet.mjs?v=0.9.52"
+import { createDuvet } from "./cottage-duvet.mjs?v=0.9.59"
 
 const PI = Math.PI
 // The upper floor slab sits on the living room's wall caps, so everything upstairs is drawn this much higher.

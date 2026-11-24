@@ -1,6 +1,6 @@
 import * as T from "./engine/three.module.min.js"
 import { RoundedBoxGeometry } from "./engine/three-rounded-box.mjs"
-import { buildHouse } from "./cottage-house.mjs?v=0.9.52"
+import { buildHouse } from "./cottage-house.mjs?v=0.9.59"
 
 const PI = Math.PI
 const standard = (color, options = {}) => new T.MeshStandardMaterial({ color, roughness: .85, ...options })

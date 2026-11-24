@@ -24,7 +24,9 @@ export function turnBone(bone, rotation) {
 
 // upper, lower, hand: the arm's bones (matrices up to date). shift: the world vector to move the hand by.
 // The hand ends where it is asked to go, or as near as the arm's length allows.
-export function reach(upper, lower, hand, shift) {
+// bend (optional, 0.9.55): the axis the joint should bend about (a leg's knee bends forward), used when the limb is
+// nearly straight or bent the other way, where its own plane says little.
+export function reach(upper, lower, hand, shift, bend = null) {
   if (shift.lengthSq() < 1e-10) return
   upper.getWorldPosition(shoulder)
   lower.getWorldPosition(elbow)
@@ -37,6 +39,7 @@ export function reach(upper, lower, hand, shift) {
   toElbow.subVectors(shoulder, elbow)
   toWrist.subVectors(wrist, elbow)
   axis.crossVectors(toElbow, toWrist)
+  if (bend && (axis.lengthSq() < 1e-4 * toElbow.lengthSq() * toWrist.lengthSq() || axis.dot(bend) < 0)) axis.copy(bend)
   if (axis.lengthSq() < 1e-10) axis.set(1, 0, 0).cross(toElbow)
   axis.normalize()
   const now = toElbow.angleTo(toWrist)

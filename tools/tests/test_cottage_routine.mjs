@@ -3,6 +3,7 @@ import { test } from "node:test"
 import { BED, EDGES, NODES, SCHEDULE, SPOTS, activityAt, cottageMinutes, periodOf, plan, roomOf, route, standBy }
   from "../../static/cottage-routine.mjs"
 import { WALK, stride, walkStep } from "../../static/cottage-walk.mjs"
+import { CLIMB, STAIRS_TOP, climbBody, climbFeet, climbPhase, onStairs, railAt, tread } from "../../static/cottage-stairs.mjs"
 import { FURNITURE, ROOMS, SLOTS, STAIRS, WALLS, bounds } from "../../static/cottage-layout.mjs"
 
 const at = (hours, minutes = 0) => hours * 60 + minutes
@@ -214,4 +215,80 @@ test("the walking clip slows and shortens its strides with her pace, so her feet
   assert.deepEqual(stride(WALK.natural), { rate: 1, reach: 1 })
   // At her usual pace the cycle is slower, not slow motion.
   assert.ok(stride(WALK.speed).rate > .75)
+})
+
+// 0.9.55: she climbs the stairs instead of going out of sight on them.
+test("on the stairs each foot comes down on a tread, the other always standing, and she starts and ends on both feet", () => {
+  assert.ok(Math.abs(STAIRS_TOP - NODES.stairsTop.y) < 1e-9, "the stairs end level with the upper floor")
+  const run = (STAIRS.z[1] - STAIRS.z[0]) / 14
+  const surface = z => {
+    const k = Math.floor((STAIRS.z[1] - z) / run)
+    return k < 0 ? 0 : k > 13 ? STAIRS_TOP : tread(k).y
+  }
+  // Both feet together at the foot and on the last tread.
+  for (const u of [CLIMB.first, CLIMB.last]) {
+    const [left, right] = climbFeet(u)
+    assert.ok(Math.abs(left.y - right.y) < 1e-9 && Math.abs(left.z - right.z) < .26, `feet apart at ${u}`)
+  }
+  assert.ok(Math.abs(climbFeet(CLIMB.first)[0].y) < 1e-9)
+  assert.ok(Math.abs(climbFeet(CLIMB.last)[0].y - tread(13).y) < 1e-9)
+  for (let u = CLIMB.first; u <= CLIMB.last; u += .01) {
+    const feet = climbFeet(u)
+    const standing = feet.filter(foot => [-2, -1, ...Array.from({ length: 14 }, (_, k) => k)]
+      .some(k => Math.abs(foot.y - tread(k).y) < 1e-9 && Math.abs(foot.z - tread(k).z) < 1e-9))
+    assert.ok(standing.length >= 1, `no foot down at ${u.toFixed(2)}`)
+    for (const foot of feet) {
+      // On the stairs, never into a tread (the sole, and its toes a little ahead).
+      assert.ok(foot.x > STAIRS.x[0] && foot.x < STAIRS.x[1])
+      for (const ahead of [0, .08]) assert.ok(foot.y >= surface(foot.z - ahead) - .025, `foot into a tread at ${u.toFixed(2)}`)
+    }
+    // Her hips (about .8 m above her root) within reach of both feet: her legs reach about .8 m from hip to sole,
+    // a little more with the heel of the foot behind lifting as it pushes off.
+    const body = climbBody(u)
+    for (const foot of feet) {
+      const reach = Math.hypot(foot.z - body.z, foot.y - (body.y + .8))
+      assert.ok(reach < .88, `a foot out of reach at ${u.toFixed(2)}: ${reach.toFixed(2)}`)
+    }
+    assert.ok(climbPhase(u) >= 0 && climbPhase(u) < 1)
+  }
+  // Her body rises steadily from the floor to the upper floor.
+  let last = -1
+  for (let u = CLIMB.first; u <= CLIMB.last; u += .05) {
+    const { y } = climbBody(u)
+    assert.ok(y >= last - .02, `goes down on the way up at ${u.toFixed(2)}`)
+    last = y
+  }
+  assert.ok(Math.abs(climbBody(CLIMB.first).y) < 1e-9)
+  assert.ok(Math.abs(climbBody(CLIMB.last).y - tread(13).y) < 1e-9)
+  // She starts at the foot of the stairs in front of where she walks to them, and steps off the last tread onto the
+  // upper floor clear of the rail round the opening (it runs along its side from STAIRS.hole.z[0] + .6).
+  const start = climbBody(CLIMB.first)
+  assert.ok(Math.hypot(start.x - NODES.stairsFoot.x, start.z - NODES.stairsFoot.z) < .4)
+  assert.ok(onStairs(climbBody(CLIMB.last)) && !onStairs(CLIMB.landing) && !onStairs(NODES.stairsTop))
+  assert.ok(CLIMB.landing.z < STAIRS.hole.z[0] + .6 - .25 && CLIMB.landing.z > STAIRS.z[0])
+  assert.equal(roomOf(CLIMB.landing), "study")
+})
+
+// 0.9.57: her body goes up a step at a time, and a hand holds the rail.
+test("on the stairs her body goes up or down a step at a time, never back, and the rail is beside her the whole way", () => {
+  for (const up of [true, false]) {
+    let last = -1
+    const rises = []
+    for (let u = CLIMB.first; u <= CLIMB.last; u += .02) {
+      const { y } = climbBody(u, up)
+      assert.ok(y >= last - .02, `goes the wrong way at ${u.toFixed(2)}`)
+      if (u > 2 && u < 11) rises.push(y - last)
+      last = y
+    }
+    assert.ok(Math.abs(climbBody(CLIMB.first, up).y) < 1e-9 && Math.abs(climbBody(CLIMB.last, up).y - tread(13).y) < 1e-9)
+    // Going up, not at an even rate: faster as she pushes up off a step than between.
+    if (up) assert.ok(Math.max(...rises) > 2 * Math.min(...rises.filter(rise => rise > 0)))
+  }
+  for (let u = 1; u <= 12; u += .1) {
+    const body = climbBody(u)
+    const rail = railAt(body.z)
+    assert.ok(rail, `no rail beside her at ${u.toFixed(1)}`)
+    assert.ok(rail.x <= STAIRS.x[0] + .05 && Math.abs(rail.y - body.y - .95) < .3)
+  }
+  assert.equal(railAt(STAIRS.z[1] + .5), null)
 })

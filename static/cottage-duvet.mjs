@@ -1,5 +1,6 @@
 // The duvet on the bed upstairs: a soft sheet that lies flat when the bed is empty and rises over Yui when she is under
 // it, so her legs and hips never show through (a box blanket cannot cover a body that turns over).
+// 0.9.59: `edge`, where she takes hold of it to pull it back over her.
 // 0.9.52: it is thrown back when she gets up — the part on the side she gets out pushed over onto the other half,
 // bunched up — and stays so while the bed is empty; getting in, she pulls it back over her.
 // Presentation only: it follows her body each frame and saves nothing.
@@ -168,5 +169,18 @@ export function createDuvet(bed, material, cuffMaterial, { width, from, to, top,
     return true
   }
 
-  return { sheet, update }
+  // Where she takes hold of it to pull it back over her (0.9.59): the top corner of the part that is thrown back, as
+  // it lies with the duvet `open` that far, into `target` (world). Null without a fold.
+  const corner = new T.Vector3()
+  function edge(open, target) {
+    if (!line) return null
+    const x = right - .1
+    const z = from + .12
+    const d = (x - line.ax) * line.nx + (z - line.az) * line.nz
+    const shift = -open * d * (1 + line.squeeze)
+    corner.set(x + line.nx * shift, top + .05 + Math.sin(Math.PI * open) * .06, z + line.nz * shift)
+    return target.copy(bed.localToWorld(corner))
+  }
+
+  return { sheet, update, edge }
 }

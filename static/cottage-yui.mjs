@@ -12,7 +12,7 @@
 import * as T from "./engine/three.module.min.js"
 import { GLTFLoader } from "./engine/three-gltf.mjs?v=0.9.29"
 import { createSprings } from "./cottage-springs.mjs?v=0.9.50"
-import { reach, turnBone } from "./cottage-reach.mjs?v=0.9.51"
+import { reach, turnBone } from "./cottage-reach.mjs?v=0.9.55"
 import { WALK, stride } from "./cottage-walk.mjs?v=0.9.54"
 import { YUI_RAMP, addHull, faceCharacterLight, lightCharacter } from "./cottage-style.mjs?v=0.9.48.3"
 
@@ -544,7 +544,8 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   }
   // Plays clip parts one after another, each fading in over `fade` seconds:
   // [{ clip, from = 0, to = its end, speed = 1, fade = .4, hold }]. False (and nothing changes) if a clip is missing.
-  // A part with `hold` stays on its last moment (acting.held) until the next perform.
+  // A part with `hold` stays on its last moment (acting.held) until the next perform. A part with `for` (0.9.59) stays
+  // on its `from` moment for that many seconds (acting.waited) while she is moved about, then the next part follows.
   // While it plays, a new pose waits; at the end the pose's own clip follows.
   function perform(parts) {
     if (!parts.length || !parts.every(part => clips[part.clip])) return false
@@ -567,7 +568,8 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     const from = clamp(part.from ?? 0, 0, duration)
     const to = clamp(part.to ?? duration, 0, duration)
     startClip(part.clip, part.fade ?? .4)
-    Object.assign(current, { time: from, end: to, rate: (to >= from ? 1 : -1) * (part.speed || 1), part, grounded: false, held: false })
+    Object.assign(current, { time: from, end: to, rate: (to >= from ? 1 : -1) * (part.speed || 1), part, grounded: false, held: false,
+      waited: 0 })
   }
 
   function startClip(name, fadeSeconds) {
@@ -685,7 +687,10 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
       keepBody()
       return
     }
-    if (current.part) {
+    if (current.part?.for) {
+      current.waited += dt
+      if (current.waited >= current.part.for) nextPart()
+    } else if (current.part) {
       // A part of a performance: from one moment of its clip to another, backwards when it ends before it starts.
       if (!current.held) current.time += dt * current.rate
       if (!current.held && (current.rate > 0 ? current.time >= current.end : current.time <= current.end)) {
@@ -693,7 +698,20 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
         if (current.part.hold) current.held = true
         else nextPart()
       }
+    } else if (current.name === "walk" && climbing) {
+      // On the stairs (0.9.55) the clip keeps time with her steps, so her arms swing with them: it drifts into step
+      // over a moment instead of jumping there.
+      const duration = current.clip.duration
+      const wanted = climbing.phase * duration
+      if (!climbLock.on) {
+        const apart = current.time - wanted
+        climbLock.error = apart - duration * Math.round(apart / duration)
+        climbLock.on = true
+      }
+      climbLock.error = damp(climbLock.error, 0, 4, dt)
+      current.time = ((wanted + climbLock.error) % duration + duration) % duration
     } else {
+      climbLock.on = false
       current.time += dt * (current.name === "walk" ? gait.rate : 1)
       if (current.time >= current.clip.duration) {
         if (gesture && current.name === gesture) gesture = null
@@ -1013,11 +1031,14 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   //   task (where her attention is while busy, or null), asleep, grumpy (0..1),
   //   support (the height of the bed or seat under her, or null) }
   function update(dt, { moving, glow = 1, viewer, focus = null, hovered = false, task: busyWith = null, asleep: sleeping = false,
-    grumpy: cross = 0, support = null, seat = null, footing = false, bend = 0, pace = null, turning = 0 }) {
+    grumpy: cross = 0, support = null, seat = null, footing = false, bend = 0, pace = null, turning = 0, climb = null, brace = null, pull = null }) {
+    climbing = climb
     // Walking: the clip keeps up with her pace (from cottage-yui-life.mjs); without one it plays as captured.
     Object.assign(gait, pace === null ? { rate: 1, reach: 1 } : stride(pace))
     // Her arms swing freely at her usual pace (0.9.54), less as she slows down.
     gait.arms = pace === null ? 1 : ARM_SWING * Math.min(1, gait.reach / stride(WALK.speed).reach)
+    // On the stairs her free arm swings less (0.9.57); the other holds the rail (climbArm).
+    if (climb) gait.arms *= CLIMB_ARM_SWING
     walkPace = pace ?? 0
     walkTurning = turning
     for (const [material, base] of glowing) material.emissiveIntensity = base * glow
@@ -1137,8 +1158,12 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     else raise = damp(raise, 0, 4, dt)
     sitOn(seat, dt, false)
     clearHands(seat, dt)
+    braceHands(brace, dt)
+    pullHand(pull, dt)
     plantFeet(footing, dt)
     walkFeet(dt)
+    climbFeet(dt)
+    climbArm(dt)
     drapeSkirt(seat, dt)
     if (resetSprings) { resetSprings = false; springs.reset() }
     else springs.update(dt)
@@ -1225,17 +1250,21 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
       if (!foot.locked) { foot.lock.copy(natural); foot.yaw = yaw; foot.locked = true }
       return Math.max(apart(natural, foot.lock) / STEP_DRIFT, Math.abs(turnBy(foot.yaw, yaw)) / STEP_TURN)
     })
+    // Walking off (0.9.56): the walking clip's own steps take over at once. Stepping the feet home first (as when
+    // she stops turning on the spot) left them where she had stood while she turned to go, and her legs crossed.
+    const leaving = !want && walkShown() > .3
+    if (leaving) for (const foot of feet) foot.step = null
     const stepping = feet.some(foot => foot.step)
     // Letting go: the feet step home first (any that are more than a little off), then the legs ease back.
     const settled = drift.every(amount => amount < .3)
-    const holding = want || !settled || stepping
-    planted = damp(planted, holding ? 1 : 0, holding ? 10 : 6, dt)
+    const holding = !leaving && (want || !settled || stepping)
+    planted = damp(planted, holding ? 1 : 0, leaving ? 20 : holding ? 10 : 6, dt)
     if (planted < .002 && !holding) {
       planted = 0
       for (const foot of feet) foot.locked = false
       return
     }
-    if (!stepping) {
+    if (!stepping && !leaving) {
       const index = drift[0] >= drift[1] ? 0 : 1
       if (drift[index] >= (want ? 1 : .3)) {
         const foot = feet[index]
@@ -1267,16 +1296,20 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   // shows. Only across the floor: the clip keeps its height.
   const WALK_CONTACT = .02
   const WALK_HOLD = .1
+  // Turning sharply as she sets off (0.9.56), a foot held where it came down crossed in front of the other: the
+  // faster she turns the less it is held (none at this rate, rad/s), as a foot pivots on its ball in a quick turn.
+  const WALK_TURN_FREE = 3
   const walkHeld = feet.map(() => ({ on: false, weight: 0, lock: new T.Vector3() }))
   const walkShift = new T.Vector3()
   const footFloor = new T.Vector3()
   function walkFeet(dt) {
     const shown = walkShown()
-    if (!(dt > 0) || shown < .01 || planted > .01) {
+    if (!(dt > 0) || shown < .01 || planted > .01 || climbWeight > .01) {
       for (const held of walkHeld) { held.on = false; held.weight = 0 }
       return
     }
     root.getWorldPosition(footFloor)
+    const turning = clamp(1 - Math.abs(walkState.rate) / WALK_TURN_FREE, 0, 1)
     feet.forEach((foot, index) => {
       const held = walkHeld[index]
       foot.ankle.getWorldPosition(natural)
@@ -1290,8 +1323,73 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
       walkShift.set(held.lock.x - natural.x, 0, held.lock.z - natural.z)
       const length = walkShift.length()
       if (length > WALK_HOLD) walkShift.multiplyScalar(WALK_HOLD / length)
-      reach(foot.upper, foot.lower, foot.ankle, walkShift.multiplyScalar(held.weight * shown))
+      reach(foot.upper, foot.lower, foot.ankle, walkShift.multiplyScalar(held.weight * shown * turning))
     })
+  }
+
+  // On the stairs (0.9.55, cottage-stairs.mjs, from cottage-yui-life.mjs `climb`): each foot goes where her steps
+  // put it, on a tread or on its way over the edge of the next, at the clip's own spacing sideways; eased in as she
+  // starts climbing and out as she steps off. The knees bend forward, and each foot keeps the way the clip turns it.
+  let climbing = null
+  const climbLock = { on: false, error: 0 }
+  let climbWeight = 0
+  const climbTo = [new T.Vector3(), new T.Vector3()]
+  const climbSide = new T.Vector3()
+  const climbKnee = new T.Vector3()
+  const footBefore = new T.Quaternion()
+  const footAfter = new T.Quaternion()
+  function climbFeet(dt) {
+    if (climbing) climbing.feet.forEach((point, index) => climbTo[index].set(point.x, point.y + ankleRest, point.z))
+    // Stepping off, her feet go with the walking clip at once (0.9.56): held where the stairs had them while she
+    // turned to walk away, her legs crossed.
+    climbWeight = dt > 0 ? damp(climbWeight, climbing ? 1 : 0, climbing ? 8 : 25, dt) : 0
+    const weight = climbWeight * walkShown()
+    if (weight < .002) return
+    const yaw = root.rotation.y
+    // Her side (up × forward), and the axis a knee bends forward about (the other way).
+    climbSide.set(Math.cos(yaw), 0, -Math.sin(yaw))
+    climbKnee.copy(climbSide).negate()
+    feet.forEach((foot, index) => {
+      foot.ankle.getWorldPosition(natural)
+      footTarget.copy(climbTo[index])
+      const sideways = (natural.x - footTarget.x) * climbSide.x + (natural.z - footTarget.z) * climbSide.z
+      footTarget.addScaledVector(climbSide, sideways)
+      foot.ankle.getWorldQuaternion(footBefore)
+      reach(foot.upper, foot.lower, foot.ankle, footShift.subVectors(footTarget, natural).multiplyScalar(weight), climbKnee)
+      foot.ankle.getWorldQuaternion(footAfter)
+      turnBone(foot.ankle, footBefore.multiply(footAfter.invert()))
+    })
+  }
+
+  // Her hand on the rail (0.9.57, from cottage-yui-life.mjs `climb.rail`): whichever hand is on the rail's side
+  // slides along it a little ahead of her, the wrist just above it; eased on as she starts up or down and off at
+  // the rail's ends. Not when the rail is out of her reach.
+  const CLIMB_ARM_SWING = .55
+  const RAIL_ABOVE = .05
+  let railWeight = 0
+  let railArm = null
+  const railTarget = new T.Vector3()
+  const railShoulder = new T.Vector3()
+  const railElbow = new T.Vector3()
+  const railShift = new T.Vector3()
+  function climbArm(dt) {
+    const rail = climbing?.rail
+    if (rail) railTarget.set(rail.x, rail.y + RAIL_ABOVE, rail.z)
+    if (!(dt > 0) || !hands.length) { railWeight = 0; return }
+    if (rail && !railArm) {
+      // The nearer shoulder (her left going up, her right coming down).
+      railArm = hands.reduce((best, arm) => arm.upper.getWorldPosition(railShoulder).distanceTo(railTarget) <
+        best.upper.getWorldPosition(railElbow).distanceTo(railTarget) ? arm : best)
+    }
+    if (!railArm) return
+    railArm.upper.getWorldPosition(railShoulder)
+    const length = railShoulder.distanceTo(railArm.lower.getWorldPosition(railElbow)) +
+      railElbow.distanceTo(railArm.hand.getWorldPosition(handPoint))
+    const within = rail && railShoulder.distanceTo(railTarget) < length * 1.02
+    railWeight = damp(railWeight, within ? 1 : 0, within ? 5 : 8, dt)
+    if (railWeight < .002) { railWeight = 0; if (!rail) railArm = null; return }
+    railArm.hand.getWorldPosition(handPoint)
+    reach(railArm.upper, railArm.lower, railArm.hand, railShift.subVectors(railTarget, handPoint).multiplyScalar(railWeight * walkShown()))
   }
 
   // Walking, her body goes with it (0.9.54): she leans into a turn as much as her pace and how fast she turns call
@@ -1415,6 +1513,46 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
 
   // Moves each hand out of her head and, seated, up off the seat, by the least that clears it (eased, so a
   // gesture that brushes her face does not jump).
+  // Pushing herself over to the edge of the bed (0.9.58, from cottage-yui-life.mjs `brace`): both hands go down onto
+  // the mattress beside her hips, a little behind them, by as much as `brace.weight`.
+  const BRACE = { side: .2, back: .05, above: .05 }
+  const braceHips = named("下半身")
+  const braceAt = new T.Vector3()
+  const braceTarget = new T.Vector3()
+  const braceShift = new T.Vector3()
+  const braceShoulder = new T.Vector3()
+  const braceElbow = new T.Vector3()
+  function braceHands(brace, dt) {
+    if (!brace || !braceHips || !(dt > 0) || brace.weight < .002) return
+    braceHips.getWorldPosition(braceAt)
+    const yaw = root.rotation.y
+    hands.forEach((arm, index) => {
+      // hands[0] is her left hand: toward her left (up × forward).
+      const side = (index === 0 ? 1 : -1) * BRACE.side
+      braceTarget.set(braceAt.x + Math.cos(yaw) * side - Math.sin(yaw) * BRACE.back, brace.height + BRACE.above,
+        braceAt.z - Math.sin(yaw) * side - Math.cos(yaw) * BRACE.back)
+      // Only as far as her arm reaches: sitting up high she pushes over without them, rather than reaching short.
+      arm.upper.getWorldPosition(braceShoulder)
+      const length = braceShoulder.distanceTo(arm.lower.getWorldPosition(braceElbow)) + braceElbow.distanceTo(arm.hand.getWorldPosition(handPoint))
+      const within = clamp((length * 1.3 - braceShoulder.distanceTo(braceTarget)) / (length * .2), 0, 1)
+      if (within <= 0) return
+      reach(arm.upper, arm.lower, arm.hand, braceShift.subVectors(braceTarget, handPoint).multiplyScalar(brace.weight * within))
+    })
+  }
+
+  // Pulling the duvet back over her as she lies down (0.9.59, cottage-yui-life.mjs `pull`): her right hand, on the
+  // side it lies bunched up, takes its edge (`pull.at`, cottage-duvet.mjs edge) and draws it over her, as far as her
+  // arm reaches.
+  function pullHand(pull, dt) {
+    if (!pull?.at || !(dt > 0) || pull.weight < .002 || hands.length < 2) return
+    const arm = hands[1]
+    arm.upper.getWorldPosition(braceShoulder)
+    const length = braceShoulder.distanceTo(arm.lower.getWorldPosition(braceElbow)) + braceElbow.distanceTo(arm.hand.getWorldPosition(handPoint))
+    const within = clamp((length * 1.25 - braceShoulder.distanceTo(pull.at)) / (length * .3), 0, 1)
+    if (within <= 0) return
+    reach(arm.upper, arm.lower, arm.hand, braceShift.subVectors(pull.at, handPoint).multiplyScalar(pull.weight * within))
+  }
+
   function clearHands(seat, dt) {
     if (!hands.length) return
     if (headBone) headBone.localToWorld(headPoint.copy(headCentre))
@@ -1553,7 +1691,10 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
       return current ? { name: current.name, time: current.time, duration: current.clip.duration, fade,
         previous: previous && fade < 1 ? { name: previous.name, time: previous.time } : null } : null
     },
-    get acting() { return act && current?.part ? { index: act.index, time: current.time, part: current.part, held: Boolean(current.held) } : null },
+    get acting() {
+      return act && current?.part ? { index: act.index, time: current.time, part: current.part, held: Boolean(current.held),
+        waited: current.waited || 0 } : null
+    },
     get shown() { return shownFade },
     // After a jump to another place: the skirt and hair start at rest there.
     settle() { springs.reset() },

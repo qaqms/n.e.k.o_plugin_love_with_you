@@ -4,14 +4,14 @@ import { CopyShader, EffectComposer, FullScreenQuad, GTAOPass, OutputPass, Rende
   from "./engine/three-post.mjs?v=0.9.25"
 import { icon } from "./cottage-icons.mjs?v=0.9.48.1"
 import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
-import { buildRoom } from "./cottage-scene.mjs?v=0.9.41"
-import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.52"
+import { buildRoom } from "./cottage-scene.mjs?v=0.9.59"
+import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.59"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
 import { buildGrounds } from "./cottage-grounds.mjs?v=0.9.47"
 import { PROBE_FRAMES, adapterKind, probeCost, savedQuality, settle, startingQuality } from "./cottage-quality.mjs?v=0.9.46"
 import { InkShader, STYLES, setCharacterLight, setPixelRatio as styleRatio, stylize } from "./cottage-style.mjs?v=0.9.48.3"
-import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.54"
-import { createLife } from "./cottage-yui-life.mjs?v=0.9.54"
+import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.59"
+import { createLife } from "./cottage-yui-life.mjs?v=0.9.59"
 import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.53"
 import { createYuiCard } from "./cottage-yui-card.mjs?v=0.9.40"
 import { HAND_POSE, createHand } from "./cottage-hand.mjs?v=0.9.38"
@@ -382,6 +382,9 @@ export function startCottage() {
   let bondStage = 2
   // Where the closeup looks: her chest and face, from in front of her (she turns to the visitor when clicked).
   const yuiChest = new T.Vector3(.25, 1.24, 1.5)
+  // Pulling the duvet over her as she lies down (0.9.59): where its edge is, for her hand (cottage-yui.mjs pullHand).
+  const yuiPullAt = new T.Vector3()
+  const yuiPull = pull => pull ? { weight: pull.weight, at: room.house.duvet.edge(pull.open, yuiPullAt) } : null
   let yuiAngle = .5
   // Her day in the house (where she is, walking between places); null until she has loaded.
   let life = null
@@ -983,6 +986,7 @@ export function startCottage() {
       focus: opened ? opened.getWorldPosition(yuiFocus) : null, hovered: canvas.dataset.target === "yui",
       task: life?.task() || null, asleep: Boolean(life?.asleep), grumpy: life?.grumpy || 0, support: life?.support ?? null, seat: life?.seat ?? null,
       footing: Boolean(life?.footing), bend: life?.bend || 0, pace: life ? life.pace : null, turning: life?.turning || 0,
+      climb: life?.climb || null, brace: life?.brace || null, pull: yuiPull(life?.pull),
     }) || Boolean(lived?.changed) : false
     // The duvet rises over her while she is under it (without motion it settles at once).
     const duvetMoving = room.house.duvet.update(motionAllowed ? dt : 1,

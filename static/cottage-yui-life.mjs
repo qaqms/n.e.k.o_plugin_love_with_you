@@ -2,14 +2,13 @@
 // gets into and out of bed (woken by the visitor, crossly: she grumbles, tosses about, then sits up), goes out of sight
 // for a moment on the stairs, and stops for the visitor.
 // Presentation only: nothing here is saved or sent anywhere.
-import { BED, NODES, SPOTS, activityAt, plan, roomOf } from "./cottage-routine.mjs?v=0.9.52"
+import { BED, NODES, SPOTS, activityAt, plan, roomOf, standBy } from "./cottage-routine.mjs?v=0.9.53"
+import { walkStep } from "./cottage-walk.mjs?v=0.9.54"
 
-const WALK_SPEED = .6
 const TURN_RATE = 7
+// The steps that start by walking: a walk that goes on into one of them rounds the corner instead of stopping.
+const WALKING = new Set(["walk", "arrive", "stairs", "sit", "bed"])
 const SIT_SECONDS = 1.3
-// Where she stands to sit down, in her own frame from the seat's spot (x her left, z ahead), unless the spot says
-// otherwise (cottage-routine.mjs `approach`): in front of the seat, where her feet are once seated (0.9.51).
-const APPROACH = [0, .38]
 const FADE_SECONDS = .45
 // How far she walks on into the stairs while she goes out of sight.
 const STAIRS_STEP = .3
@@ -128,12 +127,10 @@ export function createLife(yui, Vector3) {
     }
   }
 
-  // The point in front of (or beside) a seat where she stands to sit down and gets up to.
+  // The point in front of (or beside) a seat where she stands to sit down and gets up to (cottage-routine.mjs).
   function approachOf(spot) {
-    const [left, ahead] = spot.approach || APPROACH
-    const sin = Math.sin(spot.turn)
-    const cos = Math.cos(spot.turn)
-    return new Vector3(spot.x + left * cos + ahead * sin, spot.y, spot.z - left * sin + ahead * cos)
+    const { x, y, z } = standBy(spot)
+    return new Vector3(x, y, z)
   }
 
   function begin(next) {
@@ -166,26 +163,25 @@ export function createLife(yui, Vector3) {
     }
   }
 
-  // Walks toward a point, turning as she goes; true on arrival.
-  function walkTo(point, dt) {
-    const dx = point.x - position.x
-    const dz = point.z - position.z
-    const left = Math.hypot(dx, dz)
-    if (left < .015) {
-      position.set(point.x, point.y, point.z)
-      return true
-    }
-    const heading = Math.atan2(dx, dz)
-    yaw += damp(0, turnBy(yaw, heading), TURN_RATE, dt)
-    // Slower while still turning, so she does not walk sideways.
-    const speed = WALK_SPEED * Math.max(.15, Math.cos(turnBy(yaw, heading))) ** 2
-    const move = Math.min(left, speed * dt)
+  // Walks toward a point (0.9.53, cottage-walk.mjs): steering as she goes, speeding up and slowing down; true on
+  // arrival. `through`: the way goes on past it, so she rounds the corner without stopping (true once round it).
+  const walking = { x: 0, z: 0, yaw: 0, pace: 0, off: 0 }
+  let walked = false
+  function walkTo(point, dt, through = false) {
+    Object.assign(walking, { x: position.x, z: position.z, yaw })
+    const done = walkStep(walking, point, dt, through)
+    walked = true
+    position.x = walking.x
+    position.z = walking.z
+    yaw = walking.yaw
+    // Up or down (a step between rooms) by how much of the way is behind her.
     const total = Math.hypot(point.x - step.from.x, point.z - step.from.z) || 1
-    position.x += dx / left * move
-    position.z += dz / left * move
-    position.y = step.from.y + (point.y - step.from.y) * Math.min(1, 1 - (left - move) / total)
-    return false
+    const left = Math.hypot(point.x - position.x, point.z - position.z)
+    position.y = done && !through ? point.y : step.from.y + (point.y - step.from.y) * Math.min(1, Math.max(0, 1 - left / total))
+    return done
   }
+  // Whether the way goes on walking after the step she is on.
+  const goesOn = () => WALKING.has(steps[0]?.kind)
 
   // Turns in place toward `wanted`; true once she faces it.
   function turnTo(wanted, dt) {
@@ -201,11 +197,11 @@ export function createLife(yui, Vector3) {
     step.time += dt
     const { kind, to } = step
     if (kind === "walk") {
-      if (walkTo(to, dt)) {
+      if (walkTo(to, dt, goesOn())) {
         // A walk that continues does not stop to change pose.
         const next = steps[0]
         finish()
-        if (next && next.kind !== "walk" && next.kind !== "arrive" && next.kind !== "stairs") yui.setPose("stand", .4)
+        if (next && !WALKING.has(next.kind)) yui.setPose("stand", .4)
       }
     } else if (kind === "arrive") {
       if (step.phase === 0 && walkTo(to, dt)) {
@@ -244,10 +240,10 @@ export function createLife(yui, Vector3) {
           step.from = position.clone()
           yui.setPose("walk", .35)
         }
-      } else if (walkTo(to, dt)) {
+      } else if (walkTo(to, dt, goesOn())) {
         const next = steps[0]
         finish()
-        if (!next || next.kind !== "walk") yui.setPose("stand", .4)
+        if (!WALKING.has(next?.kind)) yui.setPose("stand", .4)
       }
     } else if (kind === "leave-bed" && !step.fading) {
       leaveBed(dt)
@@ -262,6 +258,8 @@ export function createLife(yui, Vector3) {
           position.x = step.from.x + Math.sin(yaw) * STAIRS_STEP * t
           position.z = step.from.z + Math.cos(yaw) * STAIRS_STEP * t
           yaw += damp(0, turnBy(yaw, Math.PI), TURN_RATE, dt)
+          // Still walking on as she goes out of sight.
+          walked = true
         }
         if (t === 1) {
           step.phase = 1
@@ -375,10 +373,10 @@ export function createLife(yui, Vector3) {
       yui.setPose("walk", .35)
       return
     }
-    if (walkTo(step.to, dt)) {
+    if (walkTo(step.to, dt, goesOn())) {
       const next = steps[0]
       finish()
-      if (!next || next.kind !== "walk") yui.setPose("stand", .4)
+      if (!WALKING.has(next?.kind)) yui.setPose("stand", .4)
     }
   }
 
@@ -541,7 +539,10 @@ export function createLife(yui, Vector3) {
     }
     // A step already under way when she was stopped (sitting down, the stairs) ends first; then she gets up.
     if (attending && !step) getUp()
+    walked = false
     const active = advance(dt) || attending
+    // Not walking this frame (stopped, turning on the spot, seated): no pace for the walking clip to keep up with.
+    if (!walked) walking.pace = walking.off = 0
     if (attending && !step && !place.up) {
       // Seated she turns in her seat (the clip's hips carry the rest), standing she turns round to face them.
       if (turnDelay > 0) turnDelay = Math.max(0, turnDelay - dt)
@@ -631,6 +632,10 @@ export function createLife(yui, Vector3) {
       }
       return place?.spot === "bed" ? 0 : 1
     },
+    // How fast she is walking (m/s): the walking clip keeps up with it (cottage-yui.mjs, cottage-walk.mjs stride).
+    get pace() { return walking.pace },
+    // How far round she still has to turn toward where she is walking (radians, + to her left).
+    get turning() { return walking.off },
     get attending() { return attending },
     // Feet on the floor (cottage-yui.mjs plantFeet): turning on the spot, sitting down, getting up.
     get footing() {

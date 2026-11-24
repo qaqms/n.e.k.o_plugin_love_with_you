@@ -13,6 +13,7 @@ import * as T from "./engine/three.module.min.js"
 import { GLTFLoader } from "./engine/three-gltf.mjs?v=0.9.29"
 import { createSprings } from "./cottage-springs.mjs?v=0.9.50"
 import { reach, turnBone } from "./cottage-reach.mjs?v=0.9.51"
+import { WALK, stride } from "./cottage-walk.mjs?v=0.9.54"
 import { YUI_RAMP, addHull, faceCharacterLight, lightCharacter } from "./cottage-style.mjs?v=0.9.48.3"
 
 // Standing spot in the living room, at the front of the rug, turned toward the room view. The model faces +z.
@@ -596,6 +597,7 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   }
 
   const scratch = new T.Quaternion()
+  const scratchMean = new T.Quaternion()
   const other = new T.Quaternion()
   const euler = new T.Euler()
   const offset = new T.Vector3()
@@ -605,12 +607,45 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   values.set("upperChest", new T.Quaternion())
   previousValues.set("upperChest", new T.Quaternion())
 
+  // Walking slower than the clip was made for (0.9.53, cottage-walk.mjs stride): the clip plays slower (`gait.rate`)
+  // and her legs swing less far from the hips (and her arms with them) either side of where they are on average over
+  // the cycle (`gait.reach`). Knees and ankles bend as captured, so a swinging foot still clears the floor.
+  const gait = { rate: 1, reach: 1, arms: 1 }
+  const STRIDE_BONES = ["UpperLeg", "UpperArm", "LowerArm"].flatMap(part => [`left${part}`, `right${part}`])
+  const ARM_BONES = new Set(["leftUpperArm", "rightUpperArm", "leftLowerArm", "rightLowerArm"])
+  function meansOf(clip) {
+    if (clip.means) return clip.means
+    clip.means = new Map()
+    const sum = new T.Quaternion()
+    const at = new T.Quaternion()
+    for (const bone of STRIDE_BONES) {
+      const interpolant = clip.rotations[bone]
+      if (!interpolant) continue
+      sum.set(0, 0, 0, 0)
+      let first = null
+      for (let i = 0; i < 24; i++) {
+        at.fromArray(interpolant.evaluate(clip.duration * i / 24)).normalize()
+        first ??= at.clone()
+        const sign = at.dot(first) < 0 ? -1 : 1
+        sum.set(sum.x + at.x * sign, sum.y + at.y * sign, sum.z + at.z * sign, sum.w + at.w * sign)
+      }
+      clip.means.set(bone, sum.clone().normalize())
+    }
+    return clip.means
+  }
+
   function sample(state, into, hipsInto) {
     const { clip, time } = state
     for (const [bone, quaternion] of into) {
       const interpolant = clip.rotations[bone]
       if (interpolant) quaternion.fromArray(interpolant.evaluate(time)).normalize()
       else quaternion.identity()
+    }
+    if (state.name === "walk" && (Math.abs(gait.reach - 1) > .001 || Math.abs(gait.arms - 1) > .001)) {
+      for (const [bone, mean] of meansOf(clip)) {
+        const quaternion = into.get(bone)
+        if (quaternion) quaternion.copy(scratchMean.copy(mean).slerp(quaternion, ARM_BONES.has(bone) ? gait.arms : gait.reach))
+      }
     }
     hipsInto.set(0, 0, 0)
     if (clip.hips) {
@@ -659,7 +694,7 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
         else nextPart()
       }
     } else {
-      current.time += dt
+      current.time += dt * (current.name === "walk" ? gait.rate : 1)
       if (current.time >= current.clip.duration) {
         if (gesture && current.name === gesture) gesture = null
         if (once && current.name === once) once = null
@@ -667,7 +702,10 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
       }
     }
     fade = Math.min(1, fade + dt / current.fadeSeconds)
-    if (previous) previous.time = clamp(previous.time + dt * (previous.rate || 1), 0, previous.clip.duration)
+    if (previous) {
+      const rate = (previous.rate || 1) * (previous.name === "walk" ? gait.rate : 1)
+      previous.time = clamp(previous.time + dt * rate, 0, previous.clip.duration)
+    }
     sample(current, values, offset)
     if (previous && fade < 1) {
       sample(previous, previousValues, otherOffset)
@@ -975,7 +1013,13 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   //   task (where her attention is while busy, or null), asleep, grumpy (0..1),
   //   support (the height of the bed or seat under her, or null) }
   function update(dt, { moving, glow = 1, viewer, focus = null, hovered = false, task: busyWith = null, asleep: sleeping = false,
-    grumpy: cross = 0, support = null, seat = null, footing = false, bend = 0 }) {
+    grumpy: cross = 0, support = null, seat = null, footing = false, bend = 0, pace = null, turning = 0 }) {
+    // Walking: the clip keeps up with her pace (from cottage-yui-life.mjs); without one it plays as captured.
+    Object.assign(gait, pace === null ? { rate: 1, reach: 1 } : stride(pace))
+    // Her arms swing freely at her usual pace (0.9.54), less as she slows down.
+    gait.arms = pace === null ? 1 : ARM_SWING * Math.min(1, gait.reach / stride(WALK.speed).reach)
+    walkPace = pace ?? 0
+    walkTurning = turning
     for (const [material, base] of glowing) material.emissiveIntensity = base * glow
     // Lofi: her key light turns with her (it is hers, not the camera's).
     if (lofi) faceCharacterLight(root.rotation.y)
@@ -1066,6 +1110,7 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     if (settled && celebrate > 0 && (celebrate -= dt) <= 0) playGesture("vsign")
     body(dt)
     lean(bend)
+    walkBody(dt)
     const changed = chooseGaze(dt, viewer, focus, hovered)
     look(dt, changed)
     touchTime(dt, true)
@@ -1093,6 +1138,7 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     sitOn(seat, dt, false)
     clearHands(seat, dt)
     plantFeet(footing, dt)
+    walkFeet(dt)
     drapeSkirt(seat, dt)
     if (resetSprings) { resetSprings = false; springs.reset() }
     else springs.update(dt)
@@ -1214,6 +1260,77 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
       const twist = turnBy(yaw, foot.yaw) * planted
       if (Math.abs(twist) > 1e-4) turnBone(foot.ankle, footTurn.setFromAxisAngle(upAxis, twist))
     }
+  }
+
+  // Walking (0.9.53): with the clip keeping up with her pace (gait) a foot still crept a few centimetres while down,
+  // so each foot is held where it came down until it lifts again (cottage-reach.mjs), by as much as the walking clip
+  // shows. Only across the floor: the clip keeps its height.
+  const WALK_CONTACT = .02
+  const WALK_HOLD = .1
+  const walkHeld = feet.map(() => ({ on: false, weight: 0, lock: new T.Vector3() }))
+  const walkShift = new T.Vector3()
+  const footFloor = new T.Vector3()
+  function walkFeet(dt) {
+    const shown = walkShown()
+    if (!(dt > 0) || shown < .01 || planted > .01) {
+      for (const held of walkHeld) { held.on = false; held.weight = 0 }
+      return
+    }
+    root.getWorldPosition(footFloor)
+    feet.forEach((foot, index) => {
+      const held = walkHeld[index]
+      foot.ankle.getWorldPosition(natural)
+      // Down when within a little of her ankle's height standing: caught where it touches down (at once: it is
+      // there, so nothing jumps) and held until it lifts, then let go gradually.
+      const down = natural.y - footFloor.y < ankleRest + WALK_CONTACT
+      if (down && !held.on) held.lock.copy(natural)
+      held.on = down
+      held.weight = down ? 1 : damp(held.weight, 0, 12, dt)
+      if (held.weight < .002) return
+      walkShift.set(held.lock.x - natural.x, 0, held.lock.z - natural.z)
+      const length = walkShift.length()
+      if (length > WALK_HOLD) walkShift.multiplyScalar(WALK_HOLD / length)
+      reach(foot.upper, foot.lower, foot.ankle, walkShift.multiplyScalar(held.weight * shown))
+    })
+  }
+
+  // Walking, her body goes with it (0.9.54): she leans into a turn as much as her pace and how fast she turns call
+  // for (a little under what keeps a body balanced: v·ω/g), her head turns toward where she is going before her body
+  // has come round, and she leans forward a little speeding up and back a little slowing down. By as much as the
+  // walking clip shows.
+  const ARM_SWING = 1.15
+  const TURN_LEAN = .6
+  const MOST_LEAN = .1
+  const HEAD_LEAD = .5
+  // Which way a roll of her spine bone leans her to her left (checked by measuring where her head goes).
+  const WALK_ROLL = -1
+  const MOST_LEAD = .4
+  let walkPace = 0
+  let walkTurning = 0
+  const walkState = { yaw: null, rate: 0, pace: 0, push: 0, lean: 0, lead: 0, pitch: 0 }
+  const walkShown = () => (current?.name === "walk" ? T.MathUtils.smoothstep(fade, 0, 1) : 0) +
+    (previous?.name === "walk" && fade < 1 ? 1 - T.MathUtils.smoothstep(fade, 0, 1) : 0)
+  function walkBody(dt) {
+    const yaw = root.rotation.y
+    if (!(dt > 0)) return
+    // How fast she is turning (rad/s; a jump, as at the stairs, does not count) and speeding up (m/s²).
+    const rate = walkState.yaw === null ? 0 : turnBy(walkState.yaw, yaw) / dt
+    walkState.yaw = yaw
+    walkState.rate = damp(walkState.rate, Math.abs(rate) > 6 ? 0 : rate, 8, dt)
+    walkState.push = damp(walkState.push, (walkPace - walkState.pace) / dt, 5, dt)
+    walkState.pace = walkPace
+    const shown = walkShown()
+    const lean = clamp(walkPace * walkState.rate / 9.8 * TURN_LEAN, -MOST_LEAN, MOST_LEAN)
+    const lead = clamp(walkTurning * HEAD_LEAD, -MOST_LEAD, MOST_LEAD)
+    const pitch = clamp(walkState.push * .04, -.05, .06)
+    walkState.lean = damp(walkState.lean, lean * shown, 6, dt)
+    walkState.lead = damp(walkState.lead, lead * shown, 6, dt)
+    walkState.pitch = damp(walkState.pitch, pitch * shown, 4, dt)
+    if (Math.abs(walkState.lean) + Math.abs(walkState.lead) + Math.abs(walkState.pitch) < 1e-4) return
+    // Leaning in from the hips up; the head comes round first, the neck less.
+    addDelta("上半身", walkState.pitch, walkState.lead * .15, walkState.lean * WALK_ROLL)
+    addDelta("首", 0, walkState.lead * .35, 0)
+    addDelta("頭", -walkState.pitch * .5, walkState.lead * .5, -walkState.lean * WALK_ROLL * .4)
   }
 
   // Leaning forward from the hips to sit down or get up (0..1, from cottage-yui-life.mjs), the head staying level.

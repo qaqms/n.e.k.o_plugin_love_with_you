@@ -14,6 +14,10 @@ Yui 的坐下、起身和原地转身（0.9.51，见 [0.9.51](adventure/adventur
 
 Yui 上下床（0.9.52，见 [0.9.52](adventure/adventure-cottage-yui-bed-2026-11-23.md)）：`cottage-routine.mjs` 的 `BED.side` 把床沿当作座位（坐面是床垫面），`BED.stand` 是床边站的地方；`cottage-yui-life.mjs` 的 `leave-bed` 只把起身动作放到转到床沿（`OFF_BED`），然后坐到床沿、按 0.9.51 的起身方式站起来，`bed` 反过来先坐到床沿再倒放起身动作躺下。被子：`cottage-duvet.mjs` 的 `fold` 是一条掀开线，`update` 的 `open` 把线一侧的被子翻到另一半上（途中从她身上滑过、翻边跟着变短），`cottage-yui-life.mjs` 的 `duvetOpen` 在她坐起来时掀开、床空着时保持掀开、躺下时拉回，`cottage.mjs` 传给被子。
 
+Yui 走路（0.9.53，见 [0.9.53](adventure/adventure-cottage-yui-walk-2026-11-23.md)）：`static/cottage-walk.mjs`（纯函数）的 `walkStep` 是她每一帧怎么走（转向有上限、加速减速、路线接着走时在拐点前 `WALK.corner` 开始走弧线、要停时刹车并准确停住），`stride` 按速度算走路动作的播放速率和步幅；`cottage-yui-life.mjs` 的 `walkTo` 用它，并读出 `pace`；`cottage-yui.mjs` 按 `pace` 放慢走路动作、把大腿和手臂往循环平均姿势收拢缩短步幅（`gait`、`STRIDE_BONES`），`walkFeet` 在脚落地时用 IK 锁住、抬脚时放开。座位前站的点 `standBy` 在 `cottage-routine.mjs`。
+
+走路时的身体（0.9.54，见 [0.9.54](adventure/adventure-cottage-yui-walk-body-2026-11-24.md)）：`cottage-walk.mjs` 的 `walkStep` 另记下她还要转多少（`state.off`），`cottage-yui-life.mjs` 读出为 `turning`；`cottage-yui.mjs` 的 `walkBody` 按速度和转向角速度让上身往弯里倾（`TURN_LEAN`，上限 `MOST_LEAN`），按 `turning` 让头和脖子先转（`HEAD_LEAD`），按加减速前后倾一点；手臂摆幅 `gait.arms` 随步幅变化，平常速度下比动作原样大 15%（`ARM_SWING`）。
+
 `static/cottage-living.mjs` 管理便签编辑、礼物选位及沙发控制。便签通过面板的 `experience_action` 使用角色修订号及请求回执，陈列架按已送礼物的记录 ID 恢复浏览器本地摆放。
 
 `static/cottage-company.mjs` 管理双人杯、日历和投影幕的场景界面。面板读取现有纪念日与观看追踪，并将 `invite_cottage_chat` 交给宿主消息通道。宿主当前角色在提交时重新校验。

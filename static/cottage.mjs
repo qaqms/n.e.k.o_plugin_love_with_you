@@ -10,9 +10,9 @@ import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
 import { buildGrounds } from "./cottage-grounds.mjs?v=0.9.47"
 import { PROBE_FRAMES, adapterKind, probeCost, savedQuality, settle, startingQuality } from "./cottage-quality.mjs?v=0.9.46"
 import { InkShader, STYLES, setCharacterLight, setPixelRatio as styleRatio, stylize } from "./cottage-style.mjs?v=0.9.48.3"
-import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.51"
-import { createLife } from "./cottage-yui-life.mjs?v=0.9.52"
-import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.52"
+import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.54"
+import { createLife } from "./cottage-yui-life.mjs?v=0.9.54"
+import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.53"
 import { createYuiCard } from "./cottage-yui-card.mjs?v=0.9.40"
 import { HAND_POSE, createHand } from "./cottage-hand.mjs?v=0.9.38"
 import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
@@ -982,7 +982,7 @@ export function startCottage() {
       moving: motionAllowed, glow, viewer: camera.position,
       focus: opened ? opened.getWorldPosition(yuiFocus) : null, hovered: canvas.dataset.target === "yui",
       task: life?.task() || null, asleep: Boolean(life?.asleep), grumpy: life?.grumpy || 0, support: life?.support ?? null, seat: life?.seat ?? null,
-      footing: Boolean(life?.footing), bend: life?.bend || 0,
+      footing: Boolean(life?.footing), bend: life?.bend || 0, pace: life ? life.pace : null, turning: life?.turning || 0,
     }) || Boolean(lived?.changed) : false
     // The duvet rises over her while she is under it (without motion it settles at once).
     const duvetMoving = room.house.duvet.update(motionAllowed ? dt : 1,

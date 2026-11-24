@@ -174,7 +174,7 @@
     <p id="fallback" role="status" hidden></p>
   </main>
   <script type="module">
-    import("./cottage.mjs?v=0.9.52").then(module => module.startCottage()).catch(() => {
+    import("./cottage.mjs?v=0.9.54").then(module => module.startCottage()).catch(() => {
       const fallback = document.getElementById("fallback")
       fallback.textContent = /^(en|pt|es|ru|ko|ja)/i.test(new URLSearchParams(location.search).get("locale") || "")
         ? "The 3D room could not load." : "暂时无法加载 3D 小屋。"

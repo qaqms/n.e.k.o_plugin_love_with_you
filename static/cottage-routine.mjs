@@ -22,6 +22,16 @@ export const SPOTS = {
   bed: { room: "bedroom", x: -1.6, y: 3.99, z: -1.3, turn: 0, pose: "sleep", node: "bedside", enter: "bed" },
 }
 
+// Where she stands to sit down on a seat and gets up to (0.9.51): `approach` in the seat's own frame
+// ([x her left, z ahead] from its spot), by default in front of the seat, where her feet are once seated.
+const APPROACH = [0, .38]
+export function standBy(spot) {
+  const [left, ahead] = spot.approach || APPROACH
+  const sin = Math.sin(spot.turn)
+  const cos = Math.cos(spot.turn)
+  return { x: spot.x + left * cos + ahead * sin, y: spot.y, z: spot.z - left * sin + ahead * cos }
+}
+
 // Getting into and out of bed (cottage-yui-life.mjs): lying on her back where she sits up, the edge she swings
 // round to, facing the room, and the floor beside the bed where she stands up from it. `surface`: the mattress top.
 // `side` (0.9.52): sitting on the side of the bed like on a seat (its top is the mattress, its front edge the

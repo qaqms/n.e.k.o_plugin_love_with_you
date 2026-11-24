@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { BED, EDGES, NODES, SCHEDULE, SPOTS, activityAt, cottageMinutes, periodOf, plan, roomOf, route }
+import { BED, EDGES, NODES, SCHEDULE, SPOTS, activityAt, cottageMinutes, periodOf, plan, roomOf, route, standBy }
   from "../../static/cottage-routine.mjs"
+import { WALK, stride, walkStep } from "../../static/cottage-walk.mjs"
 import { FURNITURE, ROOMS, SLOTS, STAIRS, WALLS, bounds } from "../../static/cottage-layout.mjs"
 
 const at = (hours, minutes = 0) => hours * 60 + minutes
@@ -133,4 +134,84 @@ test("getting into and out of bed stays on the mattress and lands clear of the f
   assert.ok(Math.abs(BED.side.x + BED.side.chair[0] - x[1]) < .05, "the side's front edge is the mattress's")
   const ahead = (BED.stand.x - BED.side.x) * Math.sin(BED.side.turn) + (BED.stand.z - BED.side.z) * Math.cos(BED.side.turn)
   assert.ok(ahead > .3 && ahead < .5, "she stands in front of where she sits")
+})
+
+// 0.9.53: she steers round corners instead of stopping on them. Walked frame by frame along every way she can go,
+// as cottage-yui-life.mjs walks her: the rounded corners stay close to the checked straight lines and clear of the
+// furniture, she stops exactly where she sits down, gets into bed or arrives, and never goes faster than her pace.
+const WALKING = new Set(["walk", "arrive", "sit", "bed", "stairs"])
+function walkTarget(step) {
+  if (step.kind === "sit") return standBy(SPOTS[step.spot])
+  if (step.kind === "bed") return BED.stand
+  return step.to
+}
+function startOf(spot) {
+  const from = SPOTS[spot]
+  if (from.enter === "sit") return standBy(from)
+  if (from.enter === "bed") return BED.stand
+  return from
+}
+const nearSegment = (point, a, b) => {
+  const dx = b.x - a.x
+  const dz = b.z - a.z
+  const length = dx * dx + dz * dz
+  const t = length ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.z - a.z) * dz) / length)) : 0
+  return Math.hypot(point.x - a.x - dx * t, point.z - a.z - dz * t)
+}
+
+test("walking, she rounds corners close to her way and clear of the furniture, and stops where she is going", () => {
+  const dt = 1 / 60
+  for (const from of Object.keys(SPOTS)) for (const to of Object.keys(SPOTS)) {
+    if (from === to) continue
+    const steps = plan({ spot: from }, to)
+    const start = startOf(from)
+    const state = { x: start.x, z: start.z, yaw: 0, pace: 0 }
+    let y = start.y
+    // The straight lines she would walk, and the furniture on each floor.
+    for (let index = 0; index < steps.length; index++) {
+      const step = steps[index]
+      if (step.kind === "stairs") {
+        Object.assign(state, { x: step.to.x, z: step.to.z, pace: 0 })
+        y = step.to.y
+        continue
+      }
+      if (!["walk", "rise", "leave-bed", "arrive", "sit", "bed"].includes(step.kind)) continue
+      const target = walkTarget(step)
+      const begin = { x: state.x, z: state.z }
+      const through = !["arrive", "sit", "bed"].includes(step.kind) && WALKING.has(steps[index + 1]?.kind)
+      let frames = 0
+      while (!walkStep(state, target, dt, through)) {
+        assert.ok(++frames < 60 * 40, `${from} -> ${to}: never gets to ${step.node || step.spot}`)
+        assert.ok(state.pace <= WALK.speed + 1e-9)
+        const point = { x: state.x, z: state.z }
+        const label = `${from} -> ${to} near ${step.node || step.spot} (${point.x.toFixed(2)}, ${point.z.toFixed(2)})`
+        // Close to the straight line from where this stretch began (a rounded corner cuts in a little).
+        assert.ok(nearSegment(point, begin, target) < .2, `${label} strays from her way`)
+        // Clear of the furniture, except right by where she sits down or gets up (that is the point).
+        const byEnds = Math.hypot(point.x - start.x, point.z - start.z) < .45 ||
+          ["sit", "bed"].includes(step.kind) && Math.hypot(point.x - target.x, point.z - target.z) < .45
+        if (byEnds) continue
+        for (const box of OBSTACLES.filter(item => item.storey === storeyOf({ y }))) {
+          const inside = point.x > box.x[0] - .05 && point.x < box.x[1] + .05 && point.z > box.z[0] - .05 && point.z < box.z[1] + .05
+          assert.ok(!inside, `${label} walks into ${box.name}`)
+        }
+      }
+      y = target.y ?? y
+      if (!through) {
+        assert.ok(Math.hypot(state.x - target.x, state.z - target.z) < 1e-9, `${from} -> ${to} stops on ${step.spot}`)
+        state.pace = 0
+      }
+    }
+  }
+})
+
+test("the walking clip slows and shortens its strides with her pace, so her feet keep up with the floor", () => {
+  for (const pace of [.3, .5, WALK.speed, 1, WALK.natural]) {
+    const { rate, reach } = stride(pace)
+    assert.ok(Math.abs(WALK.natural * rate * reach - pace) < 1e-9, `at ${pace} m/s`)
+    assert.ok(rate <= 1.0001 && reach <= 1.0001 && rate > .4 && reach > .5)
+  }
+  assert.deepEqual(stride(WALK.natural), { rate: 1, reach: 1 })
+  // At her usual pace the cycle is slower, not slow motion.
+  assert.ok(stride(WALK.speed).rate > .75)
 })

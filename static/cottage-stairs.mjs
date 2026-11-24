@@ -7,7 +7,7 @@
 //
 // Progress up the stairs is counted in steps (`u`): tread k is the k-th from the bottom (0..13), the floor in front
 // of them counts as -1, -2, ... and the last tread is level with the upper floor.
-import { STAIRS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
+import { STAIRS, STOREYS } from "./cottage-layout.mjs?v=0.9.60"
 
 const COUNT = 14
 // The upper floor's surface: cottage-house.mjs draws the upper storey UPPER_LIFT (.12) above its storey line.

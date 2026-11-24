@@ -1,7 +1,7 @@
 // The rest of the house around the 0.9.25 living room: kitchen, porch and yard, the upper storey, stairs and roof.
 // Rooms, walls and openings come from cottage-layout.mjs; the living room's own walls stay in cottage-scene.mjs.
 import * as T from "./engine/three.module.min.js"
-import { ROOMS, STAIRS, STOREYS, WALLS, room as roomById, wallPieces } from "./cottage-layout.mjs?v=0.9.26"
+import { ROOMS, STAIRS, STOREYS, WALLS, room as roomById, wallPieces } from "./cottage-layout.mjs?v=0.9.60"
 import { furnishHouse } from "./cottage-furnish.mjs?v=0.9.28"
 import { createDuvet } from "./cottage-duvet.mjs?v=0.9.59"
 
@@ -69,7 +69,8 @@ export function buildHouse(scene, kit) {
   const overhead = new T.Group()
   scene.add(ground, upper, overhead)
   const storeyGroups = [ground, upper]
-  const fadeWalls = []
+  // Every wall drawn here, for cutting it down in front of the camera (cottage-walls.mjs, 0.9.60).
+  const wallCuts = []
 
   // Diorama base under the whole footprint, with a yard beside the porch.
   box(ground, standard(0x60796e), 3.4, -.25, 0, 13.44, .44, 5.44, .12, false)
@@ -80,61 +81,71 @@ export function buildHouse(scene, kit) {
 
   const kitchenPlaster = standard(0xe9dcc3, { roughness: .95 })
   const outerPlaster = standard(0xe4d3bc, { roughness: .95 })
+  // The living room's front wall (0.9.60) matches its side wall (cottage-scene.mjs).
+  const livingPlaster = standard(0xe3ccbb, { roughness: .95 })
   const plasterFor = (storey, at) => storey === 0
-    ? at > 6 ? outerPlaster : kitchenPlaster
+    ? at > 6 ? outerPlaster : at < 3.25 ? livingPlaster : kitchenPlaster
     : at < 1.5 ? standard(0xead2c6, { roughness: .95 }) : standard(0xd8dfc9, { roughness: .95 })
+  // Where a wall along x is drawn: the back one and (0.9.60) the front one, flush with the floor's edges.
+  const drawnZ = wall => wall.at < 0 ? -2.62 : 2.62
 
-  // Walls from the layout. Downstairs only the kitchen and porch walls are new.
+  // Walls from the layout. Downstairs the living room's back and left walls are its own (cottage-scene.mjs).
+  // Each wall along x is split where the rooms meet, so each room keeps its own colour.
+  const splitAt = (wall, x) => [{ ...wall, to: x, openings: wall.openings.filter(([from]) => from < x) },
+    { ...wall, from: x, openings: wall.openings.filter(([from]) => from >= x) }]
   const walls = WALLS.flatMap(wall => {
-    if (wall.axis === "z" && wall.storey === 0) return [{ ...wall, from: 3.23, openings: [] }]
-    // Split the upstairs back wall at the partition so each room keeps its own colour.
-    if (wall.axis === "z") return [{ ...wall, to: 1.5, openings: wall.openings.filter(([from]) => from < 1.5) },
-      { ...wall, from: 1.5, openings: wall.openings.filter(([from]) => from >= 1.5) }]
+    if (wall.axis === "z" && wall.storey === 0) return wall.at < 0 ? [{ ...wall, from: 3.23, openings: [] }] : splitAt(wall, 3.25)
+    if (wall.axis === "z") return splitAt(wall, 1.5)
     return wall.storey === 0 && wall.at < 0 ? [] : [wall]
   })
   for (const wall of walls) {
     const parent = storeyGroups[wall.storey]
-    // Side walls fade when they stand in front of the room being viewed, so they need materials of their own.
-    const fades = wall.axis === "x"
-    const shared = plasterFor(wall.storey, fades ? wall.at : (wall.from + wall.to) / 2)
-    const material = fades ? shared.clone() : shared
-    const edge = fades ? trim.clone() : trim
+    const material = plasterFor(wall.storey, wall.axis === "x" ? wall.at : (wall.from + wall.to) / 2)
+    const edge = trim
     const meshes = []
+    const solids = []
+    const wallZ = wall.axis === "z" ? drawnZ(wall) : 0
     for (const piece of wallPieces(wall)) {
       const [x, y, z] = piece.at
       // Downstairs walls match the living room's 3.43 m walls; upstairs everything is lifted onto the slab.
       const height = piece.size[1] + (wall.storey === 0 && y + piece.size[1] / 2 > 3.3 ? .03 : 0)
       const centre = wall.storey === 0 ? y - piece.size[1] / 2 + height / 2 : y + UPPER_LIFT
-      const solid = box(parent, material, x, centre, wall.axis === "z" ? -2.62 : z,
+      const solid = box(parent, material, x, centre, wall.axis === "z" ? wallZ : z,
         ...(wall.axis === "z" ? [piece.size[0], height, .18] : [.18, height, piece.size[2]]), .02, wall.storey === 0)
       solid.receiveShadow = true
-      meshes.push(solid)
+      solids.push(solid)
     }
     const top = STOREYS[wall.storey].y + STOREYS[wall.storey].height + lift(wall.storey) + (wall.storey ? 0 : .03)
     meshes.push(wall.axis === "z"
-      ? box(parent, edge, (wall.from + wall.to) / 2, top + .04, -2.62, wall.to - wall.from, .09, .22, .025, false)
+      ? box(parent, edge, (wall.from + wall.to) / 2, top + .04, wallZ, wall.to - wall.from, .09, .22, .025, false)
       : box(parent, edge, wall.at, top + .04, (wall.from + wall.to) / 2 - .04, .21, .09, wall.to - wall.from + .08, .025, false))
     for (const [from, to, low, high, kind] of wall.openings) {
       const bottom = low + lift(wall.storey)
       const head = high + lift(wall.storey)
       const middle = (from + to) / 2
       const along = (offset, y, length, height) => wall.axis === "z"
-        ? box(parent, edge, middle + offset, y, wall.at + .02, length, height, .22, .015, false)
+        ? box(parent, edge, middle + offset, y, wallZ + Math.sign(wallZ) * .01, length, height, .22, .015, false)
         : box(parent, edge, wall.at, y, middle + offset, .22, height, length, .015, false)
       for (const side of [-1, 1]) meshes.push(along(side * ((to - from) / 2 + .03), (bottom + head) / 2, .07, head - bottom))
       meshes.push(along(0, head + .035, to - from + .13, .07))
       if (kind === "window") {
         meshes.push(along(0, bottom - .03, to - from + .13, .07))
         // The period views are shared with the living room window, so every window follows the time of day.
+        // Outside the wall, facing in (the front windows, 0.9.60, the other way round from the back ones).
         for (const [index, view] of views.entries()) {
+          const out = Math.sign(wallZ) || -1
           const glass = mesh(parent, new T.PlaneGeometry(to - from, head - bottom), view.material,
-            ...(wall.axis === "z" ? [middle, (bottom + head) / 2, wall.at - .1 + index * .002] : [wall.at + .1 - index * .002, (bottom + head) / 2, middle]), false)
+            ...(wall.axis === "z" ? [middle, (bottom + head) / 2, wallZ + out * (.13 - index * .002)] : [wall.at + .1 - index * .002, (bottom + head) / 2, middle]), false)
           if (wall.axis === "x") glass.rotation.y = -PI / 2
+          else if (out > 0) glass.rotation.y = PI
           glass.renderOrder = index
+          meshes.push(glass)
         }
       }
     }
-    if (fades) fadeWalls.push({ at: wall.at, storey: wall.storey, materials: [material, edge], meshes, opacity: 1 })
+    // The front walls cast no shadow: the light still comes in as it did while the house was open at the front.
+    wallCuts.push({ storey: wall.storey, axis: wall.axis, at: wall.axis === "z" ? wallZ : wall.at, from: wall.from, to: wall.to,
+      floor: STOREYS[wall.storey].y + lift(wall.storey), solids, parts: meshes, shadows: !(wall.axis === "z" && wall.at > 0) })
   }
 
   // The upper floor, with an opening over the stairs.
@@ -217,6 +228,26 @@ export function buildHouse(scene, kit) {
   roofSlab(standard(0xb08a68, { map: repeated(wood.map, 3, 6), roughness: .7 }), .12, 0)
   roofSlab(standard(0xb5715a, { roughness: .82 }), .08, .1)
   box(overhead, standard(0x93573f), 1.87, ridgeY + .12, ridgeZ + .08, 10.98, .12, .18, .03, false)
+  // With every wall up (0.9.60, cottage-walls.mjs "up"), the front half of the roof and the gable ends close the
+  // house; otherwise the roof is only its back half, read from the front as the attic's sloped ceiling.
+  const roofFront = new T.Group()
+  overhead.add(roofFront)
+  const frontEave = 2.98
+  const frontPitch = Math.atan2(ridgeY - eaveY, frontEave - ridgeZ)
+  const frontSlope = (frontEave - ridgeZ) / Math.cos(frontPitch)
+  for (const [material, depth, offset] of [[standard(0xb08a68, { map: repeated(wood.map, 3, 6), roughness: .7 }), .12, 0],
+    [standard(0xb5715a, { roughness: .82 }), .08, .1]]) {
+    const slab = box(roofFront, material, 1.87, (eaveY + ridgeY) / 2 + offset * Math.cos(frontPitch),
+      (frontEave + ridgeZ) / 2 + offset * Math.sin(frontPitch), 10.9, depth, frontSlope, .02, false)
+    slab.rotation.x = frontPitch
+  }
+  const gable = new T.Shape([new T.Vector2(-2.71, 0), new T.Vector2(2.71, 0), new T.Vector2(-ridgeZ, ridgeY - roofTop - .08)])
+  for (const [x, material] of [[-3.32, standard(0xead2c6, { roughness: .95 })], [7.09, standard(0xd8dfc9, { roughness: .95 })]]) {
+    const end = mesh(roofFront, new T.ShapeGeometry(gable), material, x, roofTop, 0, false)
+    material.side = T.DoubleSide
+    end.rotation.y = PI / 2
+  }
+  roofFront.visible = false
   const chimneyZ = -1.7
   const chimneyBase = eaveY + (chimneyZ - eaveZ) * Math.tan(pitch)
   // The chimney starts just above the underside's front edge so it never shows through the attic ceiling.
@@ -275,5 +306,5 @@ export function buildHouse(scene, kit) {
     volume.updateMatrixWorld()
     return { id: item.id, object: volume }
   })
-  return { storeys: storeyGroups, overhead, fadeWalls, rooms, duvet, ...furnishing }
+  return { storeys: storeyGroups, overhead, roofFront, wallCuts, rooms, duvet, ...furnishing }
 }

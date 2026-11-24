@@ -490,11 +490,12 @@ const cottageAssets = new Set([
   "cottage.html", "cottage.css", "cottage.mjs", "cottage-scene.mjs", "cottage-icons.mjs", "cottage-record.mjs", "cottage-picture.mjs",
   "cottage-living.mjs", "cottage-company.mjs",
   "engine/three.module.min.js", "engine/three.core.min.js", "engine/three-rounded-box.mjs", "engine/three-post.mjs",
-  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs", "cottage-grounds.mjs", "cottage-grounds-life.mjs", "cottage-quality.mjs", "cottage-yui.mjs", "cottage-springs.mjs", "cottage-duvet.mjs", "cottage-yui-card.mjs", "cottage-hand.mjs", "cottage-routine.mjs", "cottage-yui-life.mjs", "cottage-style.mjs", "cottage-reach.mjs", "cottage-walk.mjs", "cottage-stairs.mjs", "engine/three-gltf.mjs", "models/yui.glb", "models/hand.glb",
+  "cottage-layout.mjs", "cottage-house.mjs", "cottage-card.mjs", "cottage-furnish.mjs", "cottage-ambient.mjs", "cottage-grounds.mjs", "cottage-grounds-life.mjs", "cottage-quality.mjs", "cottage-yui.mjs", "cottage-springs.mjs", "cottage-duvet.mjs", "cottage-yui-card.mjs", "cottage-hand.mjs", "cottage-routine.mjs", "cottage-yui-life.mjs", "cottage-style.mjs", "cottage-reach.mjs", "cottage-walk.mjs", "cottage-stairs.mjs", "cottage-walls.mjs", "engine/three-gltf.mjs", "models/yui.glb", "models/hand.glb",
   "models/motion/idle01.vrma.gz", "models/motion/idle02.vrma.gz", "models/motion/idle03.vrma.gz", "models/motion/idle04.vrma.gz", "models/motion/idle05.vrma.gz", "models/motion/vsign.vrma.gz", "models/motion/liked.vrma.gz", "models/motion/walk.vrma.gz", "models/motion/sit.vrma.gz", "models/motion/type.vrma.gz", "models/motion/tablet.vrma.gz", "models/motion/sleep.vrma.gz", "models/motion/sleep-turn.vrma.gz", "models/motion/yawn.vrma.gz", "models/motion/stretch.vrma.gz", "models/motion/getup.vrma.gz", "models/motion/sit-laugh.vrma.gz", "models/motion/startle.vrma.gz", "models/skirt-seated.json",
 ])
 // Dev-only pages that live beside this server instead of in the shipped static folder.
-const devAssets = new Set(["cottage-blockout.html", "cottage-blockout.mjs"])
+const devAssets = new Set(["cottage-blockout.html", "cottage-blockout.mjs", "cottage-fullhouse-blockout.html",
+  "cottage-fullhouse-blockout.mjs", "cottage-fullhouse-layout.mjs"])
 const assetPrefix = "/plugin/love_with_you/ui/"
 
 export async function startPreview(port = 0, sourcePath = join(pluginRoot, "ui/panel.tsx")) {
@@ -505,6 +506,8 @@ export async function startPreview(port = 0, sourcePath = join(pluginRoot, "ui/p
       const asset = path.startsWith(assetPrefix) ? path.slice(assetPrefix.length) : ""
       if (path === "/blockout") {
         res.writeHead(302, { Location: `${assetPrefix}cottage-blockout.html${requestUrl.search}` }).end()
+      } else if (path === "/fullhouse") {
+        res.writeHead(302, { Location: `${assetPrefix}cottage-fullhouse-blockout.html${requestUrl.search}` }).end()
       } else if (devAssets.has(asset)) {
         const type = asset.endsWith(".html") ? "text/html" : "text/javascript"
         res.writeHead(200, { "Content-Type": `${type}; charset=utf-8` }).end(readFileSync(join(pluginRoot, "tools/preview", asset)))

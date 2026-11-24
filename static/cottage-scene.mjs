@@ -1,6 +1,6 @@
 import * as T from "./engine/three.module.min.js"
 import { RoundedBoxGeometry } from "./engine/three-rounded-box.mjs"
-import { buildHouse } from "./cottage-house.mjs?v=0.9.59"
+import { buildHouse } from "./cottage-house.mjs?v=0.9.60"
 
 const PI = Math.PI
 const standard = (color, options = {}) => new T.MeshStandardMaterial({ color, roughness: .85, ...options })
@@ -313,15 +313,20 @@ function structure(scene, wood, darkWood, trim) {
   const back = -2.62
   const left = -3.23
   const windowX = -1.04
-  // The walls cast shadows so daylight only enters through the window opening.
-  box(scene, sidePlaster, left, 1.74, -.35, .18, 3.43, 4.54, .035)
-  box(scene, trim, left, 3.47, -.35, .21, .09, 4.58, .025)
-  box(scene, plaster, -2.93, 1.74, back, .60, 3.43, .18, .02)
-  box(scene, plaster, 1.92, 1.74, back, 2.64, 3.43, .18, .02)
-  box(scene, plaster, windowX, .59, back, 3.20, 1.14, .18, 0)
-  box(scene, plaster, windowX, 3.25, back, 3.20, .41, .18, 0)
+  // The walls cast shadows so daylight only enters through the window opening. Since the house closed at the
+  // front (0.9.60) the left wall goes on to the front wall (it stopped at z 1.92), and both walls are cut down in
+  // front of the camera (cottage-walls.mjs): what is added from here on hangs on one of them.
+  const wallStart = scene.children.length
+  const leftSolids = [box(scene, sidePlaster, left, 1.74, .045, .18, 3.43, 5.33, .035)]
+  box(scene, trim, left, 3.47, .045, .21, .09, 5.37, .025)
+  const backSolids = [
+    box(scene, plaster, -2.93, 1.74, back, .60, 3.43, .18, .02),
+    box(scene, plaster, 1.92, 1.74, back, 2.64, 3.43, .18, .02),
+    box(scene, plaster, windowX, .59, back, 3.20, 1.14, .18, 0),
+    box(scene, plaster, windowX, 3.25, back, 3.20, .41, .18, 0),
+  ]
   box(scene, trim, .01, 3.47, back, 6.53, .09, .22, .025)
-  box(scene, trim, -3.109, .13, -.32, .075, .18, 4.44, .014)
+  box(scene, trim, -3.109, .13, .04, .075, .18, 5.04, .014)
   box(scene, trim, .03, .13, -2.49, 6.38, .18, .074, .014)
 
   const windowGeometry = new T.PlaneGeometry(3.28, 1.98)
@@ -354,7 +359,15 @@ function structure(scene, wood, darkWood, trim) {
     mesh(curtain, geometry, drapery, 0, 0, 0)
     return curtain
   })
-  return { views, curtains }
+  // Everything since wallStart is on the left wall or the back wall (window, its frame, curtains).
+  const solids = new Set([...leftSolids, ...backSolids])
+  const parts = scene.children.slice(wallStart).filter(object => !solids.has(object))
+  const onLeft = object => object.position.x < left + .2 && object.position.z > back + .25
+  const walls = [
+    { storey: 0, axis: "x", at: left, from: back, to: 2.65, floor: 0, solids: leftSolids, parts: parts.filter(onLeft) },
+    { storey: 0, axis: "z", at: back, from: left, to: 3.25, floor: 0, solids: backSolids, parts: parts.filter(object => !onLeft(object)) },
+  ]
+  return { views, curtains, walls }
 }
 
 function sofaThrow(parent, armX) {
@@ -636,7 +649,7 @@ export function buildRoom(scene) {
   const wood = standard(0xad7953, { map, roughness: .62 })
   const darkWood = standard(0x835943, { map, roughness: .6 })
   const trim = standard(0xf1e1c9)
-  const { curtains, views } = structure(scene, wood, darkWood, trim)
+  const { curtains, views, walls } = structure(scene, wood, darkWood, trim)
   const rugMap = rugTexture()
   const rugGeometry = new T.CircleGeometry(1, 72)
   const rug = mesh(scene, rugGeometry, fabric(0xffffff, { map: rugMap, roughness: 1, sheenColor: 0xf0c4ae }),
@@ -704,5 +717,7 @@ export function buildRoom(scene) {
     return { id, object }
   })
   const house = buildHouse(scene, { box, cylinder, mesh, group, standard, fabric, glaze, texture, wood, darkWood, trim, views })
+  // The living room's own walls first, then the rest of the house's (cottage-walls.mjs).
+  house.wallCuts.unshift(...walls)
   return { ...lamp, sun, curtains, views, hits, house, record, picture, notebook, seat, shelf, calendar, projector }
 }

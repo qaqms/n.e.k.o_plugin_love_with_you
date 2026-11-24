@@ -79,7 +79,7 @@ test("the stair opening upstairs is clear and every room has a way in", () => {
   for (const item of [...SLOTS, ...FURNITURE].filter(entry => room(entry.room).storey === 1)) {
     assert.ok(!overlaps(item, hole), `${label(item)} covers the stair opening`)
   }
-  // The living room is entered from the open front; the others connect through a door or the stairs.
+  // The rooms connect through a door or the stairs.
   const doorsBetween = (a, b) => WALLS.some(wall => wall.storey === a.storey && wall.axis === "x" &&
     wall.openings.some(opening => opening[4] === "door") &&
     [a.x[0], a.x[1]].includes(wall.at) && [b.x[0], b.x[1]].includes(wall.at))

@@ -1,7 +1,7 @@
 // The two-storey cottage (redesign option A2), as data: rooms, walls, furniture placeholders and slots.
 // Step 2 draws it as a gray-box model (tools/preview/cottage-blockout.mjs); step 3 builds the real rooms
 // from the same data. Units match the 0.9.25 living room: the existing furniture keeps its coordinates.
-// Every box is { at: [x, y, z] centre, size: [w, h, d] }. The open front of the house faces +z.
+// Every box is { at: [x, y, z] centre, size: [w, h, d] }. The front of the house faces +z (open until 0.9.59; walled since 0.9.60, cut away in view).
 
 export const STOREYS = [
   { id: 0, y: 0, height: 3.4, name: "一楼" },
@@ -17,7 +17,7 @@ export const ROOMS = [
 ]
 
 // Walls run along one axis at a fixed coordinate. Openings are [from, to, bottom, top] along the run and
-// in world height; the drawing splits the wall around them.
+// in world height; the drawing splits the wall around them. The front of the house faces +z.
 export const WALLS = [
   { storey: 0, axis: "z", at: -2.65, from: -3.25, to: 7, openings: [[-2.64, .56, 1.15, 3.05, "window"]] },
   { storey: 0, axis: "x", at: -3.25, from: -2.65, to: 2.65, openings: [] },
@@ -27,6 +27,11 @@ export const WALLS = [
   { storey: 1, axis: "x", at: -3.25, from: -2.65, to: 2.65, openings: [] },
   { storey: 1, axis: "x", at: 1.5, from: -2.65, to: 2.65, openings: [[.6, 1.6, 3.4, 5.6, "door"]] },
   { storey: 1, axis: "x", at: 7, from: -2.65, to: 2.65, openings: [[-1.2, .2, 4.6, 5.6, "window"]] },
+  // The front (0.9.60): until then the house was open on this side like a dollhouse. Now it is closed, and the walls
+  // in front of the camera are cut down instead (cottage-walls.mjs).
+  { storey: 0, axis: "z", at: 2.65, from: -3.25, to: 7, openings: [[-2.3, -.7, 1, 2.45, "window"], [.4, 2.1, 1, 2.45, "window"],
+    [4.1, 5.5, 1.05, 2.4, "window"]] },
+  { storey: 1, axis: "z", at: 2.65, from: -3.25, to: 7, openings: [[-2.2, -.8, 4.5, 5.75, "window"], [3.4, 5.2, 4.5, 5.75, "window"]] },
 ]
 
 // The stairs climb along the kitchen's right wall from the front to the study floor at the back.

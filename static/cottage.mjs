@@ -2,20 +2,21 @@ import * as T from "./engine/three.module.min.js"
 import { CopyShader, EffectComposer, FullScreenQuad, GTAOPass, OutputPass, RenderPass, RoomEnvironment, ShaderPass,
   UnrealBloomPass }
   from "./engine/three-post.mjs?v=0.9.25"
-import { icon } from "./cottage-icons.mjs?v=0.9.48.1"
+import { icon } from "./cottage-icons.mjs?v=0.9.60"
 import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
-import { buildRoom } from "./cottage-scene.mjs?v=0.9.59"
-import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.59"
+import { buildRoom } from "./cottage-scene.mjs?v=0.9.60"
+import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.60"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
 import { buildGrounds } from "./cottage-grounds.mjs?v=0.9.47"
 import { PROBE_FRAMES, adapterKind, probeCost, savedQuality, settle, startingQuality } from "./cottage-quality.mjs?v=0.9.46"
 import { InkShader, STYLES, setCharacterLight, setPixelRatio as styleRatio, stylize } from "./cottage-style.mjs?v=0.9.48.3"
 import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.59"
-import { createLife } from "./cottage-yui-life.mjs?v=0.9.59"
+import { createLife } from "./cottage-yui-life.mjs?v=0.9.60"
+import { SHADOW_LAYER, WALL_MODES, createWallCuts } from "./cottage-walls.mjs?v=0.9.60"
 import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.53"
 import { createYuiCard } from "./cottage-yui-card.mjs?v=0.9.40"
 import { HAND_POSE, createHand } from "./cottage-hand.mjs?v=0.9.38"
-import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
+import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.60"
 import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.27"
 import { createPicturePages } from "./cottage-picture.mjs?v=0.9.21"
 import { createGiftShelf, createNotebook, createSeat, livingLabels, localPeriod } from "./cottage-living.mjs?v=0.9.22"
@@ -98,6 +99,13 @@ function loadCamera() {
 }
 const START_ANGLE = .69
 const START_HEIGHT = .52
+// The wall mode (0.9.60, cottage-walls.mjs), named on its button: each mode in WALL_MODES order.
+const WALL_LABELS = {
+  "zh-CN": ["自动切墙", "墙全立", "墙全降"], "zh-TW": ["自動切牆", "牆全立", "牆全降"],
+  en: ["Walls cut away", "Walls up", "Walls down"], es: ["Paredes recortadas", "Paredes arriba", "Paredes abajo"],
+  ja: ["壁を自動で切る", "壁をすべて立てる", "壁をすべて下げる"], ko: ["벽 자동 자르기", "벽 모두 세우기", "벽 모두 내리기"],
+  pt: ["Paredes recortadas", "Paredes levantadas", "Paredes abaixadas"], ru: ["Стены срезаны", "Стены подняты", "Стены опущены"],
+}
 const clamp = T.MathUtils.clamp
 const buttons = [
   ["lamp", "Lamp"], ["curtains", "Blinds"], ["left", "ChevronLeft"], ["reset", "Scan"], ["right", "ChevronRight"],
@@ -167,9 +175,10 @@ function loadPreferences() {
     return { lamp: saved?.lamp === true, curtains: saved?.curtains !== false,
       period: periods.includes(saved?.period) ? saved.period : "auto",
       quality: qualities.includes(saved?.quality) ? saved.quality : "auto",
-      style: STYLES.includes(saved?.style) ? saved.style : "lofi" }
+      style: STYLES.includes(saved?.style) ? saved.style : "lofi",
+      walls: WALL_MODES.includes(saved?.walls) ? saved.walls : "cut" }
   } catch {
-    return { lamp: false, curtains: true, period: "auto", quality: "auto", style: "lofi" }
+    return { lamp: false, curtains: true, period: "auto", quality: "auto", style: "lofi", walls: "cut" }
   }
 }
 
@@ -234,6 +243,15 @@ export function startCottage() {
     button.append(icon("Video"))
     elements.seat.before(button)
     button.onclick = () => activate("watch")
+  }
+  {
+    // The wall mode (0.9.60): each press goes on to the next.
+    const button = document.createElement("button")
+    button.type = "button"
+    button.id = "walls"
+    button.append(icon("BrickWall"))
+    elements.right.after(button)
+    elements.walls = button
   }
   for (const [id, label, symbol] of [["rooms", roomsLabel, "House"], ["mood", moodLabel, "SunMoon"], ["items", itemsLabel, "Package"]]) {
     const button = document.getElementById(id)
@@ -354,6 +372,10 @@ export function startCottage() {
   fill.position.set(4, 2.7, -3)
   scene.add(fill)
   const room = buildRoom(scene)
+  // Walls in front of the camera go down (0.9.60). Their shadows are drawn by stand-ins on SHADOW_LAYER.
+  const wallCuts = createWallCuts(room.house.wallCuts, { scene, groups: [scene, ...room.house.storeys],
+    bandMaterial: new T.MeshStandardMaterial({ color: 0x6f5d50, roughness: .85 }) })
+  for (const light of [key, room.sun]) light.shadow.camera.layers.enable(SHADOW_LAYER)
   // The yard, meadow, village and sky around the house (0.9.45); decorative only. Tests and diagnostics can leave
   // them out (?grounds=off, or "off" under GROUNDS_KEY in session storage) to check the house's own framing.
   const grounds = query.get("grounds") === "off" || sessionValue(GROUNDS_KEY) === "off" ? null : buildGrounds(scene)
@@ -609,7 +631,32 @@ export function startCottage() {
     camera.updateMatrixWorld()
   }
 
-  function fitView({ center: viewCenter, corners }) {
+  // Each view's corners are those that frame it from the front right (where the camera stayed until 0.9.60).
+  // From elsewhere the same corners mirrored to that side: from the back across z, from the left across x, blended
+  // round the corners of the house so the framing never jumps.
+  const mirrored = (corners, acrossX, acrossZ) => {
+    const middle = axis => (Math.min(...corners.map(c => c[axis])) + Math.max(...corners.map(c => c[axis]))) / 2
+    const [mx, mz] = [middle("x"), middle("z")]
+    return corners.map(c => new T.Vector3(acrossX ? 2 * mx - c.x : c.x, c.y, acrossZ ? 2 * mz - c.z : c.z))
+  }
+  function fitView(view) {
+    const behind = T.MathUtils.smoothstep(-Math.cos(azimuth), -.3, .3)
+    const leftSide = T.MathUtils.smoothstep(-Math.sin(azimuth), -.3, .3)
+    if (behind < .001 && leftSide < .001) return fitCorners(view)
+    view.sides ||= [false, true].flatMap(acrossZ => [false, true].map(acrossX => ({ center: view.center,
+      corners: mirrored(view.corners, acrossX, acrossZ) })))
+    const weights = [(1 - behind) * (1 - leftSide), (1 - behind) * leftSide, behind * (1 - leftSide), behind * leftSide]
+    const fit = { span: 0, midX: 0, midY: 0 }
+    view.sides.forEach((side, index) => {
+      if (weights[index] < .001) return
+      const one = fitCorners(side)
+      for (const key of ["span", "midX", "midY"]) fit[key] += one[key] * weights[index]
+    })
+    const total = weights.reduce((sum, weight) => sum + (weight < .001 ? 0 : weight), 0)
+    for (const key of ["span", "midX", "midY"]) fit[key] /= total
+    return fit
+  }
+  function fitCorners({ center: viewCenter, corners }) {
     aimCamera(viewCenter, azimuth, elevation, 11)
     const points = corners.map(corner => corner.clone().applyMatrix4(camera.matrixWorldInverse))
     const xs = points.map(point => point.x)
@@ -666,7 +713,9 @@ export function startCottage() {
     const baseFov = fov
     const aimCloseup = (point, angle, pitch, distance, amount) => {
       const mix = (from, to) => T.MathUtils.lerp(from, to, amount)
-      aimCamera(target.lerpVectors(source.point, point, amount), mix(source.angle, angle),
+      // The short way round from wherever the camera is (it goes all round the house since 0.9.60).
+      const turn = Math.atan2(Math.sin(angle - source.angle), Math.cos(angle - source.angle))
+      aimCamera(target.lerpVectors(source.point, point, amount), source.angle + turn * amount,
         mix(source.pitch, pitch), mix(source.distance, distance))
     }
     if (focus > 0 && closeup === "record") {
@@ -841,6 +890,10 @@ export function startCottage() {
     const ease = (value, target) => reduced.matches || Math.abs(target - value) < .002
       ? target : T.MathUtils.damp(value, target, 13, dt)
     azimuth = ease(azimuth, targetAzimuth)
+    // Kept within one turn once it has come to rest.
+    if (azimuth === targetAzimuth && Math.abs(azimuth) > Math.PI) {
+      azimuth = targetAzimuth = Math.atan2(Math.sin(azimuth), Math.cos(azimuth))
+    }
     elevation = ease(elevation, targetElevation)
     lamp = ease(lamp, Number(preferences.lamp))
     curtains = ease(curtains, Number(preferences.curtains))
@@ -1080,9 +1133,10 @@ export function startCottage() {
     } else lastFrame = 0
   }
 
-  // Upstairs lifts away like a dollhouse lid for ground-floor rooms; side walls in front of the view fade out.
+  // Upstairs lifts away like a dollhouse lid for ground-floor rooms; walls in front of the view are cut down
+  // (cottage-walls.mjs, 0.9.60; until then the house was open at the front and only the side walls faded).
   function updateHouse(dt) {
-    const { storeys, overhead, fadeWalls } = room.house
+    const { storeys, overhead, roofFront } = room.house
     const instant = reduced.matches || !houseSettled
     houseSettled = true
     const wanted = views[currentView].upper ? 0 : 1
@@ -1092,27 +1146,15 @@ export function startCottage() {
       group.visible = upperLift < .995
     }
     let moving = upperLift !== wanted
-    for (const wall of fadeWalls) {
-      const shown = wall.storey === 0 || upperLift < .995
-      // Closeups keep the room's wall state: the camera leaning in should not bring a faded wall back.
-      const blocking = closeup ? wall.goal === 0 : (camera.position.x - wall.at) * (center.x - wall.at) < 0
-      const goal = wall.goal = blocking ? 0 : 1
-      wall.opacity = instant || Math.abs(wall.opacity - goal) < .01 ? goal : T.MathUtils.damp(wall.opacity, goal, 9, dt)
-      if (wall.opacity !== goal) moving = true
-      for (const material of wall.materials) {
-        const transparent = wall.opacity < 1
-        if (material.transparent !== transparent) {
-          material.transparent = transparent
-          material.needsUpdate = true
-        }
-        material.opacity = wall.opacity
-        material.depthWrite = !transparent
-      }
-      for (const mesh of wall.meshes) {
-        mesh.visible = shown && wall.opacity > .02
-        mesh.castShadow = wall.opacity > .5
-      }
-    }
+    // The roof: with every wall up, all of it; cutting away, its back half (the attic ceiling seen from the front)
+    // unless the camera is behind the house; with every wall down, none.
+    const allUp = preferences.walls === "up"
+    overhead.visible = overhead.visible && (allUp || preferences.walls === "cut" && Math.cos(azimuth) > -.2)
+    roofFront.visible = allUp
+    // The walls between the camera and what it looks at go down: a room, her, or (closeups) a thing in the room,
+    // where the camera is inside and every wall comes back up behind what it looks at.
+    if (wallCuts.update({ mode: preferences.walls, camera: camera.position, target: aimTarget, instant, dt,
+      shown: storey => storey === 0 || upperLift < .995 })) moving = true
     return moving
   }
 
@@ -1296,13 +1338,18 @@ export function startCottage() {
   }
 
   function changeView(angle, height) {
-    targetAzimuth = clamp(angle, .13, 1.24)
+    // All the way round the house (0.9.60; until then only from the open front, .13..1.24).
+    targetAzimuth = angle
     targetElevation = clamp(height, .33, .81)
     rememberCamera()
     invalidate()
   }
 
   function syncControls() {
+    const wallLabel = (WALL_LABELS[locale] || WALL_LABELS.en)[WALL_MODES.indexOf(preferences.walls)]
+    elements.walls.setAttribute("aria-label", wallLabel)
+    elements.walls.title = wallLabel
+    elements.walls.dataset.mode = preferences.walls
     elements.lamp.setAttribute("aria-pressed", String(preferences.lamp))
     elements.curtains.setAttribute("aria-pressed", String(preferences.curtains))
     for (const [period, button] of periodButtons) button.setAttribute("aria-pressed", String(preferences.period === period))
@@ -1771,6 +1818,10 @@ export function startCottage() {
   elements.left.onclick = () => changeView(targetAzimuth - .24, targetElevation)
   elements.right.onclick = () => changeView(targetAzimuth + .24, targetElevation)
   elements.reset.onclick = () => changeView(START_ANGLE, START_HEIGHT)
+  elements.walls.onclick = () => {
+    preferences.walls = WALL_MODES[(WALL_MODES.indexOf(preferences.walls) + 1) % WALL_MODES.length]
+    savePreferences()
+  }
   for (const [menu, button] of menus) button.onclick = () => toggleMenu(menu)
   for (const button of roomMenu.querySelectorAll("button")) button.onclick = () => goTo(button.dataset.view)
   for (const [period, button] of periodButtons) button.onclick = () => {

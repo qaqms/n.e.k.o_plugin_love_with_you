@@ -78,6 +78,8 @@ test("every walk stays on one floor, clear of the furniture, and goes through do
     for (const wall of WALLS.filter(item => item.storey === storeyOf(a) && item.axis === "x")) {
       if ((a.x - wall.at) * (b.x - wall.at) >= 0) continue
       const z = a.z + (b.z - a.z) * (wall.at - a.x) / (b.x - a.x)
+      // Walls stop where they end (0.9.61: the front row's walls only run from the old front to the new one).
+      if (z < wall.from || z > wall.to) continue
       const door = wall.openings.find(([low, high, , , kind]) => kind === "door" && z > low + .25 && z < high - .25)
       assert.ok(door, `${from}-${to} goes through the wall at x ${wall.at} (z ${z.toFixed(2)})`)
     }

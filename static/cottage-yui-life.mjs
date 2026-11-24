@@ -4,7 +4,7 @@
 // Presentation only: nothing here is saved or sent anywhere.
 import { BED, NODES, SPOTS, activityAt, plan, roomOf, standBy } from "./cottage-routine.mjs?v=0.9.53"
 import { walkStep } from "./cottage-walk.mjs?v=0.9.54"
-import { CLIMB, DOWN_YAW, UP_YAW, climbBody, climbFeet, climbPhase, onStairs, railAt } from "./cottage-stairs.mjs?v=0.9.60"
+import { CLIMB, DOWN_YAW, UP_YAW, climbBody, climbFeet, climbPhase, onStairs, railAt } from "./cottage-stairs.mjs?v=0.9.61"
 
 // The steps that start by walking: a walk that goes on into one of them rounds the corner instead of stopping.
 const WALKING = new Set(["walk", "arrive", "stairs", "sit", "bed"])

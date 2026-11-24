@@ -4,19 +4,19 @@ import { CopyShader, EffectComposer, FullScreenQuad, GTAOPass, OutputPass, Rende
   from "./engine/three-post.mjs?v=0.9.25"
 import { icon } from "./cottage-icons.mjs?v=0.9.60"
 import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
-import { buildRoom } from "./cottage-scene.mjs?v=0.9.60"
-import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.60"
+import { buildRoom } from "./cottage-scene.mjs?v=0.9.61"
+import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.61"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
 import { buildGrounds } from "./cottage-grounds.mjs?v=0.9.47"
 import { PROBE_FRAMES, adapterKind, probeCost, savedQuality, settle, startingQuality } from "./cottage-quality.mjs?v=0.9.46"
 import { InkShader, STYLES, setCharacterLight, setPixelRatio as styleRatio, stylize } from "./cottage-style.mjs?v=0.9.48.3"
 import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.59"
-import { createLife } from "./cottage-yui-life.mjs?v=0.9.60"
-import { SHADOW_LAYER, WALL_MODES, createWallCuts } from "./cottage-walls.mjs?v=0.9.60"
+import { createLife } from "./cottage-yui-life.mjs?v=0.9.61"
+import { SHADOW_LAYER, WALL_MODES, createWallCuts } from "./cottage-walls.mjs?v=0.9.61"
 import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.53"
 import { createYuiCard } from "./cottage-yui-card.mjs?v=0.9.40"
 import { HAND_POSE, createHand } from "./cottage-hand.mjs?v=0.9.38"
-import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.60"
+import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.61"
 import { backLabel, createRecordStation } from "./cottage-record.mjs?v=0.9.27"
 import { createPicturePages } from "./cottage-picture.mjs?v=0.9.21"
 import { createGiftShelf, createNotebook, createSeat, livingLabels, localPeriod } from "./cottage-living.mjs?v=0.9.22"
@@ -34,14 +34,14 @@ const LABELS = {
 }
 // Rooms, the view menu, light and quality settings, and the item list.
 const HOUSE_LABELS = {
-  "zh-CN": ["房间", "总览", "客厅", "厨房", "门廊小院", "卧室", "阁楼书房", "光线与时段", "画质", "自动", "低", "中", "高", "物品", "时段"],
-  "zh-TW": ["房間", "總覽", "客廳", "廚房", "門廊小院", "臥室", "閣樓書房", "光線與時段", "畫質", "自動", "低", "中", "高", "物品", "時段"],
-  en: ["Rooms", "Whole house", "Living room", "Kitchen", "Porch & yard", "Bedroom", "Attic study", "Light & time", "Quality", "Auto", "Low", "Medium", "High", "Items", "Time of day"],
-  es: ["Habitaciones", "Toda la casa", "Sala", "Cocina", "Porche y patio", "Dormitorio", "Estudio del ático", "Luz y hora", "Calidad", "Auto", "Baja", "Media", "Alta", "Objetos", "Momento del día"],
-  ja: ["部屋", "家全体", "リビング", "キッチン", "ポーチと庭", "寝室", "屋根裏の書斎", "明かりと時間", "画質", "自動", "低", "中", "高", "アイテム", "時間帯"],
-  ko: ["방", "집 전체", "거실", "주방", "현관과 마당", "침실", "다락 서재", "조명과 시간", "화질", "자동", "낮음", "보통", "높음", "물건", "시간대"],
-  pt: ["Cômodos", "Casa inteira", "Sala", "Cozinha", "Varanda e quintal", "Quarto", "Estúdio no sótão", "Luz e horário", "Qualidade", "Auto", "Baixa", "Média", "Alta", "Itens", "Hora do dia"],
-  ru: ["Комнаты", "Весь дом", "Гостиная", "Кухня", "Крыльцо и двор", "Спальня", "Кабинет на чердаке", "Свет и время", "Качество", "Авто", "Низкое", "Среднее", "Высокое", "Предметы", "Время суток"],
+  "zh-CN": ["房间", "总览", "客厅", "厨房", "门廊小院", "卧室", "阁楼书房", "储物间", "浴室", "玄关", "洗衣间", "衣帽间", "小阳台", "画室", "光线与时段", "画质", "自动", "低", "中", "高", "物品", "时段"],
+  "zh-TW": ["房間", "總覽", "客廳", "廚房", "門廊小院", "臥室", "閣樓書房", "儲物間", "浴室", "玄關", "洗衣間", "衣帽間", "小陽台", "畫室", "光線與時段", "畫質", "自動", "低", "中", "高", "物品", "時段"],
+  en: ["Rooms", "Whole house", "Living room", "Kitchen", "Porch & yard", "Bedroom", "Attic study", "Storage room", "Bathroom", "Entryway", "Laundry room", "Walk-in closet", "Balcony", "Art studio", "Light & time", "Quality", "Auto", "Low", "Medium", "High", "Items", "Time of day"],
+  es: ["Habitaciones", "Toda la casa", "Sala", "Cocina", "Porche y patio", "Dormitorio", "Estudio del ático", "Trastero", "Baño", "Recibidor", "Lavadero", "Vestidor", "Balcón", "Estudio de arte", "Luz y hora", "Calidad", "Auto", "Baja", "Media", "Alta", "Objetos", "Momento del día"],
+  ja: ["部屋", "家全体", "リビング", "キッチン", "ポーチと庭", "寝室", "屋根裏の書斎", "物置", "浴室", "玄関", "ランドリー", "ウォークインクローゼット", "バルコニー", "アトリエ", "明かりと時間", "画質", "自動", "低", "中", "高", "アイテム", "時間帯"],
+  ko: ["방", "집 전체", "거실", "주방", "현관과 마당", "침실", "다락 서재", "창고", "욕실", "현관홀", "세탁실", "드레스룸", "발코니", "화실", "조명과 시간", "화질", "자동", "낮음", "보통", "높음", "물건", "시간대"],
+  pt: ["Cômodos", "Casa inteira", "Sala", "Cozinha", "Varanda e quintal", "Quarto", "Estúdio no sótão", "Depósito", "Banheiro", "Hall de entrada", "Lavanderia", "Closet", "Sacada", "Ateliê", "Luz e horário", "Qualidade", "Auto", "Baixa", "Média", "Alta", "Itens", "Hora do dia"],
+  ru: ["Комнаты", "Весь дом", "Гостиная", "Кухня", "Крыльцо и двор", "Спальня", "Кабинет на чердаке", "Кладовая", "Ванная", "Прихожая", "Прачечная", "Гардеробная", "Балкон", "Мастерская", "Свет и время", "Качество", "Авто", "Низкое", "Среднее", "Высокое", "Предметы", "Время суток"],
 }
 const VIEW_IDS = ["overview", ...ROOMS.map(room => room.id)]
 // The line of the vendored GTAO denoise shader that turns its samples per pixel (see applyQuality); a test checks
@@ -54,16 +54,18 @@ function viewFrame(id) {
     return { center: new T.Vector3(0, 1.18, -.12), upper: false, corners: [
       ...[-3.35, 3.35].flatMap(x => [-2.73, 2.73].map(z => new T.Vector3(x, -.47, z))),
       ...[-3.35, 3.35].map(x => new T.Vector3(x, 3.53, -2.73)),
-      new T.Vector3(-3.35, 3.53, 1.98),
+      // The left wall's front end: since 0.9.60 it runs on to the front wall (it stopped at z 1.92).
+      new T.Vector3(-3.35, 3.53, 2.73),
     ] }
   }
   if (id === "overview") {
     const top = STOREYS[1].y + STOREYS[1].height + UPPER_LIFT
-    return { center: new T.Vector3(3.3, 2.9, -.12), upper: true, corners: [
-      ...[-3.35, 10.12].flatMap(x => [-2.73, 2.73].map(z => new T.Vector3(x, -.47, z))),
+    // The whole house, with the front row since 0.9.61.
+    return { center: new T.Vector3(3.3, 2.9, 2.1), upper: true, corners: [
+      ...[-3.35, 10.12].flatMap(x => [-2.73, 7.23].map(z => new T.Vector3(x, -.47, z))),
       ...[-3.35, 7.1].map(x => new T.Vector3(x, top + .1, -2.73)),
       ...[-3.35, 7.1].map(x => new T.Vector3(x, top + 2.1, -.35)),
-      new T.Vector3(-3.35, top + .1, 2.7),
+      ...[-3.35, 10.12].map(x => new T.Vector3(x, top + .1, 7.2)),
     ] }
   }
   const room = ROOMS.find(item => item.id === id)
@@ -71,10 +73,11 @@ function viewFrame(id) {
   const base = room.storey ? storey.y + UPPER_LIFT - .16 : -.47
   const top = room.outdoor ? 2.95 : storey.y + storey.height + (room.storey ? UPPER_LIFT : 0) + .13
   const [x0, x1] = [room.x[0] - .1, room.x[1] + .1]
-  return { center: new T.Vector3((x0 + x1) / 2, base + 1.65, -.12), upper: room.storey === 1, corners: [
-    ...[x0, x1].flatMap(x => [-2.73, 2.73].map(z => new T.Vector3(x, base, z))),
-    ...[x0, x1].map(x => new T.Vector3(x, top, -2.73)),
-    new T.Vector3(x0, top, 2.7),
+  const [z0, z1] = [room.z[0] - .08, room.z[1] + .08]
+  return { center: new T.Vector3((x0 + x1) / 2, base + 1.65, (z0 + z1) / 2 - .12), upper: room.storey === 1, corners: [
+    ...[x0, x1].flatMap(x => [z0, z1].map(z => new T.Vector3(x, base, z))),
+    ...[x0, x1].map(x => new T.Vector3(x, top, z0)),
+    new T.Vector3(x0, top, z1 - .03),
   ] }
 }
 const STORAGE_KEY = "love_with_you:cottage:v1"
@@ -598,6 +601,8 @@ export function startCottage() {
   backButton.onclick = closeKeepsake
 
   const aimTarget = new T.Vector3()
+  const baseCamera = new T.Vector3()
+  const baseTarget = new T.Vector3()
   const viewRight = new T.Vector3()
   const viewUp = new T.Vector3()
   const viewBack = new T.Vector3()
@@ -697,6 +702,9 @@ export function startCottage() {
     }
     lastBase = { center: center.clone(), span, midX, midY }
     aimCamera(center, azimuth, elevation, 11)
+    // Where the camera is without a closeup: the walls go back to it as soon as a closeup starts closing (below).
+    baseCamera.copy(camera.position)
+    baseTarget.copy(aimTarget)
     let fov = FOV.room
     let amount = 0
     const compact = viewportWidth < 575
@@ -1151,9 +1159,20 @@ export function startCottage() {
     const allUp = preferences.walls === "up"
     overhead.visible = overhead.visible && (allUp || preferences.walls === "cut" && Math.cos(azimuth) > -.2)
     roofFront.visible = allUp
+    // The front row's ceiling lamps show in their own room, the whole house, or with every wall up (cottage-front.mjs).
+    for (const pendant of room.house.pendants) {
+      pendant.object.visible = preferences.walls === "up" || currentView === "overview" || currentView === pendant.room
+    }
     // The walls between the camera and what it looks at go down: a room, her, or (closeups) a thing in the room,
     // where the camera is inside and every wall comes back up behind what it looks at.
-    if (wallCuts.update({ mode: preferences.walls, camera: camera.position, target: aimTarget, instant, dt,
+    // The whole house cuts every wall with a room behind it; a room cuts the walls in front of it (cottage-walls.mjs).
+    const inView = ROOMS.find(item => item.id === currentView)
+    // Leaving a closeup, the walls take the room view's places while the camera is still on its way back, so they
+    // are settled when it arrives (a wall the camera crosses late would otherwise still be moving then).
+    const leaving = Boolean(closeup && focusMotion && !opening)
+    if (wallCuts.update({ mode: preferences.walls, camera: leaving ? baseCamera : camera.position,
+      target: leaving ? baseTarget : aimTarget, instant, dt,
+      room: inView || null, viewing: id => currentView === "overview" || id === currentView,
       shown: storey => storey === 0 || upperLift < .995 })) moving = true
     return moving
   }

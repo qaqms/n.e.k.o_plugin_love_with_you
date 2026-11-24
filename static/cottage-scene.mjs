@@ -1,6 +1,6 @@
 import * as T from "./engine/three.module.min.js"
 import { RoundedBoxGeometry } from "./engine/three-rounded-box.mjs"
-import { buildHouse } from "./cottage-house.mjs?v=0.9.60"
+import { buildHouse } from "./cottage-house.mjs?v=0.9.61"
 
 const PI = Math.PI
 const standard = (color, options = {}) => new T.MeshStandardMaterial({ color, roughness: .85, ...options })
@@ -364,8 +364,10 @@ function structure(scene, wood, darkWood, trim) {
   const parts = scene.children.slice(wallStart).filter(object => !solids.has(object))
   const onLeft = object => object.position.x < left + .2 && object.position.z > back + .25
   const walls = [
-    { storey: 0, axis: "x", at: left, from: back, to: 2.65, floor: 0, solids: leftSolids, parts: parts.filter(onLeft) },
-    { storey: 0, axis: "z", at: back, from: left, to: 3.25, floor: 0, solids: backSolids, parts: parts.filter(object => !onLeft(object)) },
+    { storey: 0, axis: "x", at: left, from: back, to: 2.65, floor: 0, solids: leftSolids, parts: parts.filter(onLeft),
+      sides: { minus: null, plus: "living" } },
+    { storey: 0, axis: "z", at: back, from: left, to: 3.25, floor: 0, solids: backSolids, parts: parts.filter(object => !onLeft(object)),
+      sides: { minus: null, plus: "living" } },
   ]
   return { views, curtains, walls }
 }
@@ -694,8 +696,9 @@ export function buildRoom(scene) {
     ctx.fillStyle = gradient
     ctx.fillRect(0, 0, w, h)
   })
-  const shadow = mesh(scene, new T.PlaneGeometry(17.5, 8.3), unlit({ map: shadowMap, transparent: true, depthWrite: false }),
-    3.4, -.483, .28, false)
+  // Under the whole house, with the front row since 0.9.61.
+  const shadow = mesh(scene, new T.PlaneGeometry(17.5, 12.8), unlit({ map: shadowMap, transparent: true, depthWrite: false }),
+    3.4, -.483, 2.5, false)
   shadow.rotation.x = -PI / 2
 
   const hits = [

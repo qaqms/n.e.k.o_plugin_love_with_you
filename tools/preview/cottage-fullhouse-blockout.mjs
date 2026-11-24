@@ -5,7 +5,7 @@
 import * as T from "./engine/three.module.min.js"
 import { RoomEnvironment } from "./engine/three-post.mjs"
 import { wallPieces } from "./cottage-layout.mjs"
-import { FURNITURE, HOUSE, NEW_FURNITURE, NEW_ROOMS, RAILING, ROOMS, STAIRS, STAND_IN, STOREYS, WALLS } from "./cottage-fullhouse-layout.mjs"
+import { FRONT, FURNITURE, HOUSE, NEW_FURNITURE, NEW_ROOMS, RAILING, ROOMS, STAIRS, STAND_IN, STOREYS, WALLS } from "./cottage-fullhouse-layout.mjs"
 
 const FOV = 30
 // How low a cut wall goes, above its floor (m).
@@ -123,28 +123,33 @@ for (let index = 0; index <= 10; index += 1) {
     [RAILING.x[0] + .05 + (railLength - .1) * index / 10, RAILING.y + RAILING.height / 2, RAILING.z]))
 }
 
-// Gable roof over the whole house (ridge along x), shown with the walls up.
+// Gable roofs, shown with the walls up: one over the old house and the new row in front of it (ridge along x), and a
+// lower one over the new row where it reaches on in front of the porch.
 const roofMaterial = new T.MeshStandardMaterial({ color: 0x8f6f5c, roughness: .8 })
+const gableMaterial = new T.MeshStandardMaterial({ color: 0xeeeae2, roughness: .95, side: T.DoubleSide })
 const roof = new T.Group()
 const roofTop = STOREYS[1].y + STOREYS[1].height
-const halfDepth = (HOUSE.z[1] - HOUSE.z[0]) / 2 + .35
-const ridgeZ = (HOUSE.z[0] + HOUSE.z[1]) / 2
-const pitch = Math.atan2(1.8, halfDepth)
-for (const side of [-1, 1]) {
-  const slab = box([7 - HOUSE.x[0] + .6, .14, halfDepth / Math.cos(pitch)], roofMaterial)
-  slab.position.set((HOUSE.x[0] + 7) / 2, roofTop + .9, ridgeZ + side * halfDepth / 2)
-  slab.rotation.x = side * pitch
-  roof.add(slab)
+function gableRoof(x, z, rise) {
+  const halfDepth = (z[1] - z[0]) / 2 + .35
+  const ridgeZ = (z[0] + z[1]) / 2
+  const pitch = Math.atan2(rise, halfDepth)
+  for (const side of [-1, 1]) {
+    const slab = box([x[1] - x[0] + .6, .14, halfDepth / Math.cos(pitch)], roofMaterial)
+    slab.position.set((x[0] + x[1]) / 2, roofTop + rise / 2, ridgeZ + side * halfDepth / 2)
+    slab.rotation.x = side * pitch
+    roof.add(slab)
+  }
+  const gable = new T.Shape([new T.Vector2(-halfDepth + .35, 0), new T.Vector2(halfDepth - .35, 0), new T.Vector2(0, rise * (halfDepth - .35) / halfDepth)])
+  for (const at of x) {
+    const end = new T.Mesh(new T.ShapeGeometry(gable), gableMaterial)
+    end.rotation.y = Math.PI / 2
+    end.position.set(at, roofTop, ridgeZ)
+    end.castShadow = true
+    roof.add(end)
+  }
 }
-// Gable ends.
-const gable = new T.Shape([new T.Vector2(-halfDepth + .35, 0), new T.Vector2(halfDepth - .35, 0), new T.Vector2(0, 1.75)])
-for (const x of [HOUSE.x[0], 7]) {
-  const end = new T.Mesh(new T.ShapeGeometry(gable), new T.MeshStandardMaterial({ color: 0xeeeae2, roughness: .95, side: T.DoubleSide }))
-  end.rotation.y = Math.PI / 2
-  end.position.set(x, roofTop, ridgeZ)
-  end.castShadow = true
-  roof.add(end)
-}
+gableRoof([HOUSE.x[0], 7], HOUSE.z, 2.4)
+gableRoof([7, HOUSE.x[1]], FRONT, 1.3)
 scene.add(roof)
 
 // Furniture placeholders: the existing ones gray, the new ones sand-coloured and named.
@@ -185,8 +190,8 @@ storeyGroups[0].add(figure)
 // Views: the whole house, each storey, each room. The camera goes all round (drag), at any of them.
 const views = [
   { id: "overview", name: "总览", box: HOUSE, storey: 1 },
-  { id: "ground", name: "一楼", box: { x: [-3.25, 10], y: [0, 3.4], z: HOUSE.z }, storey: 0 },
-  { id: "upper", name: "二楼", box: { x: [-3.25, 7], y: [3.4, 6.4], z: HOUSE.z }, storey: 1 },
+  { id: "ground", name: "一楼", box: { x: HOUSE.x, y: [0, 3.4], z: HOUSE.z }, storey: 0 },
+  { id: "upper", name: "二楼", box: { x: HOUSE.x, y: [3.4, 6.4], z: HOUSE.z }, storey: 1 },
   ...ROOMS.map(item => {
     const storey = STOREYS[item.storey]
     return { id: item.id, name: item.name, room: item, storey: item.storey, box: { x: item.x, y: [storey.y, storey.y + storey.height], z: item.z } }

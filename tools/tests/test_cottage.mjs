@@ -77,8 +77,9 @@ function verifyPixels(pixels, minimumCoverage) {
     const index = (y * 100 + x) * 4
     const rgb = pixels.slice(index, index + 3)
     if (rgb.some((value, channel) => Math.abs(value - background[channel]) > 18)) {
-      // The neighbouring kitchen may run off the right edge; the room's own left wall must stay in frame.
-      assert.ok(x > 0, `model is clipped at ${x},${y}`)
+      // The neighbouring kitchen may run off the right edge and (0.9.61) the front row, below the room, off the left;
+      // the top of the room's own left wall must stay in frame.
+      assert.ok(x > 0 || y >= 30, `model is clipped at ${x},${y}`)
       colored++
     }
     swatches.add(rgb.map(value => Math.floor(value / 12)).join(","))

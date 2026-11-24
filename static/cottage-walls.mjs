@@ -25,12 +25,41 @@ export function blocks(wall, camera, target) {
   return (camera[key] - wall.at) * (target[key] - wall.at) < 0
 }
 
+// Whether a wall stands in front of a room as seen from the camera (0.9.61): nearer the camera than the room along one
+// axis and not beyond it along the other (a wall of the front row in front of the living room, not the kitchen's
+// back wall beside it).
+export function inFront(wall, camera, room) {
+  const span = wall.axis === "x" ? { x: [wall.at, wall.at], z: [wall.from, wall.to] } : { x: [wall.from, wall.to], z: [wall.at, wall.at] }
+  let nearer = false
+  for (const key of ["x", "z"]) {
+    const [low, high] = room[key]
+    const [from, to] = span[key]
+    if (camera[key] > high) {
+      if (from >= high - .05) nearer = true
+      else if (to <= low + .05) return false
+    } else if (camera[key] < low) {
+      if (to <= low + .05) nearer = true
+      else if (from >= high - .05) return false
+    }
+  }
+  return nearer
+}
+
+// Whether the room on a wall's far side from the camera is one being looked at (0.9.61): in the whole-house view
+// every room, so the walls inside the house come down and only its far outside walls stand.
+export function facesView(wall, camera, viewing) {
+  const key = wall.axis === "x" ? "x" : "z"
+  const far = camera[key] > wall.at ? wall.sides?.minus : wall.sides?.plus
+  return Boolean(far && viewing(far))
+}
+
 // How a wall's goal follows the mode: 1 cut down, 0 standing.
 export function wallGoal(mode, blocking) {
   return mode === "down" || mode === "cut" && blocking ? 1 : 0
 }
 
-// walls: [{ storey, axis, at, from, to, floor, solids: [Mesh], parts: [Object3D], shadows = true }]
+// walls: [{ storey, axis, at, from, to, floor, solids: [Mesh], parts: [Object3D], shadows = true, sides }]
+//   sides: { minus, plus } the room ids on either side (null outside).
 //   solids: the wall's own boxes (shortened, with a band on top); parts: frames, trims, glass (shortened when they
 //   are upright boxes, else hidden once the cut reaches them). floor: the floor height under it (storey frame).
 // scene, groups: where to look for things hung on the walls (direct children), [scene, ground, upper].
@@ -100,13 +129,18 @@ export function createWallCuts(walls, { scene, groups, bandMaterial }) {
     }
   }
 
-  // mode, camera (world position), target (what is framed), freeze (keep each wall as it is), instant, dt,
-  // shown(storey) whether a storey is in sight, lift(storey) how high it is lifted away.
-  function update({ mode, camera, target, freeze = false, instant = false, dt = 0, shown = () => true }) {
+  // mode, camera (world position), target (what is framed), room ({ x, z } of the room in view, if one),
+  // viewing(id) whether a room is being looked at, freeze (keep each wall as it is), instant, dt,
+  // shown(storey) whether a storey is in sight.
+  function update({ mode, camera, target, room = null, viewing = () => false, freeze = false, instant = false, dt = 0,
+    shown = () => true }) {
     let moving = false
     for (const entry of entries) {
       const { wall } = entry
-      if (!freeze) entry.goal = shown(wall.storey) ? wallGoal(mode, blocks(wall, camera, target)) : 0
+      if (!freeze) {
+        const blocking = blocks(wall, camera, target) || facesView(wall, camera, viewing) || Boolean(room && inFront(wall, camera, room))
+        entry.goal = shown(wall.storey) ? wallGoal(mode, blocking) : 0
+      }
       const goal = entry.goal
       entry.cut = instant || Math.abs(entry.cut - goal) < .004 ? goal : entry.cut + (goal - entry.cut) * (1 - Math.exp(-9 * dt))
       if (entry.cut !== goal) moving = true

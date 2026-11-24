@@ -1,7 +1,9 @@
 // The two-storey cottage (redesign option A2), as data: rooms, walls, furniture placeholders and slots.
 // Step 2 draws it as a gray-box model (tools/preview/cottage-blockout.mjs); step 3 builds the real rooms
 // from the same data. Units match the 0.9.25 living room: the existing furniture keeps its coordinates.
-// Every box is { at: [x, y, z] centre, size: [w, h, d] }. The front of the house faces +z (open until 0.9.59; walled since 0.9.60, cut away in view).
+// Every box is { at: [x, y, z] centre, size: [w, h, d] }. The front of the house faces +z (open until 0.9.59; walled
+// since 0.9.60, cut away in view). 0.9.61 adds a row of rooms in front, 4.5 m deep, the whole width of the house and on
+// in front of the porch (docs/plans/cottage-full-house-blockout-2026-11-24.md, second draft).
 
 export const STOREYS = [
   { id: 0, y: 0, height: 3.4, name: "一楼" },
@@ -14,7 +16,20 @@ export const ROOMS = [
   { id: "porch", storey: 0, name: "门廊小院", x: [7, 10], z: [-1.2, 2.65], outdoor: true, deck: .2 },
   { id: "bedroom", storey: 1, name: "卧室", x: [-3.25, 1.5], z: [-2.65, 2.65] },
   { id: "study", storey: 1, name: "阁楼书房", x: [1.5, 7], z: [-2.65, 2.65] },
+  // The front row (0.9.61).
+  { id: "storage", storey: 0, name: "储物间", x: [-3.25, -.5], z: [2.65, 7.15] },
+  { id: "bath", storey: 0, name: "浴室", x: [-.5, 2.25], z: [2.65, 7.15] },
+  { id: "entry", storey: 0, name: "玄关", x: [2.25, 5.25], z: [2.65, 7.15] },
+  { id: "laundry", storey: 0, name: "洗衣间", x: [5.25, 10], z: [2.65, 7.15] },
+  { id: "closet", storey: 1, name: "衣帽间", x: [-3.25, -.25], z: [2.65, 7.15] },
+  // A covered balcony: open at the front, with a railing (RAILING).
+  { id: "balcony", storey: 1, name: "小阳台", x: [-.25, 3.25], z: [2.65, 7.15], open: true },
+  { id: "studio", storey: 1, name: "画室", x: [3.25, 10], z: [2.65, 7.15] },
 ]
+// The front row's depth, from the old front to the new one.
+export const FRONT = [2.65, 7.15]
+// The balcony's railing along its open front.
+export const RAILING = { x: [-.25, 3.25], z: 7.15, height: .95 }
 
 // Walls run along one axis at a fixed coordinate. Openings are [from, to, bottom, top] along the run and
 // in world height; the drawing splits the wall around them. The front of the house faces +z.
@@ -27,11 +42,28 @@ export const WALLS = [
   { storey: 1, axis: "x", at: -3.25, from: -2.65, to: 2.65, openings: [] },
   { storey: 1, axis: "x", at: 1.5, from: -2.65, to: 2.65, openings: [[.6, 1.6, 3.4, 5.6, "door"]] },
   { storey: 1, axis: "x", at: 7, from: -2.65, to: 2.65, openings: [[-1.2, .2, 4.6, 5.6, "window"]] },
-  // The front (0.9.60): until then the house was open on this side like a dollhouse. Now it is closed, and the walls
-  // in front of the camera are cut down instead (cottage-walls.mjs).
-  { storey: 0, axis: "z", at: 2.65, from: -3.25, to: 7, openings: [[-2.3, -.7, 1, 2.45, "window"], [.4, 2.1, 1, 2.45, "window"],
-    [4.1, 5.5, 1.05, 2.4, "window"]] },
-  { storey: 1, axis: "z", at: 2.65, from: -3.25, to: 7, openings: [[-2.2, -.8, 4.5, 5.75, "window"], [3.4, 5.2, 4.5, 5.75, "window"]] },
+  // The old front (0.9.60 closed it; until then the house was open on this side like a dollhouse). Since 0.9.61 it is
+  // inside, with doors into the front row; past the kitchen (x 7 to 10) it is the laundry's wall on the porch.
+  { storey: 0, axis: "z", at: 2.65, from: -3.25, to: 10, openings: [[-1.7, -.9, 0, 2.2, "door"], [2.35, 3.15, 0, 2.2, "door"],
+    [3.6, 4.4, 0, 2.2, "door"], [5.8, 6.6, 0, 2.2, "door"], [7.15, 7.95, 0, 2.2, "door"]] },
+  { storey: 1, axis: "z", at: 2.65, from: -3.25, to: 10, openings: [[-2.2, -1.4, 3.4, 5.6, "door"], [.6, 1.4, 3.4, 5.7, "door"],
+    [5.3, 6.1, 3.4, 5.6, "door"], [7.8, 9.2, 4.4, 5.7, "window"]] },
+  // Between the front rooms (the balcony's sides are walls too).
+  { storey: 0, axis: "x", at: -.5, from: 2.65, to: 7.15, openings: [] },
+  { storey: 0, axis: "x", at: 2.25, from: 2.65, to: 7.15, openings: [[3.2, 4, 0, 2.2, "door"]] },
+  { storey: 0, axis: "x", at: 5.25, from: 2.65, to: 7.15, openings: [] },
+  { storey: 1, axis: "x", at: -.25, from: 2.65, to: 7.15, openings: [] },
+  { storey: 1, axis: "x", at: 3.25, from: 2.65, to: 7.15, openings: [] },
+  // The ends of the house, carried on to the new front.
+  { storey: 0, axis: "x", at: -3.25, from: 2.65, to: 7.15, openings: [[4.3, 5.4, 1.2, 2.3, "window"]] },
+  { storey: 1, axis: "x", at: -3.25, from: 2.65, to: 7.15, openings: [[4.2, 5.6, 4.5, 5.8, "window"]] },
+  { storey: 0, axis: "x", at: 10, from: 2.65, to: 7.15, openings: [[4.3, 5.5, 1.1, 2.3, "window"]] },
+  { storey: 1, axis: "x", at: 10, from: 2.65, to: 7.15, openings: [[4, 5.8, 4.5, 5.8, "window"]] },
+  // The new front: the front door into the hall and windows; upstairs the balcony is left open.
+  { storey: 0, axis: "z", at: 7.15, from: -3.25, to: 10, openings: [[-2.4, -1.3, 1.5, 2.4, "window"], [.3, 1.5, 1.4, 2.4, "window"],
+    [3.3, 4.2, 0, 2.3, "front door"], [6.4, 8.4, 1.1, 2.4, "window"]] },
+  { storey: 1, axis: "z", at: 7.15, from: -3.25, to: -.25, openings: [[-2.3, -1.1, 4.5, 5.8, "window"]] },
+  { storey: 1, axis: "z", at: 7.15, from: 3.25, to: 10, openings: [[4.2, 6.2, 4.3, 5.9, "window"], [7.4, 9.2, 4.3, 5.9, "window"]] },
 ]
 
 // The stairs climb along the kitchen's right wall from the front to the study floor at the back.
@@ -47,6 +79,28 @@ export const FURNITURE = [
   { room: "kitchen", name: "餐桌", at: [4.9, .38, .7], size: [1.3, .75, .9] },
   { room: "bedroom", name: "床", at: [-1.6, 3.7, -1.45], size: [1.9, .6, 2.2] },
   { room: "study", name: "书桌", at: [3, 3.78, -2.2], size: [1.6, .76, .7] },
+  // The front row (0.9.61, cottage-front.mjs).
+  { room: "storage", name: "杂物架", at: [-2.9, .9, 4.9], size: [.45, 1.8, 2.4] },
+  { room: "storage", name: "纸箱", at: [-1.3, .35, 6.7], size: [1.1, .7, .6] },
+  { room: "storage", name: "自行车", at: [-1, .5, 4.6], size: [.35, 1, 1.6] },
+  { room: "bath", name: "浴缸", at: [1.3, .3, 6.62], size: [1.6, .6, .8] },
+  { room: "bath", name: "洗手台", at: [-.1, .45, 4.3], size: [.55, .9, .9] },
+  { room: "bath", name: "马桶", at: [-.08, .38, 6.6], size: [.55, .75, .45] },
+  { room: "entry", name: "鞋柜", at: [4.9, .5, 5.6], size: [.45, 1, 1.5] },
+  { room: "entry", name: "衣帽架", at: [2.6, .9, 6.75], size: [.45, 1.8, .45] },
+  { room: "entry", name: "长凳", at: [4.9, .23, 4.1], size: [.45, .45, 1.1] },
+  { room: "laundry", name: "洗衣机", at: [9.55, .45, 6.72], size: [.65, .9, .62] },
+  { room: "laundry", name: "烘干机", at: [8.85, .45, 6.72], size: [.65, .9, .62] },
+  { room: "laundry", name: "晾衣架", at: [6.9, .7, 5], size: [1.6, 1.4, .55] },
+  { room: "laundry", name: "水槽", at: [9.6, .45, 4.5], size: [.55, .9, 1] },
+  { room: "closet", name: "衣柜", at: [-2.85, 4.4, 4.9], size: [.6, 2, 3] },
+  { room: "closet", name: "梳妆台", at: [-.9, 3.8, 6.8], size: [.95, .8, .45] },
+  { room: "balcony", name: "小桌椅", at: [2.2, 3.75, 5.6], size: [1.3, .7, 1.1] },
+  { room: "balcony", name: "躺椅", at: [.35, 3.65, 4.7], size: [.7, .5, 1.6] },
+  { room: "studio", name: "画架", at: [4.6, 4.2, 5.3], size: [.75, 1.6, .6] },
+  { room: "studio", name: "画桌", at: [9.45, 3.78, 5.3], size: [.9, .76, 1.6] },
+  { room: "studio", name: "单人沙发", at: [3.85, 3.8, 6.55], size: [.85, .8, .8] },
+  { room: "studio", name: "画具柜", at: [4.3, 4.1, 3.02], size: [1.6, 1.4, .5] },
 ]
 
 // kind: floor (stands on the floor), wall (hangs on `wall`), surface (sits on furniture).

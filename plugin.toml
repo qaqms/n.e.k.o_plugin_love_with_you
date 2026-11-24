@@ -1,7 +1,7 @@
 [plugin]
 id = "love_with_you"
 name = "与你相恋"
-version = "0.9.60"
+version = "0.9.61"
 type = "plugin"
 description = "恋爱关系插件：好感度 0–100、陌生到恋人五个阶段，每轮对话后自动判断好感变化，角色在聊天中随关系调整语气和分寸；支持多角色共用或各自独立的好感。"
 short_description = "Romance layer: affection 0-100 and five relationship stages that shape how the character talks to you."
@@ -38,7 +38,7 @@ expose_legacy_static_panel = false
 id = "main"
 title = "与你相恋"
 mode = "static"
-entry = "static/panel-0.9.60.html"
+entry = "static/panel-0.9.61.html"
 context = "dashboard"
 permissions = ["state:read", "action:call"]
 

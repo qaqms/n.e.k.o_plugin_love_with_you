@@ -7,8 +7,10 @@ import * as T from "./engine/three.module.min.js"
 import { mergeGeometries } from "./engine/three-gltf.mjs"
 import { buildLife } from "./cottage-grounds-life.mjs?v=0.9.47"
 
-// The cottage's footprint is x -3.4..10.1, z -2.7..2.7; the yard is centred a little in front of it.
+// The cottage's footprint is x -3.4..10.1, z -2.7..7.2 (the front row since 0.9.61); the yard is centred a little in
+// front of it (YARD), the sky and the far scenery around CENTER as before.
 const CENTER = new T.Vector2(3.4, .6)
+const YARD = new T.Vector2(3.4, 2.8)
 const TOP = -.06
 const FIELD = TOP - .3
 const VILLAGE = { x: -17, z: -25, r: 9 }
@@ -16,7 +18,7 @@ const PASTURE = { x: -13.5, z: -6.5, w: 7, d: 5 }
 const MILL = [6, -22]
 const COWS = [[13, -8.5, .6, true], [14.2, -5.8, 2.2, false], [11.3, -10.3, -.8, true], [-17, 1.5, 1.4, true]]
 const STRAYS = [[-11, 9], [-12.5, 10.2], [-10.2, 11]]
-const ROAD = [[12.2, 6.4], [15.5, 5.5], [17.2, 1], [16, -6], [10.5, -13], [2, -19], [-6, -22], [-12, -24]]
+const ROAD = [[4.4, 11.6], [9.5, 11.2], [14.2, 9], [15.5, 5.5], [17.2, 1], [16, -6], [10.5, -13], [2, -19], [-6, -22], [-12, -24]]
 const LEAVES = [0x6f9a63, 0x5e8a5c, 0x83a86c]
 
 const random = seed => () => (seed = (seed * 16807) % 2147483647) / 2147483647
@@ -65,7 +67,7 @@ function outline(rx, rz, seed, wobble = .12, points = 72) {
   return Array.from({ length: points }, (_, i) => {
     const a = i / points * Math.PI * 2
     const k = 1 + wobble * (Math.sin(a * 3 + phase[0]) * .5 + Math.sin(a * 5 + phase[1]) * .3 + Math.sin(a * 9 + phase[2]) * .2)
-    return new T.Vector2(CENTER.x + Math.cos(a) * rx * k, CENTER.y + Math.sin(a) * rz * k)
+    return new T.Vector2(YARD.x + Math.cos(a) * rx * k, YARD.y + Math.sin(a) * rz * k)
   })
 }
 
@@ -141,28 +143,37 @@ function yard(parent) {
   broadleaf(parent, 12.4, -2.4, 1.35, r)
   broadleaf(parent, -6.2, 3.6, 1.1, r)
   for (const [x, z, s] of [[1.5, -4.6, 1.4], [4.3, -4.9, 1.7], [7.6, -4.4, 1.3], [-2.5, -4.5, 1.2], [10.8, -4.1, 1.1]]) pine(parent, x, z, s)
-  // Stepping stones from the porch step towards the road.
+  // Stepping stones from the porch step round the house to the road, and from the front door (0.9.61) to the gate.
+  const stone = material(0xcfc6b4, { rough: .95 })
   for (let i = 0; i < 9; i++) {
     const t = i / 8
-    put(parent, new T.CylinderGeometry(.24, .26, .05, 9), material(0xcfc6b4, { rough: .95 }),
-      10.5 + t * 1.2 - Math.sin(t * Math.PI) * .6 + (r() - .5) * .15, .02, 1.1 + t * 4.6).scale.z = .7
+    put(parent, new T.CylinderGeometry(.24, .26, .05, 9), stone,
+      10.5 + t * 1.6 - Math.sin(t * Math.PI) * .6 + (r() - .5) * .15, .02, 1.1 + t * 6.8).scale.z = .7
   }
-  // A low picket fence along the front, open where the path leaves.
+  for (let i = 0; i < 6; i++) {
+    put(parent, new T.CylinderGeometry(.26, .28, .05, 9), stone, 3.75 + (r() - .5) * .2 + Math.sin(i * .9) * .12, .02, 7.75 + i * .65).scale.z = .7
+  }
+  // A low picket fence along the front, open where the path from the door leaves.
   const paint = material(0xe8dcc6, { rough: .9 })
   for (let i = 0; i < 26; i++) {
     const x = -2.6 + i * .5
-    if (x > 9.8) continue
-    put(parent, new T.BoxGeometry(.07, .5, .05), paint, x, .25, 5.4 + Math.sin(i * .5) * .08)
+    if (x > 9.8 || (x > 3 && x < 4.6)) continue
+    put(parent, new T.BoxGeometry(.07, .5, .05), paint, x, .25, 11.3 + Math.sin(i * .5) * .08)
   }
-  put(parent, new T.BoxGeometry(12.4, .05, .03), paint, 3.6, .34, 5.4)
-  // Flower bed in front of the living room, bushes, rocks and a little pond.
+  put(parent, new T.BoxGeometry(5.7, .05, .03), paint, .15, .34, 11.3)
+  put(parent, new T.BoxGeometry(5.3, .05, .03), paint, 7.25, .34, 11.3)
+  // Flower beds either side of the front path, bushes, rocks and a little pond.
   const petals = [0xf2a7b5, 0xffd27a, 0xffffff, 0xb9a6e8, 0xf08a6c]
   const bud = new T.SphereGeometry(.07, 6, 5)
-  for (let i = 0; i < 70; i++) put(parent, bud, material(petals[i % petals.length], { rough: .8 }), -3 + r() * 5.5, .1 + r() * .08, 3.4 + r() * 1.3)
-  for (const [x, z, s] of [[-3.9, 2.9, .45], [-4.3, .3, .55], [-4.1, -1.6, .5], [3.6, 3.8, .35], [5.1, 3.6, .4], [12.2, 1.6, .45], [12, 3.6, .38]]) {
+  for (let i = 0; i < 70; i++) {
+    const left = i % 2
+    put(parent, bud, material(petals[i % petals.length], { rough: .8 }), left ? -2.6 + r() * 5 : 4.9 + r() * 4.2, .1 + r() * .08, 8.2 + r() * 1.3)
+  }
+  for (const [x, z, s] of [[-3.9, 2.9, .45], [-4.3, .3, .55], [-4.1, -1.6, .5], [-3.9, 6.6, .4], [2.9, 7.75, .35], [4.6, 7.75, .35],
+    [12.2, 1.6, .45], [10.6, 6.4, .38]]) {
     put(parent, new T.IcosahedronGeometry(s, 1), material(0x6a9562), x, s * .6, z).scale.y = .8
   }
-  for (const [x, z, s] of [[-1.5, 5, .25], [6.2, 4.8, .2], [13, -.5, .3], [-6.8, -.5, .35]]) {
+  for (const [x, z, s] of [[-1.5, 10.2, .25], [7.6, 9.9, .2], [13, -.5, .3], [-6.8, -.5, .35]]) {
     put(parent, new T.DodecahedronGeometry(s, 0), material(0xa79f94, { flat: true }), x, s * .4, z)
   }
   const pond = put(parent, new T.CircleGeometry(1, 28), material(0x7fb3c4, { rough: .15 }), -5.4, .015, 1.9)
@@ -252,7 +263,7 @@ function countryside(parent, windows) {
     const a = -Math.PI + trees() * Math.PI * 2, distance = 14 + trees() * 20
     const x = CENTER.x + Math.cos(a) * distance, z = CENTER.y + Math.sin(a) * distance * .8
     const kind = trees(), size = 1 + trees() * 1.2
-    if (z > 7 || near(x, z, VILLAGE.x, VILLAGE.z, VILLAGE.r) || near(x, z, MILL[0], MILL[1], 3) ||
+    if (z > 12 || near(x, z, VILLAGE.x, VILLAGE.z, VILLAGE.r) || near(x, z, MILL[0], MILL[1], 3) ||
       near(x, z, PASTURE.x, PASTURE.z, 6) || near(x, z, 13, -8, 3.5) || near(x, z, 16.5, -4, 2.2)) continue
     if (kind < .5) pine(parent, x, z, size + .2)
     else broadleaf(parent, x, z, size, trees)
@@ -383,7 +394,7 @@ export function buildGrounds(scene) {
   const [starField, moon] = stars(scene)
 
   scene.add(meadow(horizon, wind))
-  scene.add(rise(outline(10.2, 6.6, 3)))
+  scene.add(rise(outline(10.6, 8.8, 3)))
   const garden = new T.Group()
   yard(garden)
   garden.position.y = TOP

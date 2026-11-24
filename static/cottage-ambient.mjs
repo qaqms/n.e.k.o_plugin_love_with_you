@@ -60,7 +60,7 @@ export function createAmbient(scene, { steam: sources }) {
   const FIREFLIES = 26
   const fireflies = layer(scene, FIREFLIES, .4, map, true)
   const flies = Array.from({ length: FIREFLIES }, () => ({
-    x: 7.3 + rand() * 3.6, y: .35 + rand() * 1.2, z: -1.2 + rand() * 4.2, phase: rand() * 6.3, blink: .6 + rand() * .9,
+    x: 7.3 + rand() * 3.6, y: .35 + rand() * 1.2, z: -1.2 + rand() * 3.5, phase: rand() * 6.3, blink: .6 + rand() * .9,
   }))
 
   let clock = 0

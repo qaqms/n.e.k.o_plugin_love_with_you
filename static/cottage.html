@@ -34,6 +34,8 @@
       <div class="menu-row" id="mood-periods" role="group"></div>
       <p class="menu-title" id="mood-quality-title"></p>
       <div class="menu-row" id="mood-qualities" role="group"></div>
+      <p class="menu-title" id="mood-style-title"></p>
+      <div class="menu-row" id="mood-styles" role="group"></div>
     </div>
     <div id="item-menu" class="cottage-menu" role="group" hidden>
       <div class="menu-list" id="keepsakes">
@@ -172,7 +174,7 @@
     <p id="fallback" role="status" hidden></p>
   </main>
   <script type="module">
-    import("./cottage.mjs?v=0.9.48.4").then(module => module.startCottage()).catch(() => {
+    import("./cottage.mjs?v=0.9.52").then(module => module.startCottage()).catch(() => {
       const fallback = document.getElementById("fallback")
       fallback.textContent = /^(en|pt|es|ru|ko|ja)/i.test(new URLSearchParams(location.search).get("locale") || "")
         ? "The 3D room could not load." : "暂时无法加载 3D 小屋。"

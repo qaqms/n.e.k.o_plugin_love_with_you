@@ -1,5 +1,5 @@
-// The "lofi" look for the cottage (sample, 0.9.48): one cel-shaded style for the room and for Yui, closer to
-// lo-fi room games. Only active with ?style=lofi; without it nothing here runs and the classic look is unchanged.
+// The "lofi" look for the cottage (0.9.48, the default look): one cel-shaded style for the room and for Yui, closer
+// to lo-fi room games. With the original look ("classic", chosen in the menu or ?style=classic) nothing here runs.
 //
 // - Lit materials keep their colours, textures and lights, but each light falls off in a hard step instead of a
 //   smooth gradient, and shiny highlights are toned down.

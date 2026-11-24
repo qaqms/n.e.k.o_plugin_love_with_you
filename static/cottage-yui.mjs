@@ -11,7 +11,8 @@
 // It only moves when the caller allows motion (not on low quality or with reduced motion).
 import * as T from "./engine/three.module.min.js"
 import { GLTFLoader } from "./engine/three-gltf.mjs?v=0.9.29"
-import { createSprings } from "./cottage-springs.mjs?v=0.9.35"
+import { createSprings } from "./cottage-springs.mjs?v=0.9.50"
+import { reach, turnBone } from "./cottage-reach.mjs?v=0.9.51"
 import { YUI_RAMP, addHull, faceCharacterLight, lightCharacter } from "./cottage-style.mjs?v=0.9.48.3"
 
 // Standing spot in the living room, at the front of the rug, turned toward the room view. The model faces +z.
@@ -26,6 +27,10 @@ const IDLE_CLIPS = ["idle01", "idle02", "idle03", "idle04", "idle05"]
 // The host's greeting clip is a deep squat that pushes the legs through the skirt (no cloth simulation here),
 // so only the standing gestures are used.
 const GESTURES = ["vsign", "liked"]
+// Answers to a click (0.9.49, react): startled while busy on her feet, and laughing in her seat.
+const REACTIONS = ["startle", "sit-laugh"]
+// The part of the seated laugh she plays (seconds of the clip): upright, before she doubles over.
+const SEAT_LAUGH = { clip: "sit-laugh", from: 1, to: 3.3, fade: .6 }
 // The clips held for each pose other than standing (looped), and the ones that play once over a standing pose.
 // Sleep is mostly the quiet loop, now and then the one where she turns over.
 const POSES = { walk: ["walk"], sit: ["sit"], type: ["type"], tablet: ["tablet"], sleep: ["sleep", "sleep-turn"] }
@@ -37,7 +42,10 @@ const ACTS = ["getup"]
 const CLIP_TURN = { sleep: -Math.PI / 2, "sleep-turn": -Math.PI / 2 }
 // Poses with her feet on the floor, which keep the ankles at their resting height (see `ground`).
 const GROUNDED = new Set(["stand", "walk", "tablet"])
-const CLIPS = [...IDLE_CLIPS, ...GESTURES, ...new Set(Object.values(POSES).flat()), ...ONCE, ...ACTS]
+// Small turns on top of a clip, by clip, in the model frame (x: pitch, negative lifts): typing, the captured
+// performer hunched over the keyboard with her face out of sight; Yui sits up a little and looks at the screen.
+const CLIP_FIX = { type: { "上半身": [-.1, 0, 0], "上半身2": [-.06, 0, 0], "首": [-.16, 0, 0], "頭": [-.14, 0, 0] } }
+const CLIPS = [...IDLE_CLIPS, ...GESTURES, ...REACTIONS, ...new Set(Object.values(POSES).flat()), ...ONCE, ...ACTS]
 // Things in the living room she glances at (world positions).
 const INTEREST = [[-1.3, 1.9, -2.6], [-.2, .7, .38], [1.25, 1, -2.1], [-1.1, .8, -1.4], [1.4, .9, 1.1], [-2.5, .4, 1.9]]
   .map(([x, y, z]) => new T.Vector3(x, y, z))
@@ -273,6 +281,8 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   const grooveRest = groove.at.clone()
   const legHeight = bonePosition("左足").y
   const headRest = bonePosition("頭")
+  const headJoint = model.getObjectByName("頭")
+  const headAt = new T.Vector3()
   // Feet stay on the floor: the captured clips were made for other leg lengths, so the hips are nudged up or down
   // until the lower ankle is back at its resting height (this also turns the "liked" hop into a small bounce).
   const ankles = ["左足首", "右足首"].map(name => bones.get(name)?.object).filter(Boolean)
@@ -298,6 +308,47 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     to: bones.get(to)?.object || named(to), radius, cap, rests, a: new T.Vector3(), b: new T.Vector3() }))
     .filter(item => item.from && item.to)
   let raise = 0
+  // Seated (0.9.49): the sitting clips were made for another chair, so her hips go up or down onto the seat's top.
+  // `seatShift` is that lift in model units; the parts that rest on a seat are her hip joints and upper thighs,
+  // whose underside is SEAT_DEPTH (room metres) below the bone line.
+  let seatShift = 0
+  const SEAT_DEPTH = .085
+  // Her hands stay out of her head (the clips were made for a smaller one, 0.9.48) and, seated, above the seat:
+  // a sphere round her head (centre carried by the head bone, radius in room metres) and the points of each hand
+  // that are checked (wrist, index and middle fingertips).
+  const HEAD_RADIUS = .1
+  const headBone = named("頭")
+  const headCentre = new T.Vector3()
+  if (headBone) {
+    model.localToWorld(headCentre.copy(bonePosition("頭")).addScaledVector(new T.Vector3(0, .075, .012), 1 / model.scale.y))
+    headBone.worldToLocal(headCentre)
+  }
+  // Where the closeup looks (chest), from her root: CHEST while she stands, else her chest bone raised by as much
+  // as CHEST is above it standing.
+  const chestBone = named("上半身2")
+  const chestRaise = new T.Vector3()
+  if (chestBone) {
+    root.updateMatrixWorld(true)
+    const at = model.localToWorld(bonePosition("上半身2").clone()).sub(root.getWorldPosition(new T.Vector3()))
+    chestRaise.set(0, CHEST.y - at.y, 0)
+  }
+  const chestLift = CHEST.clone()
+  const chestAt = new T.Vector3()
+  function followChest(dt) {
+    if (!chestBone || GROUNDED.has(pose) && !act) chestAt.copy(CHEST)
+    else chestBone.getWorldPosition(chestAt).sub(root.position).add(chestRaise)
+    chestLift.lerp(chestAt, dt > 0 ? 1 - Math.exp(-3 * dt) : 1)
+  }
+  const hands = ["左", "右"].map(mark => ({
+    upper: named(`${mark}腕`), lower: named(`${mark}ひじ`), hand: named(`${mark}手首`),
+    tips: [named(`${mark}手首`), named(`${mark}人指3`), named(`${mark}中指3`)].filter(Boolean),
+    push: new T.Vector3(), wanted: new T.Vector3(),
+  })).filter(arm => arm.upper && arm.lower && arm.hand)
+  const handPoint = new T.Vector3()
+  const headPoint = new T.Vector3()
+  const thighs = ["左", "右"].map(mark => [named(`${mark}足`), named(`${mark}ひざ`)]).filter(([hip, knee]) => hip && knee)
+  const thighPoint = new T.Vector3()
+  const kneePoint = new T.Vector3()
 
   // Hit area for clicks and hover: a simple column around her.
   const hitArea = new T.Mesh(new T.CylinderGeometry(.24, .24, PLACE.height * .96, 10), new T.MeshBasicMaterial())
@@ -347,12 +398,29 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     const point = bone.getWorldPosition(new T.Vector3()).applyMatrix4(toModel).sub(pelvis.getWorldPosition(new T.Vector3()).applyMatrix4(toModel))
     return point.setY(0).normalize()
   }
+  const skirtFollow = []
+  const SEATED_FOLLOW = .8
+  // How far (radians) a skirt panel may swing in toward her past where the animation points it (0.9.50).
+  const SKIRT_BACKSTOP = .3
+  // The thigh capsules the skirt is held out by (0.9.50: .066). Larger than the thigh, so that between two chains,
+  // where the skirt's surface runs straight from one to the other, a thigh stepping forward stays behind it.
+  const THIGH_RADIUS = .09
   const skirt = Array.from({ length: 8 }, (_, i) => {
     const bones = [1, 2, 3].map(n => named(`スカート_${i}_${n}`))
-    const follow = bones[0] && pelvis ? ["左", "右"].map(mark => named(`${mark}足`)).filter(Boolean).map(limb => {
-      const side = across(bones[0])
+    const side = bones[0] && pelvis ? across(bones[0]) : null
+    const follow = side ? ["左", "右"].map(mark => named(`${mark}足`)).filter(Boolean).map(limb => {
       return { limb, base: pelvis, weight: Math.min(.85, .8 * Math.max(0, side.dot(across(limb))) + .35 * Math.max(0, side.z)) }
     }) : []
+    // The front panels sit between both legs; their two shares together stay within one leg's (0.9.49: added up,
+    // seated thighs turned them nearly twice as far, so the front of the skirt stood up off her lap). Seated, the
+    // panels in front turn with her thighs most of the way (shares adding up to SEATED_FOLLOW for the front one:
+    // their pivot is at the waist, above the hip joints, so turning all the way would hold them up off her thighs)
+    // and lie on her lap (the front and the two beside it lie over her thighs); at her sides a little, so they hang
+    // from her waist down beside her; at the back not at all.
+    const total = follow.reduce((sum, item) => sum + item.weight, 0)
+    if (total > .85) for (const item of follow) item.weight *= .85 / total
+    for (const item of follow) Object.assign(item, { standing: item.weight, seated: total > .2 ? item.weight / total * SEATED_FOLLOW * clamp((side.z + .15) / .75, 0, 1) : 0 })
+    skirtFollow.push(...follow)
     return { bones, stiffness: [6, 2.6, 1.6], drag: .42, gravity: .15, radius: .015, tip: .9, follow }
   })
   const ponytails = ["左", "右"].map(mark => ({
@@ -361,24 +429,36 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   }))
   const complete = chains => chains.filter(chain => chain.bones.every(Boolean))
   const legs = ["左", "右"].flatMap(mark => [
-    { from: named(`${mark}足`), to: named(`${mark}ひざ`), radius: .066, start: .2 },
+    { from: named(`${mark}足`), to: named(`${mark}ひざ`), radius: THIGH_RADIUS, start: .2 },
     { from: named(`${mark}ひざ`), to: named(`${mark}足首`), radius: .055 },
   ])
-  const colliders = [...legs, { from: named("上半身"), to: named("首"), radius: .085 },
+  // Seated, her seat (between the hip joints, a little behind them) holds the back of the skirt off her; standing, the skirt is wider
+  // than her hips there and this stays off so it does not flare.
+  const hipsCollider = { from: named("左足"), to: named("右足"), radius: .085, enabled: false, offset: new T.Vector3() }
+  const colliders = [...legs, hipsCollider, { from: named("上半身"), to: named("首"), radius: .085 },
     { from: named("左腕"), radius: .05 }, { from: named("右腕"), radius: .05 }].filter(item => item.from)
+  // The skirt's eight chains, all there (the ring, and the baked seated skirt, need every one).
+  const skirtWhole = complete(skirt).length === 8
   const springs = createSprings([
-    { ring: complete(skirt).length === 8, chains: complete(skirt) }, { ring: false, chains: complete(ponytails) },
+    { ring: skirtWhole, chains: complete(skirt), backstop: pelvis ? { centre: pelvis, angle: SKIRT_BACKSTOP } : null },
+    { ring: false, chains: complete(ponytails) },
   ], colliders)
   springs.reset()
 
   // Motion clips load in the background; until they do (or if they cannot), a procedural idle stands in.
   const clips = {}
-  const motion = Promise.all(CLIPS.map(name =>
+  // The skirt draped over her seated legs, baked in Blender (0.9.50, tools/assets/skirt_bake.py): by clip, by clip
+  // time, the skirt joints' tails in her pelvis's frame. Without it the springs alone hold the seated skirt.
+  let drape = null
+  const draped = fetch(`${base}/skirt-seated.json?v=0.9.50`).then(response => response.ok ? response.json() : null)
+    .then(data => { drape = data?.clips || null })
+    .catch(error => console.warn("cottage: Yui's seated skirt unavailable", error))
+  const motion = Promise.all([draped, ...CLIPS.map(name =>
     readClip(loader, `${base}/motion/${name}.vrma.gz?v=0.9.41`).then(clip => {
       if (CLIP_TURN[name]) clip.turn = new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 1, 0), CLIP_TURN[name])
       clips[name] = clip
     })
-      .catch(error => console.warn("cottage: Yui motion unavailable", name, error)))).then(() => {
+      .catch(error => console.warn("cottage: Yui motion unavailable", name, error)))]).then(() => {
     motionReady = true
     return Object.keys(clips).length
   })
@@ -462,7 +542,8 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     return true
   }
   // Plays clip parts one after another, each fading in over `fade` seconds:
-  // [{ clip, from = 0, to = its end, speed = 1, fade = .4 }]. False (and nothing changes) if a clip is missing.
+  // [{ clip, from = 0, to = its end, speed = 1, fade = .4, hold }]. False (and nothing changes) if a clip is missing.
+  // A part with `hold` stays on its last moment (acting.held) until the next perform.
   // While it plays, a new pose waits; at the end the pose's own clip follows.
   function perform(parts) {
     if (!parts.length || !parts.every(part => clips[part.clip])) return false
@@ -485,7 +566,7 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     const from = clamp(part.from ?? 0, 0, duration)
     const to = clamp(part.to ?? duration, 0, duration)
     startClip(part.clip, part.fade ?? .4)
-    Object.assign(current, { time: from, end: to, rate: (to >= from ? 1 : -1) * (part.speed || 1), part, grounded: false })
+    Object.assign(current, { time: from, end: to, rate: (to >= from ? 1 : -1) * (part.speed || 1), part, grounded: false, held: false })
   }
 
   function startClip(name, fadeSeconds) {
@@ -571,10 +652,11 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     }
     if (current.part) {
       // A part of a performance: from one moment of its clip to another, backwards when it ends before it starts.
-      current.time += dt * current.rate
-      if (current.rate > 0 ? current.time >= current.end : current.time <= current.end) {
+      if (!current.held) current.time += dt * current.rate
+      if (!current.held && (current.rate > 0 ? current.time >= current.end : current.time <= current.end)) {
         current.time = current.end
-        nextPart()
+        if (current.part.hold) current.held = true
+        else nextPart()
       }
     } else {
       current.time += dt
@@ -604,7 +686,13 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
       if (fix) scratch.premultiply(other.copy(fix[0]).invert()).multiply(fix[1])
       entry.delta.copy(scratch)
     }
-    offset.y += ground + raise
+    // Per-clip touches, eased in and out with the clip itself.
+    const fixWeight = previous && fade < 1 ? T.MathUtils.smoothstep(fade, 0, 1) : 1
+    for (const [state, weight] of [[current, fixWeight], [previous && fade < 1 ? previous : null, 1 - fixWeight]]) {
+      const fix = state && CLIP_FIX[state.name]
+      if (fix) for (const [name, [x, y, z]] of Object.entries(fix)) addDelta(name, x * weight, y * weight, z * weight)
+    }
+    offset.y += ground + raise + seatShift
     groove.object.position.copy(offset.add(grooveRest).applyMatrix4(grooveSpace))
     if (startBlend > 0) {
       startBlend = Math.max(0, startBlend - dt / current.fadeSeconds)
@@ -636,7 +724,15 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
       gaze.until = gaze.mode === "you" ? 2.5 + 3 * mood.warmth + Math.random() * 4
         : 1 + 1.6 * (1 - mood.warmth) + Math.random() * 2
       if (gaze.mode === "away") {
-        gaze.target.copy(pick(INTEREST))
+        // Things in the living room when she is there; elsewhere (upstairs she would look down through the floor at
+        // them) somewhere at her eye level ahead of her (0.9.49).
+        const near = INTEREST.filter(point => point.distanceTo(root.position) < 4 && point.y - root.position.y > -.5)
+        if (near.length) gaze.target.copy(pick(near))
+        else {
+          const side = root.rotation.y + (Math.random() - .5) * 2.2
+          const eyes = chestLift.y + .25
+          gaze.target.set(root.position.x + Math.sin(side) * 2, root.position.y + eyes, root.position.z + Math.cos(side) * 2)
+        }
         if (Math.random() < .4) face.raisePulse = 1
       }
     }
@@ -650,7 +746,10 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   function look(dt, changed) {
     let yaw = 0
     let pitch = 0
-    const local = toLocal(gaze.target).sub(headRest)
+    // From her head: standing, where it rests; seated or in bed, where it was last frame (0.9.49: from the standing
+    // height she looked down at a visitor level with her seated face).
+    const from = GROUNDED.has(pose) && !act || !headJoint ? headRest : model.worldToLocal(headJoint.getWorldPosition(headAt))
+    const local = toLocal(gaze.target).sub(from)
     // Asleep, the head rests where the pose has it.
     if (gaze.mode !== "sleep") {
       yaw = Math.atan2(local.x, local.z)
@@ -876,7 +975,7 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
   //   task (where her attention is while busy, or null), asleep, grumpy (0..1),
   //   support (the height of the bed or seat under her, or null) }
   function update(dt, { moving, glow = 1, viewer, focus = null, hovered = false, task: busyWith = null, asleep: sleeping = false,
-    grumpy: cross = 0, support = null }) {
+    grumpy: cross = 0, support = null, seat = null, footing = false, bend = 0 }) {
     for (const [material, base] of glowing) material.emissiveIntensity = base * glow
     // Lofi: her key light turns with her (it is hers, not the camera's).
     if (lofi) faceCharacterLight(root.rotation.y)
@@ -892,6 +991,7 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
         startBlend = 0
         ground = 0
         raise = 0
+        seatShift = 0
         for (const entry of bones.values()) entry.delta.identity()
         const held = (POSES[pose] || []).find(name => clips[name])
         if (held) {
@@ -910,9 +1010,16 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
         apply()
         root.updateMatrixWorld(true)
         if (support !== null) rest(support, 0, true)
+        sitOn(seat, 0, true)
+        clearHands(seat, 0)
+        plantFeet(false, 0)
+        drapeSkirt(seat, 0)
         springs.reset()
+        // Held still on a seat, let the skirt and hair settle onto it (the planes act only while the springs run).
+        if (seat) for (let i = 0; i < 40; i++) springs.update(1 / 60)
         for (const name of shapes.keys()) shape(name, 0)
         if (asleep) { shape("Blink_L", 1); shape("Blink_R", 1) }
+        followChest(0)
         still = true
         touchShown = true
       }
@@ -958,6 +1065,7 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     }
     if (settled && celebrate > 0 && (celebrate -= dt) <= 0) playGesture("vsign")
     body(dt)
+    lean(bend)
     const changed = chooseGaze(dt, viewer, focus, hovered)
     look(dt, changed)
     touchTime(dt, true)
@@ -982,8 +1090,13 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     }
     if (support !== null) rest(support, dt, false)
     else raise = damp(raise, 0, 4, dt)
+    sitOn(seat, dt, false)
+    clearHands(seat, dt)
+    plantFeet(footing, dt)
+    drapeSkirt(seat, dt)
     if (resetSprings) { resetSprings = false; springs.reset() }
     else springs.update(dt)
+    followChest(dt)
     return true
   }
 
@@ -1005,6 +1118,213 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     root.updateMatrixWorld(true)
   }
 
+  // Puts her hips on a seat ({ height, weight } or null), within the same frame: up or down by however far the
+  // clip has her above or below it; as the weight eases off (getting up) the lift goes with it.
+  // Settled on a seat, the skirt lies on it (up to its front edge) and the ponytails stay in front of the backrest
+  // (below its top); planes for the springs, in world space.
+  const seatPlanes = [
+    { point: new T.Vector3(), normal: new T.Vector3(0, 1, 0), within: { origin: new T.Vector3(), direction: new T.Vector3(), max: 0 } },
+    { point: new T.Vector3(), normal: new T.Vector3(), group: 1, within: { origin: new T.Vector3(), direction: new T.Vector3(0, 1, 0), max: 0 } },
+  ]
+  function seatSprings(seat) {
+    hipsCollider.enabled = Boolean(seat && seat.weight > .3)
+    for (const leg of legs) leg.upward = hipsCollider.enabled
+    const seated = seat ? seat.weight : 0
+    for (const item of skirtFollow) item.weight = item.standing + (item.seated - item.standing) * seated
+    if (seat) hipsCollider.offset.set(-Math.sin(seat.turn) * .05, 0, -Math.cos(seat.turn) * .05)
+    if (!seat || seat.weight < .6 || !seat.front && !seat.back) return springs.setPlanes(null)
+    const [floor, back] = seatPlanes
+    const forward = floor.within.direction.set(Math.sin(seat.turn), 0, Math.cos(seat.turn))
+    floor.point.set(seat.x, seat.height, seat.z)
+    floor.within.origin.set(seat.x, seat.height, seat.z)
+    floor.within.max = -.02
+    back.normal.copy(forward)
+    back.point.set(seat.x, seat.y, seat.z).addScaledVector(forward, -seat.back)
+    back.within.origin.set(seat.x, seat.y, seat.z)
+    back.within.max = seat.top
+    springs.setPlanes(seatPlanes)
+  }
+
+  // Feet on the floor (0.9.51). While she turns on the spot, sits down or gets up (`footing`, from
+  // cottage-yui-life.mjs), each foot stays where it was put down: the leg reaches it (cottage-reach.mjs) and the foot
+  // keeps the way it pointed. When the body has turned or moved too far from a foot (where the clip alone would put
+  // it), that foot steps over: lifted, carried and put down again, one foot at a time. When the footing ends the
+  // feet first step to where the clip has them, then let go.
+  const STEP_DRIFT = .13
+  const STEP_TURN = .5
+  const STEP_SECONDS = .3
+  const STEP_LIFT = .055
+  const feet = ["左", "右"].map(mark => ({
+    upper: named(`${mark}足`), lower: named(`${mark}ひざ`), ankle: named(`${mark}足首`),
+    lock: new T.Vector3(), yaw: 0, locked: false, step: null, from: new T.Vector3(), fromYaw: 0,
+  })).filter(foot => foot.upper && foot.lower && foot.ankle)
+  let planted = 0
+  const natural = new T.Vector3()
+  const footTarget = new T.Vector3()
+  const footShift = new T.Vector3()
+  const footTurn = new T.Quaternion()
+  const upAxis = new T.Vector3(0, 1, 0)
+  const apart = (a, b) => Math.hypot(a.x - b.x, a.z - b.z)
+  const turnBy = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from))
+  function plantFeet(want, dt) {
+    const yaw = root.rotation.y
+    if (dt <= 0 || !feet.length) {
+      planted = 0
+      for (const foot of feet) { foot.locked = false; foot.step = null }
+      return
+    }
+    // Where each foot would be from the clip alone, and how far it is from where it stands.
+    const drift = feet.map(foot => {
+      foot.ankle.getWorldPosition(natural)
+      if (!foot.locked) { foot.lock.copy(natural); foot.yaw = yaw; foot.locked = true }
+      return Math.max(apart(natural, foot.lock) / STEP_DRIFT, Math.abs(turnBy(foot.yaw, yaw)) / STEP_TURN)
+    })
+    const stepping = feet.some(foot => foot.step)
+    // Letting go: the feet step home first (any that are more than a little off), then the legs ease back.
+    const settled = drift.every(amount => amount < .3)
+    const holding = want || !settled || stepping
+    planted = damp(planted, holding ? 1 : 0, holding ? 10 : 6, dt)
+    if (planted < .002 && !holding) {
+      planted = 0
+      for (const foot of feet) foot.locked = false
+      return
+    }
+    if (!stepping) {
+      const index = drift[0] >= drift[1] ? 0 : 1
+      if (drift[index] >= (want ? 1 : .3)) {
+        const foot = feet[index]
+        foot.step = { time: 0 }
+        foot.from.copy(foot.lock)
+        foot.fromYaw = foot.yaw
+      }
+    }
+    for (const foot of feet) {
+      foot.ankle.getWorldPosition(natural)
+      if (foot.step) {
+        foot.step.time += dt / STEP_SECONDS
+        const t = Math.min(1, foot.step.time)
+        const ease = t * t * (3 - 2 * t)
+        footTarget.lerpVectors(foot.from, natural, ease)
+        footTarget.y += Math.sin(Math.PI * t) * STEP_LIFT
+        foot.yaw = foot.fromYaw + turnBy(foot.fromYaw, yaw) * ease
+        if (t >= 1) { foot.lock.copy(natural); foot.yaw = yaw; foot.step = null }
+      } else footTarget.copy(foot.lock)
+      reach(foot.upper, foot.lower, foot.ankle, footShift.subVectors(footTarget, natural).multiplyScalar(planted))
+      // The foot keeps pointing where it was put down.
+      const twist = turnBy(yaw, foot.yaw) * planted
+      if (Math.abs(twist) > 1e-4) turnBone(foot.ankle, footTurn.setFromAxisAngle(upAxis, twist))
+    }
+  }
+
+  // Leaning forward from the hips to sit down or get up (0..1, from cottage-yui-life.mjs), the head staying level.
+  function lean(amount) {
+    if (amount <= 0) return
+    addDelta("上半身", amount * .32, 0, 0)
+    addDelta("首", -amount * .14, 0, 0)
+  }
+
+  // The baked skirt (see `drape`): settled on a seat in a clip that has one, it takes over from the springs, eased
+  // in as she sits down and out as she gets up or goes into a clip without one; between two clips it follows the
+  // clips' own crossfade.
+  const drapeLocal = new Float32Array(72)
+  const drapeOther = new Float32Array(72)
+  const drapePoints = [0, 1, 2].map(() => Array.from({ length: 8 }, () => new T.Vector3()))
+  let drapeShown = 0
+  function drapeAt(state, into) {
+    const baked = state && drape?.[state.name]
+    if (!baked || !baked.times.length) return false
+    const { times, frames } = baked
+    let time = state.time
+    if (baked.loop) time = ((time % baked.duration) + baked.duration) % baked.duration
+    let high = times.findIndex(at => at > time)
+    let low, t
+    if (high === -1 || high === 0) {
+      // Past either end: a loop goes round from the last frame to the first, otherwise it holds the nearest end.
+      if (!baked.loop) { low = high = high === 0 ? 0 : times.length - 1; t = 0 }
+      else {
+        low = times.length - 1
+        high = 0
+        const span = times[0] + baked.duration - times[low]
+        t = span > 0 ? ((time - times[low] + baked.duration) % baked.duration) / span : 0
+      }
+    } else {
+      low = high - 1
+      t = (time - times[low]) / Math.max(1e-6, times[high] - times[low])
+    }
+    const a = frames[low], b = frames[high]
+    for (let i = 0; i < 72; i++) into[i] = a[i] + (b[i] - a[i]) * t
+    return true
+  }
+  function drapeSkirt(seat, dt) {
+    if (!drape || !pelvis || !skirtWhole) return
+    const now = drapeAt(current, drapeLocal)
+    const before = previous && fade < 1 ? drapeAt(previous, drapeOther) : false
+    const mix = previous && fade < 1 ? T.MathUtils.smoothstep(fade, 0, 1) : 1
+    // How much of the pose has a baked skirt; with both clips baked, the two drapes cross over.
+    let baked = (now ? mix : 0) + (before ? 1 - mix : 0)
+    if (now && before) for (let i = 0; i < 72; i++) drapeLocal[i] = drapeOther[i] + (drapeLocal[i] - drapeOther[i]) * mix
+    else if (before) drapeLocal.set(drapeOther)
+    const wanted = seat ? clamp((seat.weight - .6) / .4, 0, 1) * baked : 0
+    drapeShown = dt > 0 ? damp(drapeShown, wanted, 4, dt) : wanted
+    if (drapeShown < .01) return springs.setTargets(0, null, 0)
+    for (let level = 0; level < 3; level++) for (let chain = 0; chain < 8; chain++) {
+      const i = (level * 8 + chain) * 3
+      drapePoints[level][chain].set(drapeLocal[i], drapeLocal[i + 1], drapeLocal[i + 2]).applyMatrix4(pelvis.matrixWorld)
+    }
+    springs.setTargets(0, drapePoints, drapeShown)
+  }
+
+  function sitOn(seat, dt, now) {
+    seatSprings(seat)
+    let goal = 0
+    if (seat && thighs.length) {
+      let lowest = Infinity
+      for (const [hip, knee] of thighs) {
+        hip.getWorldPosition(thighPoint)
+        knee.getWorldPosition(kneePoint)
+        // The hip joint and the first half of the thigh carry her weight.
+        lowest = Math.min(lowest, thighPoint.y, thighPoint.lerp(kneePoint, .5).y)
+      }
+      const error = (lowest - SEAT_DEPTH - seat.height) / model.scale.y
+      goal = (seatShift - error) * seat.weight
+    }
+    const next = now ? goal : damp(seatShift, goal, 12, dt)
+    const step = next - seatShift
+    if (Math.abs(step) < 1e-6) return
+    seatShift = next
+    groove.object.position.add(anklePoint.set(0, step, 0).applyMatrix3(grooveLinear))
+    root.updateMatrixWorld(true)
+  }
+
+  // Moves each hand out of her head and, seated, up off the seat, by the least that clears it (eased, so a
+  // gesture that brushes her face does not jump).
+  function clearHands(seat, dt) {
+    if (!hands.length) return
+    if (headBone) headBone.localToWorld(headPoint.copy(headCentre))
+    const radius = HEAD_RADIUS
+    for (const arm of hands) {
+      arm.wanted.set(0, 0, 0)
+      for (const tip of arm.tips) {
+        tip.getWorldPosition(handPoint)
+        if (headBone) {
+          const offset = handPoint.sub(headPoint)
+          const distance = offset.length()
+          if (distance < radius && distance > 1e-6) {
+            const out = offset.multiplyScalar((radius - distance) / distance)
+            if (out.lengthSq() > arm.wanted.lengthSq()) arm.wanted.copy(out)
+          }
+          tip.getWorldPosition(handPoint)
+        }
+        if (seat && seat.weight > .5) {
+          const under = seat.height + .025 - handPoint.y
+          if (under > arm.wanted.y) arm.wanted.y = under
+        }
+      }
+      arm.push.lerp(arm.wanted, dt > 0 ? 1 - Math.exp(-18 * dt) : 1)
+      reach(arm.upper, arm.lower, arm.hand, arm.push)
+    }
+  }
+
   // Where her body is (world capsules, refreshed on each call), for the duvet over her in bed.
   function body3d() {
     for (const item of capsules) {
@@ -1014,22 +1334,35 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     return capsules
   }
 
-  // A click: she turns to the visitor, brightens and answers with a gesture.
-  function react() {
+  // A click: she turns to the visitor, brightens and answers. `how` is how she took it (cottage-yui-life.mjs
+  // interrupt): seated she laughs in her seat; startled at something in hand she starts first; sitting up in bed
+  // the getting-up clip has her; otherwise a standing gesture.
+  function react(how = "") {
     reactFor = 2.4
     shyFor = 0
     hoverTime = 0
     face.widePulse = 1
     face.raisePulse = 1
     startBlink()
+    if (how === "seat") {
+      if (pose === "sit" && !act && clips[SEAT_LAUGH.clip]) perform([SEAT_LAUGH])
+      return
+    }
+    if (how === "bed" || how === "rise") return
+    if (how === "startle" && clips.startle) {
+      gesture = once = null
+      queue = []
+      return playGesture("startle")
+    }
     const ready = GESTURES.filter(name => clips[name])
     if (ready.length) playGesture(pick(ready.filter(name => name !== lastGesture).concat(ready.length === 1 ? ready : [])))
   }
 
   function playGesture(name) {
     if (!clips[name] || gesture || pose !== "stand" || once || act) return
-    gesture = lastGesture = name
-    startClip(name, .45)
+    gesture = name
+    if (GESTURES.includes(name)) lastGesture = name
+    startClip(name, name === "startle" ? .25 : .45)
   }
 
   // Mood from the relationship, read from the panel's data; it only changes how she looks and moves.
@@ -1098,11 +1431,17 @@ export async function loadYui(scene, base, { style = "classic", proportions = PR
     get pose() { return pose },
     get playing() { return once || queue.length > 0 },
     // The performance under way: which part, and the moment of its clip (null when none).
-    get acting() { return act && current?.part ? { index: act.index, time: current.time, part: current.part } : null },
+    // The clip she is in and its moment, and the one fading out under it (for the baked seated skirt, and tools).
+    get clip() {
+      return current ? { name: current.name, time: current.time, duration: current.clip.duration, fade,
+        previous: previous && fade < 1 ? { name: previous.name, time: previous.time } : null } : null
+    },
+    get acting() { return act && current?.part ? { index: act.index, time: current.time, part: current.part, held: Boolean(current.held) } : null },
     get shown() { return shownFade },
     // After a jump to another place: the skirt and hair start at rest there.
     settle() { springs.reset() },
-    // Where the closeup looks: her chest, above her root (she is always standing in the closeup).
-    chest: target => target.copy(root.position).add(CHEST),
+    // Where the closeup looks: her chest. Standing, a fixed height above her root; seated or sitting up in bed,
+    // where her chest bone is (eased, so the camera does not sway with her breathing or a laugh).
+    chest: target => target.copy(root.position).add(chestLift),
   }
 }

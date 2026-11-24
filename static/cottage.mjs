@@ -5,14 +5,14 @@ import { CopyShader, EffectComposer, FullScreenQuad, GTAOPass, OutputPass, Rende
 import { icon } from "./cottage-icons.mjs?v=0.9.48.1"
 import { cardFraming, cardScale, placeCard } from "./cottage-card.mjs?v=0.9.27"
 import { buildRoom } from "./cottage-scene.mjs?v=0.9.41"
-import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.41"
+import { UPPER_LIFT } from "./cottage-house.mjs?v=0.9.52"
 import { createAmbient } from "./cottage-ambient.mjs?v=0.9.28"
 import { buildGrounds } from "./cottage-grounds.mjs?v=0.9.47"
 import { PROBE_FRAMES, adapterKind, probeCost, savedQuality, settle, startingQuality } from "./cottage-quality.mjs?v=0.9.46"
 import { InkShader, STYLES, setCharacterLight, setPixelRatio as styleRatio, stylize } from "./cottage-style.mjs?v=0.9.48.3"
-import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.48.3"
-import { createLife } from "./cottage-yui-life.mjs?v=0.9.48.1"
-import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.41"
+import { loadYui, touchTier } from "./cottage-yui.mjs?v=0.9.51"
+import { createLife } from "./cottage-yui-life.mjs?v=0.9.52"
+import { activityAt, cottageMinutes } from "./cottage-routine.mjs?v=0.9.52"
 import { createYuiCard } from "./cottage-yui-card.mjs?v=0.9.40"
 import { HAND_POSE, createHand } from "./cottage-hand.mjs?v=0.9.38"
 import { ROOMS, SLOTS, STOREYS } from "./cottage-layout.mjs?v=0.9.26"
@@ -126,7 +126,16 @@ const FOV = { room: 24, closeup: 38, seat: 32, watch: 30 }
 // the world angle the camera looks from (her front is her own turn; spots facing a wall are seen from the open
 // side), pitch, the height of the frame (span, metres at her), how far below her chest the frame centre sits, and
 // which side of the frame she stands in (-1 left third, 1 right third).
-const WATCH = { label: { "zh-CN": "看看她", "zh-TW": "看看她", en: "Watch her", es: "Mirarla", ja: "彼女を眺める", ko: "그녀 바라보기" } }
+const WATCH = { label: { "zh-CN": "看看她", "zh-TW": "看看她", en: "Watch her", es: "Mirarla", ja: "彼女を眺める", ko: "그녀 바라보기",
+  pt: "Observá-la", ru: "Посмотреть на неё" } }
+// The look of the cottage (0.9.48): lofi is the default, the earlier look stays on offer. Changing it reopens the
+// cottage, since Yui's materials and the render buffers are built for one look at load.
+const STYLE_LABELS = {
+  "zh-CN": ["画风", "动画", "原画风"], "zh-TW": ["畫風", "動畫", "原畫風"], en: ["Look", "Anime", "Original"],
+  es: ["Estilo", "Anime", "Original"], ja: ["画風", "アニメ", "オリジナル"], ko: ["화풍", "애니메이션", "기존"],
+  pt: ["Estilo", "Anime", "Original"], ru: ["Стиль", "Аниме", "Прежний"],
+}
+const STYLE_ORDER = ["lofi", "classic"]
 const SHOTS = {
   sofa: { angle: .62, pitch: .2, span: 1.6, drop: .26, side: -1 },
   // Desk and counter face the back wall (bookshelf to the right of the desk, stairs right of the counter): the desk
@@ -157,9 +166,10 @@ function loadPreferences() {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY))
     return { lamp: saved?.lamp === true, curtains: saved?.curtains !== false,
       period: periods.includes(saved?.period) ? saved.period : "auto",
-      quality: qualities.includes(saved?.quality) ? saved.quality : "auto" }
+      quality: qualities.includes(saved?.quality) ? saved.quality : "auto",
+      style: STYLES.includes(saved?.style) ? saved.style : "lofi" }
   } catch {
-    return { lamp: false, curtains: true, period: "auto", quality: "auto" }
+    return { lamp: false, curtains: true, period: "auto", quality: "auto", style: "lofi" }
   }
 }
 
@@ -172,21 +182,24 @@ function adapterName(renderer) {
   } catch { return "" }
 }
 
-// What "auto" settled on for this adapter last time (see cottage-quality.mjs).
+// What "auto" settled on for this adapter last time (see cottage-quality.mjs), kept per look since the lofi look
+// costs more to draw; the original look keeps the 0.9.46 key, so what was measured before stays with it.
 const AUTO_KEY = "love_with_you:cottage:quality-auto"
-function readAuto() {
-  try { return JSON.parse(localStorage.getItem(AUTO_KEY)) } catch { return null }
+const autoKey = style => style === "classic" ? AUTO_KEY : `${AUTO_KEY}:${style}`
+function readAuto(style) {
+  try { return JSON.parse(localStorage.getItem(autoKey(style))) } catch { return null }
 }
-function keepAuto(adapter, quality) {
-  try { localStorage.setItem(AUTO_KEY, JSON.stringify({ adapter, quality, at: Date.now() })) } catch { /* measured again next time */ }
+function keepAuto(style, adapter, quality) {
+  try { localStorage.setItem(autoKey(style), JSON.stringify({ adapter, quality, at: Date.now() })) } catch { /* measured again next time */ }
 }
 
 export function startCottage() {
   const query = new URLSearchParams(location.search)
   const requested = query.get("locale") || "zh-CN"
   const linked = window.parent !== window && query.get("linked") === "1"
-  // The lofi look is a sample for now (0.9.48): only with ?style=lofi. See cottage-style.mjs.
-  const style = STYLES.includes(query.get("style")) ? query.get("style") : "classic"
+  // The look (see cottage-style.mjs): ?style= wins over the saved choice, which defaults to lofi.
+  const requestedStyle = STYLES.includes(query.get("style")) ? query.get("style") : null
+  const style = requestedStyle || loadPreferences().style
   const locale = [requested, requested.split("-")[0], "en"].find(key => Object.hasOwn(LABELS, key))
   const [title, toolbarLabel, ...labels] = LABELS[locale]
   const stage = document.querySelector("#stage")
@@ -211,7 +224,7 @@ export function startCottage() {
     button.append(icon(symbol))
     return [id, button]
   }))
-  if (style === "lofi") {
+  {
     const button = document.createElement("button")
     button.type = "button"
     button.id = "watch"
@@ -275,6 +288,12 @@ export function startCottage() {
   qualityRow.setAttribute("aria-label", qualityLabel)
   const periodButtons = ["auto", ...periods].map((period, index) => [period, textButton(periodRow, names.periods[index], `mood-${period}`)])
   const qualityButtons = qualities.map((level, index) => [level, textButton(qualityRow, qualityNames[index], `quality-${level}`)])
+  const [styleLabel, ...styleNames] = STYLE_LABELS[locale]
+  document.querySelector("#mood-style-title").textContent = styleLabel
+  const styleRow = document.querySelector("#mood-styles")
+  styleRow.setAttribute("aria-label", styleLabel)
+  const styleButtons = STYLE_ORDER.map((id, index) => [id, textButton(styleRow, styleNames[index], `style-${id}`)])
+  for (const [id, button] of styleButtons) button.setAttribute("aria-pressed", String(style === id))
   // Group the item list by the room each item lives in, following the layout's slots.
   const featureRoom = Object.fromEntries(SLOTS.flatMap(slot => (slot.features || []).map(feature => [feature, slot.room])))
   const itemList = document.querySelector("#keepsakes")
@@ -434,7 +453,7 @@ export function startCottage() {
   // room and Yui are in. `probe` holds the frame costs being collected; `probeTried` the tiers measured so far.
   const adapter = adapterName(renderer)
   const adapterType = adapterKind(adapter)
-  const remembered = savedQuality(readAuto(), adapter, Date.now())
+  const remembered = savedQuality(readAuto(style), adapter, Date.now())
   let autoQuality = remembered || startingQuality(adapter,
     { cores: navigator.hardwareConcurrency || 4, narrow: matchMedia("(max-width: 575px)").matches })
   let autoSource = remembered ? "saved" : "adapter"
@@ -723,7 +742,8 @@ export function startCottage() {
       amount = motion
       midX = mix(midX, compact ? 0 : closeSpan * aspect * .17)
       midY = mix(midY, compact ? -closeSpan * .13 : 0)
-      aimCloseup(yuiChest, yuiAngle - .05, .08, 3, motion)
+      // Sitting up in bed (0.9.49) her knees are up under the duvet: the camera looks down at her over them.
+      aimCloseup(yuiChest, yuiAngle - .05, life?.attending && life.spot === "bed" ? .22 : .08, 3, motion)
     }
     if (focus > 0 && closeup === "watch" && yui) {
       const motion = T.MathUtils.smoothstep(focus, 0, 1)
@@ -961,11 +981,12 @@ export function startCottage() {
     const yuiMoving = yui ? yui.update(dt, {
       moving: motionAllowed, glow, viewer: camera.position,
       focus: opened ? opened.getWorldPosition(yuiFocus) : null, hovered: canvas.dataset.target === "yui",
-      task: life?.task() || null, asleep: Boolean(life?.asleep), grumpy: life?.grumpy || 0, support: life?.support ?? null,
+      task: life?.task() || null, asleep: Boolean(life?.asleep), grumpy: life?.grumpy || 0, support: life?.support ?? null, seat: life?.seat ?? null,
+      footing: Boolean(life?.footing), bend: life?.bend || 0,
     }) || Boolean(lived?.changed) : false
     // The duvet rises over her while she is under it (without motion it settles at once).
     const duvetMoving = room.house.duvet.update(motionAllowed ? dt : 1,
-      yui && life && yui.root.visible ? yui.capsules() : null, life?.cover || 0)
+      yui && life && yui.root.visible ? yui.capsules() : null, life?.cover || 0, life ? life.duvetOpen : 0)
     const ambientActive = ambient.update(dt, {
       enabled: motionAllowed,
       night, sun: Math.min(1, light("sun")) * curtains, lift: 4.2 * upperLift ** 2, upperShown: upperLift < .995,
@@ -1044,7 +1065,7 @@ export function startCottage() {
       probe = null
       autoQuality = quality === "high" ? "medium" : "low"
       autoSource = "slowed"
-      keepAuto(adapter, autoQuality)
+      keepAuto(style, adapter, autoQuality)
       applyQuality()
     }
     if (animating || probe && probeArmed) invalidate()
@@ -1250,7 +1271,7 @@ export function startCottage() {
     probe = null
     autoQuality = settled || quality
     autoSource = "measured"
-    keepAuto(adapter, autoQuality)
+    keepAuto(style, adapter, autoQuality)
     applyQuality()
   }
 
@@ -1422,12 +1443,12 @@ export function startCottage() {
   function activate(id) {
     closeMenus()
     if (id === "yui") {
-      // She stops what she is doing (getting up if seated or asleep) and turns to the visitor, and the camera
-      // comes closer to her, in the room she is in.
+      // She stops what she is doing and turns to the visitor (seated in front of them she stays seated, asleep she
+      // sits up in bed), and the camera comes closer to her, in the room she is in.
       if (!yui) return
-      life?.interrupt(camera.position)
+      const how = life ? life.interrupt(camera.position) : ""
       if (life) yuiAngle = life.facing
-      yui.react()
+      yui.react(how)
       const here = life?.room || "living"
       if (here !== currentView || viewMotion || (life && !life.settled)) {
         pendingOpen = "yui"
@@ -1751,6 +1772,16 @@ export function startCottage() {
   for (const [period, button] of periodButtons) button.onclick = () => {
     preferences.period = period
     savePreferences()
+  }
+  for (const [id, button] of styleButtons) button.onclick = () => {
+    if (id === style) return
+    preferences.style = id
+    savePreferences()
+    rememberCamera()
+    // Reopen on the chosen look; the camera is already in session storage and the panel resends its data on ready.
+    const next = new URL(location.href)
+    next.searchParams.delete("style")
+    location.replace(next)
   }
   for (const [level, button] of qualityButtons) button.onclick = () => {
     preferences.quality = level

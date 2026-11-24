@@ -27,7 +27,14 @@ For getting into and out of bed (0.9.41), played in parts forward or backward:
 | --- | --- |
 | getup.vrma.gz | motion/08_move/从低姿态撑起身体站好.vrma.gz |
 
-The host's `static/vrm/motion/manifest.json` lists the `motion/` clips (seven, and `getup` since 0.9.41) as Apache-2.0 with the origin `VSWQH`;
+For answering a click where she is (0.9.49): laughing in her seat (a part of it), and starting while busy on her feet:
+
+| here | host file |
+| --- | --- |
+| sit-laugh.vrma.gz | motion/03_emote/坐着开心地大笑.vrma.gz |
+| startle.vrma.gz | motion/03_emote/惊讶地向后缩起身体.vrma.gz |
+
+The host's `static/vrm/motion/manifest.json` lists the `motion/` clips (seven, `getup` since 0.9.41, and `sit-laugh` and `startle` since 0.9.49) as Apache-2.0 with the origin `VSWQH`;
 `world-walk` is covered by the notice beside these files. Whether the `motion/` clips may ship with the plugin is to be
 confirmed by the project owner (the earlier confirmation was for the idle and gesture clips above).
 

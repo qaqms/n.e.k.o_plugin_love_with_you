@@ -721,7 +721,7 @@ test("Yui loads with her motion clips, answers hover with her name, and a click 
     const room = frame.locator("#room")
     await frame.locator('#room[data-yui="ready"]').waitFor({ timeout: 30000 })
     await frame.locator("#room[data-yui-motion]").waitFor({ timeout: 30000 })
-    assert.equal(await room.getAttribute("data-yui-motion"), "16", "five idles, two gestures, her day's eight clips and getting up load")
+    assert.equal(await room.getAttribute("data-yui-motion"), "18", "five idles, two gestures, two reactions, her day's eight clips and getting up load")
     const canvas = frame.locator("canvas")
     const box = await canvas.boundingBox()
     let spot = null
@@ -823,7 +823,7 @@ test("touching Yui tells the companion each time, waits for her reaction, and th
 })
 
 test("Yui's motion keeps her feet on the floor and blends clips without snapping", async () => {
-  // Runs her layers headless for 50 simulated seconds: the opening after days apart, idles and two clicked gestures.
+  // Runs her layers headless for 50 simulated seconds: the opening after days apart, idles, a clicked gesture and a start.
   const page = await browser.newPage()
   try {
     const errors = []
@@ -839,7 +839,9 @@ test("Yui's motion keeps her feet on the floor and blends clips without snapping
       yui.setMood({ warmth: .75, missed: true })
       let floor = null, sink = 0, snap = 0, drift = 0
       for (let frame = 0; frame < 60 * 50; frame++) {
-        if (frame === 60 * 12 || frame === 60 * 30) yui.react()
+        if (frame === 60 * 12) yui.react()
+        // The second click finds her busy on her feet: she starts (0.9.49).
+        if (frame === 60 * 30) yui.react("startle")
         yui.update(1 / 60, { moving: true, viewer: new T.Vector3(4, 4, 6) })
         yui.root.updateMatrixWorld(true)
         const lowest = Math.min(...ankles.map(ankle => ankle.getWorldPosition(point).y))
@@ -858,7 +860,7 @@ test("Yui's motion keeps her feet on the floor and blends clips without snapping
       route.fulfill({ contentType: "text/html; charset=utf-8", body: probe }))
     await page.goto(`${url}/plugin/love_with_you/ui/yui-probe.html`)
     const { clips, sink, snap, drift } = await page.waitForFunction(() => window.result, null, { timeout: 90000 }).then(handle => handle.jsonValue())
-    assert.equal(clips, 16)
+    assert.equal(clips, 18)
     assert.ok(sink < .005, `the lower ankle stays on the floor (moved ${sink.toFixed(3)} m)`)
     assert.ok(snap < .06, `the hips never turn more than a smooth step in one frame (${snap.toFixed(3)} rad)`)
     assert.ok(drift < .3, `her body stays on her spot (${drift.toFixed(3)} m away)`)

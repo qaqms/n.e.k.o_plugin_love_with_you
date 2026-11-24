@@ -7,6 +7,7 @@ import * as T from "./engine/three.module.min.js"
 
 const STEP = 1 / 60
 const RING_SLACK = 1.08
+const FOLLOW_LIMIT = 1.2
 const head = new T.Vector3()
 const rest = new T.Vector3()
 const next = new T.Vector3()
@@ -22,20 +23,36 @@ const limbTurn = new T.Quaternion()
 const follow = new T.Quaternion()
 const identity = new T.Quaternion()
 const partial = new T.Quaternion()
+const centre = new T.Vector3()
+const upright = new T.Vector3()
+const outward = new T.Vector3()
+const along = new T.Vector3()
 
-// groups: [{ ring: boolean, chains: [{ bones: [root ... leaf], stiffness: number or [per joint], drag, gravity,
+// groups: [{ ring: boolean, backstop?: { centre: bone, angle }, chains: [{ bones: [root ... leaf], stiffness: number or [per joint], drag, gravity,
 //   radius, tip, follow }] }]; tip is the leaf's virtual tail as a share of the bone's own offset; follow is
 //   [{ limb, base, weight }]: the chain's root turns by that share of the limb's turn relative to base.
 // Create it while the model is in its rest pose, with matrices updated.
 // colliders: [{ from: bone, to: bone (optional), radius, start }] — capsules between two bones (beginning at
-// the share "start" of the way along), or spheres.
+// the share "start" of the way along), or spheres; `enabled: false` switches one off for the time being,
+// and `offset` (a world vector) moves it; `upward: true` pushes points out of it on its upper side only (a
+// skirt over seated thighs goes on top of them, not underneath).
+// Planes (setPlanes, 0.9.49) are half-spaces in world space that change with where she is: a seat's top and its
+// backrest. { point, normal, within }: points stay on the normal's side; `within` { origin, direction, max }
+// limits it to points no further than `max` along `direction` (a seat ends at its front edge); `group`, when set,
+// limits it to that group of chains (the backrest holds the hair, not the skirt).
+// A backstop (0.9.50, after MagicaCloth's "penetration" limit) keeps every joint of a group from swinging in toward
+// the body by more than `angle` past the way the animation (with its follow) points it: inward is toward the
+// centre bone's vertical axis. A last guard where the colliders leave gaps (between the thighs, a fast step).
+// Targets (setTargets, 0.9.50): where a group's tails should be ([level][chain] world points, kept up to date by the
+// caller) and how much (0..1) they take over from the simulation: the skirt draped over her seated legs, baked in
+// Blender.
 export function createSprings(groups, colliders) {
   const worldTurn = bone => {
     const turn = new T.Quaternion()
     bone.matrixWorld.decompose(ignored, turn, scratch)
     return turn
   }
-  const built = groups.map(({ ring, chains }) => {
+  const built = groups.map(({ ring, chains, backstop }, group) => {
     const joints = chains.map(chain => chain.bones.map((bone, i) => {
       const child = chain.bones[i + 1]
       // The tail direction in the bone's own space: toward the child, or straight on for the leaf.
@@ -45,18 +62,22 @@ export function createSprings(groups, colliders) {
         bone, axis, local, length: 0, rest: bone.quaternion.clone(), tail: new T.Vector3(), prev: new T.Vector3(),
         head: new T.Vector3(), turn: new T.Quaternion(), parentTurn: new T.Quaternion(), restDir: new T.Vector3(),
         stiffness: Array.isArray(chain.stiffness) ? chain.stiffness[Math.min(i, chain.stiffness.length - 1)] : chain.stiffness,
-        drag: chain.drag, gravity: chain.gravity, radius: chain.radius,
+        drag: chain.drag, gravity: chain.gravity, radius: chain.radius, group,
         // Only the root of a chain follows limbs; the rest of the chain is carried along by its parent.
-        follow: i === 0 ? (chain.follow || []).filter(item => item.weight > 0).map(item => ({
-          ...item, restInverse: worldTurn(item.base).invert().multiply(worldTurn(item.limb)).invert(),
+        // The caller's own items (their weight may change while she moves, 0.9.49), with the rest turn added.
+        follow: i === 0 ? (chain.follow || []).filter(item => item.weight > 0).map(item => Object.assign(item, {
+          restInverse: worldTurn(item.base).invert().multiply(worldTurn(item.limb)).invert(),
         })) : [],
       }
     }))
     const depth = Math.max(...joints.map(chain => chain.length))
     const levels = Array.from({ length: depth }, (_, k) => joints.map(chain => chain[k]).filter(Boolean))
+    for (const chain of joints) for (const joint of chain) joint.backstop = backstop || null
     return { ring, levels, gaps: levels.map(() => []) }
   })
   let pending = 0
+  let planes = []
+  const targets = new Map()
 
   // Back to the rest pose with tails at rest; call after the body has been posed for the frame.
   function reset() {
@@ -76,26 +97,55 @@ export function createSprings(groups, colliders) {
     }
   }
 
-  function collide(point, radius) {
+  function collide(point, radius, group) {
     for (const collider of colliders) {
+      if (collider.enabled === false) continue
       start.setFromMatrixPosition(collider.from.matrixWorld)
       if (collider.to) {
         end.setFromMatrixPosition(collider.to.matrixWorld)
         if (collider.start) start.lerp(end, collider.start)
+        if (collider.offset) {
+          start.add(collider.offset)
+          end.add(collider.offset)
+        }
         scratch.subVectors(end, start)
         const t = T.MathUtils.clamp(scratch.dot(next.subVectors(point, start)) / Math.max(scratch.lengthSq(), 1e-8), 0, 1)
         start.addScaledVector(scratch, t)
-      }
+      } else if (collider.offset) start.add(collider.offset)
       const reach = collider.radius + radius
       scratch.subVectors(point, start)
+      if (collider.upward && scratch.y < 0) scratch.y = -scratch.y
       const distance = scratch.length()
       if (distance < reach && distance > 1e-6) point.copy(start).addScaledVector(scratch, reach / distance)
     }
+    for (const { point: on, normal, within, group: only } of planes) {
+      if (only !== undefined && only !== group) continue
+      if (within && scratch.subVectors(point, within.origin).dot(within.direction) > within.max) continue
+      const depth = scratch.subVectors(point, on).dot(normal) - radius
+      if (depth < 0) point.addScaledVector(normal, -depth)
+    }
+  }
+
+  // No further in toward the body than the backstop allows (see createSprings).
+  function holdOut(joint) {
+    const { centre: bone, angle } = joint.backstop
+    centre.setFromMatrixPosition(bone.matrixWorld)
+    upright.setFromMatrixColumn(bone.matrixWorld, 1).normalize()
+    outward.subVectors(joint.head, centre)
+    outward.addScaledVector(upright, -outward.dot(upright))
+    if (outward.lengthSq() < 1e-8) return
+    outward.normalize()
+    along.subVectors(joint.tail, joint.head).normalize()
+    const short = joint.restDir.dot(outward) - Math.sin(angle) - along.dot(outward)
+    if (short <= 0) return
+    along.addScaledVector(outward, short).normalize()
+    joint.tail.copy(joint.head).addScaledVector(along, joint.length)
   }
 
   // Keep a tail on its bone's length from the bone's head, outside the colliders.
   function settle(joint) {
-    collide(joint.tail, joint.radius)
+    if (joint.backstop) holdOut(joint)
+    collide(joint.tail, joint.radius, joint.group)
     joint.tail.sub(joint.head).normalize().multiplyScalar(joint.length).add(joint.head)
   }
 
@@ -111,7 +161,11 @@ export function createSprings(groups, colliders) {
           limb.matrixWorld.decompose(ignored, limbTurn, scratch)
           base.matrixWorld.decompose(ignored, baseTurn, scratch)
           follow.copy(limbTurn).multiply(restInverse).multiply(baseTurn.invert())
-          joint.turn.premultiply(partial.slerpQuaternions(identity, follow, weight))
+          partial.slerpQuaternions(identity, follow, weight)
+          // At most FOLLOW_LIMIT: a thigh raised high (legs crossed on the sofa) would fold the skirt over.
+          const angle = 2 * Math.acos(Math.min(1, Math.abs(partial.w)))
+          if (angle > FOLLOW_LIMIT) partial.slerpQuaternions(identity, partial, FOLLOW_LIMIT / angle)
+          joint.turn.premultiply(partial)
         }
         joint.head.setFromMatrixPosition(bone.matrixWorld)
         joint.restDir.copy(joint.axis).applyQuaternion(joint.turn)
@@ -138,6 +192,13 @@ export function createSprings(groups, colliders) {
           for (const joint of level) settle(joint)
         }
       }
+      const target = targets.get(built.indexOf(group))
+      if (target && target.weight > 0) level.forEach((joint, i) => {
+        const point = target.points[k]?.[i]
+        if (!point) return
+        joint.tail.lerp(point, target.weight)
+        joint.tail.sub(joint.head).normalize().multiplyScalar(joint.length).add(joint.head)
+      })
       for (const joint of level) {
         // Turn the bone so its rest direction points at the new tail.
         swing.setFromUnitVectors(joint.restDir, scratch.subVectors(joint.tail, joint.head).normalize())
@@ -161,5 +222,11 @@ export function createSprings(groups, colliders) {
     }
   }
 
-  return { reset, update }
+  return {
+    reset, update, setPlanes: list => { planes = list || [] },
+    setTargets(group, points, weight) {
+      if (!points || !(weight > 0)) targets.delete(group)
+      else targets.set(group, { points, weight })
+    },
+  }
 }

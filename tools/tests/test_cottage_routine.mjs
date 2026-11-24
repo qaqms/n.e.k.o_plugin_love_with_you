@@ -96,7 +96,11 @@ test("she can get from every place to every other, using the stairs only between
     assert.equal(stairs, Number(storeyOf(SPOTS[from]) !== storeyOf(SPOTS[to])), `${from} -> ${to}`)
     assert.equal(steps.at(-1).spot, to)
     assert.equal(steps.at(-1).kind, { walk: "arrive", sit: "sit", bed: "bed" }[SPOTS[to].enter])
-    if (SPOTS[from].enter === "sit") assert.equal(steps[0].kind, "rise")
+    if (SPOTS[from].enter === "sit") {
+      // 0.9.51: getting up she stands to the point beside the seat she sat on.
+      assert.equal(steps[0].kind, "rise")
+      assert.equal(steps[0].seatOf, from)
+    }
     if (SPOTS[from].enter === "bed") assert.equal(steps[0].kind, "leave-bed")
     assert.equal(roomOf(steps.at(-1).to), SPOTS[to].room)
   }
@@ -121,4 +125,12 @@ test("getting into and out of bed stays on the mattress and lands clear of the f
     assert.ok(!crossesBox(BED.floor, NODES.bedside, box), `walks through ${box.name}`)
   }
   assert.equal(roomOf(BED.floor), "bedroom")
+  // 0.9.52: she sits on the side of the bed like on a seat, its top the mattress, and stands up right in front of it.
+  assert.equal(BED.side.y, BED.floor.y)
+  assert.equal(BED.stand.y, BED.floor.y)
+  assert.ok(BED.stand.x > x[1], "she stands clear of the bed")
+  assert.ok(Math.abs(BED.side.y + BED.side.seat - BED.surface) < .03, "the side's top is the mattress")
+  assert.ok(Math.abs(BED.side.x + BED.side.chair[0] - x[1]) < .05, "the side's front edge is the mattress's")
+  const ahead = (BED.stand.x - BED.side.x) * Math.sin(BED.side.turn) + (BED.stand.z - BED.side.z) * Math.cos(BED.side.turn)
+  assert.ok(ahead > .3 && ahead < .5, "she stands in front of where she sits")
 })

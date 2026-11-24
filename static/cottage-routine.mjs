@@ -5,23 +5,32 @@
 
 // Places she spends time. `pose` is the body she holds there, `node` the point on the walking graph she reaches it
 // from, `enter` how she gets from the node into the place: walking, sitting down (a slide into the seat while the
-// pose changes) or getting into bed (out of sight for a moment, like the stairs).
+// pose changes) or getting into bed (out of sight for a moment, like the stairs). `seat`: for a seat, the height of
+// its top above `y`; seated, her hips rest on it (0.9.49: the sitting clips were made for another chair). `chair`:
+// [front, back, top] — how far the seat's front edge is ahead of the spot and the backrest's face behind it, and the
+// backrest's top above `y`; her skirt lies on the seat and her ponytails stay off the backrest. `approach` (0.9.51):
+// where she stands to sit down and gets up to, in her own frame ([x her left, z ahead] from the spot): by default
+// just in front of the seat, where her seated feet are; at a table, beside the chair, since her feet go under it.
 export const SPOTS = {
   rug: { room: "living", x: .25, y: .04, z: 1.5, turn: .55, pose: "stand", node: "rug", enter: "walk" },
-  sofa: { room: "living", x: -1.15, y: .04, z: -1.12, turn: 0, pose: "sit", node: "sofa", enter: "sit" },
+  sofa: { room: "living", x: -1.15, y: .04, z: -1.12, turn: 0, pose: "sit", node: "sofa", enter: "sit", seat: .66, chair: [.23, .51, 1.23] },
   counter: { room: "kitchen", x: 4.6, y: 0, z: -1.6, turn: Math.PI, pose: "tablet", node: "counter", enter: "walk" },
-  table: { room: "kitchen", x: 4.02, y: 0, z: .7, turn: Math.PI / 2, pose: "sit", node: "table", enter: "sit" },
-  bench: { room: "porch", x: 8.5, y: .2, z: -.72, turn: 0, pose: "sit", node: "bench", enter: "sit" },
-  desk: { room: "study", x: 3, y: 3.52, z: -1.5, turn: Math.PI, pose: "type", node: "desk", enter: "sit" },
+  table: { room: "kitchen", x: 4.02, y: 0, z: .7, turn: Math.PI / 2, pose: "sit", node: "table", enter: "sit", seat: .475, chair: [.23, .15, 1.055], approach: [-.42, .12] },
+  bench: { room: "porch", x: 8.5, y: .2, z: -.72, turn: 0, pose: "sit", node: "bench", enter: "sit", seat: .45, chair: [.11, .275, .825] },
+  desk: { room: "study", x: 3, y: 3.52, z: -1.47, turn: Math.PI, pose: "type", node: "desk", enter: "sit", seat: .51, chair: [.3, .085, 1.06], approach: [-.42, .12] },
   bedside: { room: "bedroom", x: -.3, y: 3.52, z: .25, turn: .35, pose: "stand", node: "bedside", enter: "walk" },
   bed: { room: "bedroom", x: -1.6, y: 3.99, z: -1.3, turn: 0, pose: "sleep", node: "bedside", enter: "bed" },
 }
 
-// Getting into and out of bed (cottage-yui-life.mjs): lying on her back where she sits up, the edge she sits on,
-// facing the room, and the floor beside the bed where she stands up from it. `surface`: the mattress top.
+// Getting into and out of bed (cottage-yui-life.mjs): lying on her back where she sits up, the edge she swings
+// round to, facing the room, and the floor beside the bed where she stands up from it. `surface`: the mattress top.
+// `side` (0.9.52): sitting on the side of the bed like on a seat (its top is the mattress, its front edge the
+// mattress's edge), her feet on the floor; she sits down onto it from `stand`, right by the bed, and gets up to there.
 export const BED = {
   back: { x: -1.5, y: 3.99, z: -1.38 },
   edge: { x: -.95, y: 3.99, z: -1.15 },
+  side: { x: -.95, y: 3.52, z: -1.15, turn: Math.PI / 2, seat: .45, chair: [.25, .6, 0] },
+  stand: { x: -.57, y: 3.52, z: -1.15 },
   floor: { x: -.38, y: 3.52, z: -1.15 },
   surface: 3.97,
 }
@@ -141,7 +150,8 @@ export function route(from, to) {
 }
 
 // The steps from a place (a spot she is in, or a node she stands at) to a spot:
-// [{ kind: "rise" | "walk" | "stairs" | "sit" | "bed" | "leave-bed" | "arrive", to: {x, y, z, turn?}, node?, spot? }].
+// [{ kind: "rise" | "walk" | "stairs" | "sit" | "bed" | "leave-bed" | "arrive", to: {x, y, z, turn?}, node?, spot?, seatOf? }]
+// (`seatOf` is the seat a "rise" gets up from).
 export function plan(place, spot) {
   const target = SPOTS[spot]
   if (!target) throw new Error(`no spot ${spot}`)
@@ -151,7 +161,7 @@ export function plan(place, spot) {
   if (place.spot) {
     const from = SPOTS[place.spot]
     node = from.node
-    if (from.enter === "sit") steps.push({ kind: "rise", to: NODES[node], node })
+    if (from.enter === "sit") steps.push({ kind: "rise", to: NODES[node], node, seatOf: place.spot })
     else if (from.enter === "bed") steps.push({ kind: "leave-bed", to: NODES[node], node })
   }
   for (const step of route(node, target.node)) {

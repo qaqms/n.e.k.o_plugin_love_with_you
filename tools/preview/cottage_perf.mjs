@@ -1,5 +1,6 @@
 // Cottage frame cost on this machine's GPU: median frame time, draw calls and triangles per quality tier while the
-// camera is dragged. Uncapped frame rate; run from the plugin root: node tools/preview/cottage_perf.mjs
+// camera is dragged, for each look (NEKO_PERF_STYLES, default "lofi,classic"). Uncapped frame rate; run from the
+// plugin root: node tools/preview/cottage_perf.mjs
 // The GPU flags are for Windows (ANGLE on Direct3D 11); set NEKO_PERF_ANGLE to another ANGLE backend elsewhere.
 import { dependency, startPreview } from "./ui_preview.mjs"
 
@@ -43,7 +44,8 @@ const hook = () => {
 }
 
 const median = values => { const s = [...values].sort((a, b) => a - b); return s[Math.floor(s.length / 2)] }
-for (const quality of ["low", "medium", "high"]) {
+const styles = (process.env.NEKO_PERF_STYLES || "lofi,classic").split(",")
+for (const style of styles) for (const quality of ["low", "medium", "high"]) {
   for (const view of ["overview", "living"]) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.5 })
     await page.addInitScript(hook)
@@ -51,7 +53,7 @@ for (const quality of ["low", "medium", "high"]) {
       if (v !== "overview") sessionStorage.setItem("love_with_you:cottage:camera", JSON.stringify({ view: v, azimuth: .69, elevation: .52 }))
     }, view)
     await page.clock.setFixedTime(new Date(2026, 10, 22, 20, 30))
-    await page.goto(`${url}/plugin/love_with_you/ui/cottage.html?quality=${quality}&locale=zh-CN`)
+    await page.goto(`${url}/plugin/love_with_you/ui/cottage.html?quality=${quality}&style=${style}&locale=zh-CN`)
     await page.locator("canvas").waitFor()
     await page.locator("#room[data-yui]").waitFor({ timeout: 30000 }).catch(() => {})
     await page.waitForTimeout(2500)
@@ -66,7 +68,7 @@ for (const quality of ["low", "medium", "high"]) {
       dpr: devicePixelRatio, size: [document.querySelector("canvas").width, document.querySelector("canvas").height],
       yui: document.querySelector("#room")?.dataset.yui, quality: document.querySelector("#room")?.dataset.quality }))
     const f = r.frames.slice(3)
-    console.log(JSON.stringify({ quality, view, shown: r.quality, yui: r.yui, canvas: r.size, n: f.length,
+    console.log(JSON.stringify({ style, quality, view, shown: r.quality, yui: r.yui, canvas: r.size, n: f.length,
       dtMedian: +median(f.map(x => x.dt)).toFixed(2), dtP90: +[...f.map(x => x.dt)].sort((a, b) => a - b)[Math.floor(f.length * .9)]?.toFixed(2),
       draws: median(f.map(x => x.draws)), ktris: Math.round(median(f.map(x => x.tris)) / 1000), fbBinds: median(f.map(x => x.passes)), programs: r.programs }))
     await page.close()
